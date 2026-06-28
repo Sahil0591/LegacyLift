@@ -1,0 +1,49 @@
+# =============================================================================
+# LegacyLift - Python Dependencies
+# =============================================================================
+# Pin major versions but allow patch updates for security fixes.
+# After adding a new dependency, run: pip freeze > requirements.lock
+# for fully reproducible production builds.
+# =============================================================================
+
+# --- Web Framework & Server ---
+fastapi>=0.111.0,<0.120.0          # REST API + WebSocket support
+uvicorn[standard]>=0.29.0,<0.35.0  # ASGI server (use uvicorn[standard] for websockets)
+websockets>=12.0,<14.0             # WebSocket protocol implementation
+python-multipart>=0.0.9,<0.1.0    # Required for FastAPI file uploads
+
+# --- AI / LLM ---
+openai>=1.30.0,<2.0.0              # OpenAI Python SDK (gpt-4o)
+
+# --- Async HTTP ---
+aiohttp>=3.9.0,<4.0.0              # Async HTTP client for doc fetching (Layer 0.5)
+aiofiles>=23.2.0,<25.0.0          # Async file I/O
+
+# --- Code Parsing ---
+tree-sitter>=0.22.0,<0.24.0        # Incremental parser used in Layer 0 / Layer 1
+# tree-sitter language grammars (install separately if needed):
+# tree-sitter-python, tree-sitter-java, tree-sitter-cobol (community)
+
+# --- Database / Schema ---
+sqlalchemy>=2.0.0,<3.0.0           # ORM + schema reflection used in Layer 4
+alembic>=1.13.0,<2.0.0             # DB migrations (for project metadata storage)
+aiosqlite>=0.20.0,<0.21.0         # Async SQLite driver for SQLAlchemy
+
+# --- Data Validation & Models ---
+pydantic>=2.7.0,<3.0.0             # Data models with runtime validation
+pydantic-settings>=2.2.0,<3.0.0   # Settings management with env var support
+
+# --- Environment & Config ---
+python-dotenv>=1.0.0,<2.0.0        # Load .env files into os.environ
+
+# --- Testing ---
+pytest>=8.2.0,<9.0.0               # Test runner
+pytest-asyncio>=0.23.0,<0.25.0    # async/await support in pytest
+pytest-mock>=3.14.0,<4.0.0        # Mocking utilities
+httpx>=0.27.0,<0.28.0             # Async test client for FastAPI
+
+# --- Utilities ---
+tenacity>=8.3.0,<9.0.0             # Retry logic with exponential backoff (LLM calls)
+rich>=13.7.0,<14.0.0               # Beautiful console output for DEMO_MODE
+python-dateutil>=2.9.0,<3.0.0     # Date parsing utilities
+sqlparse>=0.5.0,<0.6.0            # SQL parsing for schema_parser.py

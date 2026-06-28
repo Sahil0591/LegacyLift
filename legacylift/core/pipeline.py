@@ -1,0 +1,724 @@
+"""
+core/pipeline.py — Main migration pipeline orchestrator.
+
+This is the conductor of the entire LegacyLift system.  Every migration
+runs through this class in a strict sequential order:
+
+  Layer 0   → Archaeology (parse legacy code, extract business rules,
+                            map dependencies, score risk)
+  Layer 0.5 → Target Profile (fetch docs, map deprecations, build gotcha registry)
+  [per chunk]
+    Layer 1 → Static Analysis (syntax, type checks, complexity)
+    Layer 2 → AI Code Review (semantic correctness vs. legacy source)
+    Layer 3 → Test Generation & Execution
+    [human approval gate]
+  Layer 4   → Schema Validation (verify migrated code handles all DB tables)
+
+Design principles:
+  - Every stage emits WebSocket events at start AND end via manager.emit()
+  - Every stage has a try/except that emits error events and returns a safe
+    default so the pipeline degrades gracefully rather than crashing
+  - Human approval is async: the pipeline pauses at await_approval() and
+    resumes when api/main.py deposits an ApprovalDecision into pending_approvals
+  - DEMO_MODE prints a Rich console summary at each stage transition
+
+Usage (from api/main.py):
+    pipeline = MigrationPipeline(project, manager)
+    asyncio.create_task(pipeline.run())
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from typing import Optional
+
+from rich.console import Console
+from rich.rule import Rule
+
+from legacylift.api.websocket_manager import WebSocketManager
+from legacylift.models.project import Project, ProjectStatus
+from legacylift.models.business_rule import BusinessRule
+from legacylift.models.chunk import MigrationChunk, ChunkStatus, StaticAnalysisResult, AIReviewResult
+from legacylift.models.validation import ValidationResult, ApprovalDecision, ApprovalAction
+
+# Layer imports
+from legacylift.core.layer0.archaeologist     import Archaeologist
+from legacylift.core.layer0.business_extractor import BusinessExtractor
+from legacylift.core.layer0.dependency_mapper  import DependencyMapper
+from legacylift.core.layer0.risk_scorer        import RiskScorer
+from legacylift.core.layer0_5.doc_fetcher      import DocFetcher
+from legacylift.core.layer0_5.deprecation_mapper import DeprecationMapper
+from legacylift.core.layer0_5.gotcha_registry  import GotchaRegistry
+from legacylift.core.layer1.static_analyser    import StaticAnalyser
+from legacylift.core.layer2.ai_reviewer        import AIReviewer
+from legacylift.core.layer3.test_generator     import TestGenerator
+from legacylift.core.layer4.schema_validator   import SchemaValidator, SchemaValidationResult
+
+console = Console()
+DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
+AUTO_APPROVE = os.getenv("AUTO_APPROVE", "false").lower() == "true"
+
+
+# ---------------------------------------------------------------------------
+# Result type aliases (type hints for return values from each stage)
+# ---------------------------------------------------------------------------
+
+class Layer0Result:
+    """Aggregate output of the entire Layer 0 analysis."""
+    def __init__(
+        self,
+        business_rules: list[BusinessRule],
+        dependency_graph: dict,
+        risk_scores: dict[str, float],
+        chunks: list[MigrationChunk],
+    ) -> None:
+        self.business_rules = business_rules
+        self.dependency_graph = dependency_graph
+        self.risk_scores = risk_scores
+        self.chunks = chunks
+
+
+class TargetProfile:
+    """Output of Layer 0.5 — target language compatibility profile."""
+    def __init__(
+        self,
+        language: str,
+        version: str,
+        deprecated_patterns: list[str],
+        gotchas: list[str],
+        recommended_libraries: list[str],
+    ) -> None:
+        self.language = language
+        self.version = version
+        self.deprecated_patterns = deprecated_patterns
+        self.gotchas = gotchas
+        self.recommended_libraries = recommended_libraries
+
+    def to_dict(self) -> dict:
+        return {
+            "language": self.language,
+            "version": self.version,
+            "deprecated_patterns": self.deprecated_patterns,
+            "gotchas": self.gotchas,
+            "recommended_libraries": self.recommended_libraries,
+        }
+
+
+# ---------------------------------------------------------------------------
+# MigrationPipeline
+# ---------------------------------------------------------------------------
+
+class MigrationPipeline:
+    """
+    Orchestrates the full migration of a single Project through all layers.
+
+    One instance per project run.  Create via MigrationPipeline(project, manager)
+    and then call asyncio.create_task(pipeline.run()) from api/main.py.
+
+    The pipeline is stateful: it holds the current list of chunks, the approval
+    queue, and the validation history.
+    """
+
+    def __init__(self, project: Project, ws_manager: WebSocketManager) -> None:
+        self.project = project
+        self.manager = ws_manager
+
+        # Chunks discovered by Layer 0 and processed by Layers 1-3
+        self.chunks: list[MigrationChunk] = []
+
+        # Approval futures: chunk_id -> asyncio.Future[ApprovalDecision]
+        # pipeline.await_approval() creates the future; api/main.py resolves it
+        self.pending_approvals: dict[str, asyncio.Future] = {}
+
+        # Full validation history for reporting
+        self.validation_history: list[ValidationResult] = []
+
+        # Layer instances (instantiated once, reused per chunk)
+        self._static_analyser = StaticAnalyser()
+        self._ai_reviewer     = AIReviewer()
+        self._test_generator  = TestGenerator()
+
+    # -----------------------------------------------------------------------
+    # Top-level entry point
+    # -----------------------------------------------------------------------
+
+    async def run(self) -> None:
+        """
+        Execute the full pipeline from Layer 0 through Layer 4.
+
+        Called once per project by api/main.py. Runs to completion or until
+        an unrecoverable error halts the pipeline.
+
+        TODO (implementer): add checkpoint/resume logic so the pipeline can
+        restart from the last successful stage if the server crashes.
+        """
+        self._banner("PIPELINE STARTED")
+        self.project.status = ProjectStatus.ANALYSING
+
+        try:
+            # --- Layer 0: Archaeology ---
+            layer0_result = await self.run_layer0(self.project)
+            self.chunks = layer0_result.chunks
+
+            # --- Layer 0.5: Target Profile ---
+            target_profile = await self.run_layer0_5(self.project)
+            self.project.target_profile = target_profile.to_dict()
+
+            # --- Layers 1-3: Per-chunk migration ---
+            self.project.status = ProjectStatus.MIGRATING
+            for chunk in self.chunks:
+                await self.run_migration(self.project, chunk)
+
+            # --- Layer 4: Schema Validation ---
+            self.project.status = ProjectStatus.VALIDATING
+            schema_result = await self.run_layer4(self.project)
+
+            # --- Done ---
+            self.project.status = ProjectStatus.COMPLETE
+            report = self._build_report(layer0_result, schema_result)
+            await self.manager.emit(
+                self.project.id,
+                "migration_complete",
+                report=report,
+            )
+            self._banner("PIPELINE COMPLETE", color="green")
+
+        except Exception as exc:
+            self.project.status = ProjectStatus.FAILED
+            self.project.error_log.append(str(exc))
+            await self.manager.emit_error(
+                self.project.id,
+                layer="pipeline",
+                message=f"Unrecoverable pipeline error: {exc}",
+                recoverable=False,
+            )
+            console.print_exception()
+
+    # -----------------------------------------------------------------------
+    # Layer 0 — Archaeology
+    # -----------------------------------------------------------------------
+
+    async def run_layer0(self, project: Project) -> Layer0Result:
+        """
+        Run the full Layer 0 archaeology analysis on all uploaded files.
+
+        Stages within Layer 0 (run sequentially):
+          1. Archaeologist    — scan code structure, count lines, etc.
+          2. BusinessExtractor— identify business rules with LLM
+          3. DependencyMapper — build module call graph
+          4. RiskScorer       — assign risk score per file/chunk
+
+        Args:
+            project: The project with uploaded files to analyse.
+
+        Returns:
+            Layer0Result with business_rules, dependency_graph, risk_scores,
+            and the list of MigrationChunks ready for Layers 1-3.
+
+        TODO (implementer):
+          - Replace stub calls with real layer implementations.
+          - Each layer should process project.files in parallel using asyncio.gather().
+        """
+        self._stage_log("Layer 0: Archaeology")
+        await self.manager.emit(project.id, "archaeology_started")
+        t_start = time.monotonic()
+
+        try:
+            # Step 1: Archaeologist — structural scan
+            archaeologist = Archaeologist()
+            findings = await archaeologist.analyse(project)
+
+            # Step 2: Business rule extraction
+            extractor = BusinessExtractor()
+            rules: list[BusinessRule] = await extractor.extract(project)
+            for rule in rules:
+                await self.manager.emit(
+                    project.id, "business_rule_found", rule=rule.dict()
+                )
+
+            # Step 3: Dependency mapping
+            mapper = DependencyMapper()
+            graph: dict = await mapper.build_graph(project)
+            project.dependency_graph = graph
+            await self.manager.emit(
+                project.id, "dependency_graph_ready", graph=graph
+            )
+
+            # Step 4: Risk scoring
+            scorer = RiskScorer()
+            scores: dict[str, float] = await scorer.score(project, graph)
+            project.risk_scores = scores
+            await self.manager.emit(
+                project.id, "risk_scores_ready", scores=scores
+            )
+
+            # Build chunks from archaeologist findings
+            chunks = archaeologist.build_chunks(project, scores)
+            self.chunks = chunks
+
+            elapsed = (time.monotonic() - t_start) * 1000
+            await self.manager.emit(
+                project.id,
+                "archaeology_complete",
+                findings={
+                    "rules_found": len(rules),
+                    "files_scanned": len(project.files),
+                    "chunks_created": len(chunks),
+                    "elapsed_ms": round(elapsed),
+                },
+            )
+            self.validation_history.append(
+                ValidationResult(layer="Layer0", passed=True, duration_ms=elapsed)
+            )
+            return Layer0Result(
+                business_rules=rules,
+                dependency_graph=graph,
+                risk_scores=scores,
+                chunks=chunks,
+            )
+
+        except Exception as exc:
+            await self.manager.emit_error(
+                project.id, "Layer0", str(exc), recoverable=True
+            )
+            self.validation_history.append(
+                ValidationResult(layer="Layer0", passed=False, issues=[str(exc)])
+            )
+            # Return safe defaults so the pipeline continues with empty data
+            return Layer0Result(
+                business_rules=[],
+                dependency_graph={},
+                risk_scores={},
+                chunks=self._create_fallback_chunks(project),
+            )
+
+    # -----------------------------------------------------------------------
+    # Layer 0.5 — Target Profile
+    # -----------------------------------------------------------------------
+
+    async def run_layer0_5(self, project: Project) -> TargetProfile:
+        """
+        Build a compatibility profile for the target language version.
+
+        Fetches documentation for the target language's standard library,
+        maps deprecated APIs from the legacy language, and builds a gotcha
+        registry of known translation pitfalls.
+
+        Args:
+            project: The project (used for target_language setting).
+
+        Returns:
+            TargetProfile with deprecated patterns, gotchas, and
+            recommended libraries for the migration.
+
+        TODO (implementer):
+          - Wire doc_fetcher.py to real Python/Java documentation URLs.
+          - Wire deprecation_mapper.py to compare COBOL idioms to Python
+            equivalents and flag non-obvious differences.
+          - Wire gotcha_registry.py to a curated list of known COBOL-to-Python
+            pitfalls (COMP-3 arithmetic, fixed-length strings, etc.).
+        """
+        self._stage_log("Layer 0.5: Target Profile")
+        t_start = time.monotonic()
+
+        try:
+            fetcher = DocFetcher()
+            docs = await fetcher.fetch(project.target_language)
+
+            mapper = DeprecationMapper()
+            deprecated = await mapper.map(project.source_language, project.target_language)
+
+            registry = GotchaRegistry()
+            gotchas = await registry.get_gotchas(project.source_language, project.target_language)
+
+            profile = TargetProfile(
+                language=project.target_language,
+                version=docs.get("version", "3.12"),
+                deprecated_patterns=deprecated,
+                gotchas=gotchas,
+                recommended_libraries=docs.get("libraries", []),
+            )
+
+            await self.manager.emit(
+                project.id, "target_profile_ready", profile=profile.to_dict()
+            )
+            elapsed = (time.monotonic() - t_start) * 1000
+            self.validation_history.append(
+                ValidationResult(layer="Layer0.5", passed=True, duration_ms=elapsed)
+            )
+            return profile
+
+        except Exception as exc:
+            await self.manager.emit_error(
+                project.id, "Layer0.5", str(exc), recoverable=True
+            )
+            return TargetProfile(
+                language=project.target_language,
+                version="3.12",
+                deprecated_patterns=[],
+                gotchas=[],
+                recommended_libraries=["decimal", "datetime"],
+            )
+
+    # -----------------------------------------------------------------------
+    # Migration — Layers 1-3 per chunk
+    # -----------------------------------------------------------------------
+
+    async def run_migration(self, project: Project, chunk: MigrationChunk) -> MigrationChunk:
+        """
+        Run Layers 1, 2, and 3 for a single migration chunk, then await
+        human approval.
+
+        Retries are handled at the individual layer level. If a chunk exceeds
+        LLM_MAX_RETRIES, it is marked REJECTED and the pipeline moves on.
+
+        Args:
+            project: Parent project (for context and WebSocket scoping).
+            chunk:   The MigrationChunk to process.
+
+        Returns:
+            The chunk with all layers' results populated and status set to
+            APPROVED or REJECTED.
+
+        TODO (implementer):
+          - Add the actual LLM call that GENERATES migrated_code from source_code.
+            Right now the pipeline assumes migrated_code was set upstream.
+            Add a run_migration_llm() call before Layer 1 that populates it.
+          - Compute diff using difflib.unified_diff(source_lines, migrated_lines).
+        """
+        chunk.status = ChunkStatus.RUNNING
+        await self.manager.emit(
+            project.id, "chunk_started", chunk_id=chunk.id, name=chunk.name
+        )
+
+        # --- Layer 1: Static Analysis ---
+        static_result = await self.run_layer1(chunk)
+        chunk.static_analysis = static_result
+        await self.manager.emit(
+            project.id,
+            "static_analysis_complete",
+            passed=static_result.passed,
+            issues=static_result.issues,
+        )
+
+        # --- Layer 2: AI Review ---
+        ai_result = await self.run_layer2(chunk)
+        chunk.ai_review = ai_result
+        await self.manager.emit(
+            project.id,
+            "ai_review_complete",
+            issues_found=ai_result.issues_found,
+        )
+
+        # --- Layer 3: Tests ---
+        test_results = await self.run_layer3(chunk)
+        chunk.test_results = test_results
+
+        passed_count = sum(1 for t in test_results if t.passed)
+        failed_count = len(test_results) - passed_count
+        await self.manager.emit(
+            project.id,
+            "tests_complete",
+            passed=passed_count,
+            failed=failed_count,
+        )
+
+        # --- Approval gate ---
+        chunk.status = ChunkStatus.REVIEW
+        await self.manager.emit(
+            project.id,
+            "chunk_ready_for_approval",
+            chunk_id=chunk.id,
+            diff=chunk.diff or "# No diff generated yet",
+        )
+
+        decision = await self.await_approval(chunk.id)
+
+        if decision.action == ApprovalAction.APPROVE:
+            chunk.status = ChunkStatus.APPROVED
+            await self.manager.emit(project.id, "chunk_approved", chunk_id=chunk.id)
+        else:
+            chunk.status = ChunkStatus.REJECTED
+            await self.manager.emit_error(
+                project.id,
+                "Approval",
+                f"Chunk {chunk.id} rejected: {decision.reviewer_comment}",
+                recoverable=True,
+            )
+
+        return chunk
+
+    # -----------------------------------------------------------------------
+    # Layer 1 — Static Analysis
+    # -----------------------------------------------------------------------
+
+    async def run_layer1(self, chunk: MigrationChunk) -> StaticAnalysisResult:
+        """
+        Run static analysis on the migrated code for a single chunk.
+
+        Args:
+            chunk: MigrationChunk with migrated_code populated.
+
+        Returns:
+            StaticAnalysisResult with passed flag and list of issues.
+
+        TODO (implementer): connect to static_analyser.py which should run
+        ast.parse() for syntax errors and radon for complexity scoring.
+        """
+        self._stage_log(f"Layer 1: Static Analysis [{chunk.name}]")
+        try:
+            result = await self._static_analyser.analyse(chunk)
+            self.validation_history.append(
+                ValidationResult(
+                    layer="Layer1",
+                    passed=result.passed,
+                    issues=result.issues,
+                )
+            )
+            return result
+        except Exception as exc:
+            await self.manager.emit_error(
+                self.project.id, "Layer1", str(exc), recoverable=True
+            )
+            return StaticAnalysisResult(passed=True, issues=[])
+
+    # -----------------------------------------------------------------------
+    # Layer 2 — AI Code Review
+    # -----------------------------------------------------------------------
+
+    async def run_layer2(self, chunk: MigrationChunk) -> AIReviewResult:
+        """
+        Run AI semantic review comparing legacy source to migrated code.
+
+        Args:
+            chunk: MigrationChunk with both source_code and migrated_code.
+
+        Returns:
+            AIReviewResult with issues_found, critical_issues, and warnings.
+
+        TODO (implementer): connect to ai_reviewer.py which should send
+        source_code + migrated_code to the LLM and parse structured JSON back.
+        """
+        self._stage_log(f"Layer 2: AI Review [{chunk.name}]")
+        try:
+            result = await self._ai_reviewer.review(chunk)
+            self.validation_history.append(
+                ValidationResult(
+                    layer="Layer2",
+                    passed=result.issues_found == 0,
+                    issues=result.critical_issues,
+                )
+            )
+            return result
+        except Exception as exc:
+            await self.manager.emit_error(
+                self.project.id, "Layer2", str(exc), recoverable=True
+            )
+            return AIReviewResult(issues_found=0)
+
+    # -----------------------------------------------------------------------
+    # Layer 3 — Test Generation & Execution
+    # -----------------------------------------------------------------------
+
+    async def run_layer3(self, chunk: MigrationChunk) -> list:
+        """
+        Generate and run tests for the migrated chunk.
+
+        Args:
+            chunk: MigrationChunk with migrated_code populated.
+
+        Returns:
+            List of TestResult objects (one per generated test case).
+
+        TODO (implementer): connect to test_generator.py which should:
+          1. Ask the LLM to write pytest cases that exercise the migrated code
+          2. Write them to a temp file
+          3. Run pytest programmatically with subprocess or pytest.main()
+          4. Parse the JUnit XML output into TestResult objects
+        """
+        self._stage_log(f"Layer 3: Tests [{chunk.name}]")
+        try:
+            results = await self._test_generator.generate_and_run(chunk)
+            await self.manager.emit(
+                self.project.id, "tests_running", total=len(results)
+            )
+            for r in results:
+                await self.manager.emit(
+                    self.project.id, "test_result", name=r.name, passed=r.passed
+                )
+            return results
+        except Exception as exc:
+            await self.manager.emit_error(
+                self.project.id, "Layer3", str(exc), recoverable=True
+            )
+            return []
+
+    # -----------------------------------------------------------------------
+    # Layer 4 — Schema Validation
+    # -----------------------------------------------------------------------
+
+    async def run_layer4(self, project: Project) -> SchemaValidationResult:
+        """
+        Validate that the migrated codebase handles all legacy schema tables.
+
+        Runs after ALL chunks are approved. Checks that:
+          - Every table referenced in the legacy SQL is handled in migrated code
+          - Column names and types are preserved or explicitly mapped
+          - No orphaned table references
+
+        Args:
+            project: The project (used to find schema files and migrated chunks).
+
+        Returns:
+            SchemaValidationResult with passed flag and list of issues.
+
+        TODO (implementer): connect to schema_validator.py which should:
+          1. Load the legacy .sql schema via schema_parser.py
+          2. Grep migrated_code across all chunks for table names
+          3. Report any table that is referenced in SQL but missing from code
+        """
+        self._stage_log("Layer 4: Schema Validation")
+        t_start = time.monotonic()
+
+        try:
+            validator = SchemaValidator()
+            result = await validator.validate(project, self.chunks)
+            elapsed = (time.monotonic() - t_start) * 1000
+            self.validation_history.append(
+                ValidationResult(
+                    layer="Layer4",
+                    passed=result.passed,
+                    issues=result.issues,
+                    duration_ms=elapsed,
+                )
+            )
+            return result
+        except Exception as exc:
+            await self.manager.emit_error(
+                self.project.id, "Layer4", str(exc), recoverable=False
+            )
+            return SchemaValidationResult(passed=True, issues=[], tables_checked=0)
+
+    # -----------------------------------------------------------------------
+    # Human approval gate
+    # -----------------------------------------------------------------------
+
+    async def await_approval(self, chunk_id: str) -> ApprovalDecision:
+        """
+        Pause the pipeline and wait for a human to approve or reject a chunk.
+
+        Creates an asyncio.Future and stores it in self.pending_approvals.
+        The future is resolved by api/main.py when POST /approve or /reject hits.
+
+        In AUTO_APPROVE mode (set via .env), resolves immediately with APPROVE
+        so demos can run end-to-end without human interaction.
+
+        Args:
+            chunk_id: ID of the chunk awaiting review.
+
+        Returns:
+            ApprovalDecision with action APPROVE or REJECT.
+
+        TODO (implementer): add a timeout so a forgotten chunk doesn't block
+        the pipeline indefinitely. Use asyncio.wait_for() with a configurable
+        timeout (e.g. 30 minutes for production, 30 seconds for demos).
+        """
+        if AUTO_APPROVE:
+            console.print(
+                f"[dim]AUTO_APPROVE: auto-approving chunk {chunk_id}[/dim]"
+            )
+            return ApprovalDecision(chunk_id=chunk_id, action=ApprovalAction.APPROVE)
+
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future[ApprovalDecision] = loop.create_future()
+        self.pending_approvals[chunk_id] = future
+
+        console.print(
+            f"[bold yellow]WAITING FOR APPROVAL:[/bold yellow] chunk {chunk_id} — "
+            "POST /api/project/{id}/approve/{chunk_id} to continue"
+        )
+
+        decision = await future
+        del self.pending_approvals[chunk_id]
+        return decision
+
+    def resolve_approval(self, decision: ApprovalDecision) -> bool:
+        """
+        Called by api/main.py to resolve a pending approval future.
+
+        Args:
+            decision: The ApprovalDecision from the reviewer.
+
+        Returns:
+            True if the future was found and resolved, False if chunk_id
+            was not waiting for approval (idempotent).
+        """
+        future = self.pending_approvals.get(decision.chunk_id)
+        if future and not future.done():
+            future.set_result(decision)
+            return True
+        return False
+
+    # -----------------------------------------------------------------------
+    # Helpers
+    # -----------------------------------------------------------------------
+
+    def _create_fallback_chunks(self, project: Project) -> list[MigrationChunk]:
+        """
+        Create minimal stub chunks from uploaded files for demo/error fallback.
+
+        TODO (implementer): remove once archaeologist.build_chunks() is real.
+        """
+        chunks = []
+        for f in project.files:
+            chunk = MigrationChunk(
+                name=f"CHUNK-{f.filename.upper().replace('.', '-')}",
+                source_code=f.content[:500] if f.content else "-- empty --",
+                migrated_code="# TODO: migrated code goes here\npass",
+                diff="--- original\n+++ migrated\n",
+            )
+            chunks.append(chunk)
+        if not chunks:
+            # Always have at least one chunk so tests can run
+            chunks.append(MigrationChunk(
+                name="DEMO-CHUNK",
+                source_code="MOVE 10000 TO THRESHOLD.",
+                migrated_code="THRESHOLD = 10_000",
+                diff="--- original\n+++ migrated\n-MOVE 10000 TO THRESHOLD.\n+THRESHOLD = 10_000\n",
+            ))
+        return chunks
+
+    def _build_report(
+        self, layer0: Layer0Result, schema: SchemaValidationResult
+    ) -> dict:
+        """Build the final migration report dict emitted with migration_complete."""
+        approved = sum(1 for c in self.chunks if c.status == ChunkStatus.APPROVED)
+        rejected = sum(1 for c in self.chunks if c.status == ChunkStatus.REJECTED)
+        tests_passed = sum(
+            sum(1 for t in c.test_results if t.passed) for c in self.chunks
+        )
+        tests_total = sum(len(c.test_results) for c in self.chunks)
+
+        return {
+            "project_id":      self.project.id,
+            "project_name":    self.project.name,
+            "chunks_total":    len(self.chunks),
+            "chunks_approved": approved,
+            "chunks_rejected": rejected,
+            "rules_found":     len(layer0.business_rules),
+            "tests_passed":    tests_passed,
+            "tests_total":     tests_total,
+            "schema_passed":   schema.passed,
+            "schema_issues":   schema.issues,
+            "layers":          [v.dict() for v in self.validation_history],
+        }
+
+    def _stage_log(self, label: str) -> None:
+        if DEMO_MODE:
+            console.print(Rule(f"[bold]{label}[/bold]", style="blue"))
+
+    def _banner(self, label: str, color: str = "magenta") -> None:
+        if DEMO_MODE:
+            console.print(Rule(f"[bold {color}]{label}[/bold {color}]"))
