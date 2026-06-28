@@ -48,13 +48,18 @@ class RuleStatus(str, Enum):
 
 class OwnershipCategory(str, Enum):
     """Functional group that owns this business rule."""
-    FINANCE     = "Finance"
-    COMPLIANCE  = "Compliance"
-    PRODUCT     = "Product"
-    RISK        = "Risk"
-    OPS         = "Ops"
-    ENGINEERING = "Engineering"
-    UNKNOWN     = "Unknown"
+    FINANCE          = "Finance"
+    COMPLIANCE       = "Compliance"
+    LEGAL            = "Legal"
+    RISK             = "Risk"
+    PRODUCT          = "Product"
+    OPERATIONS       = "Operations"
+    ENGINEERING      = "Engineering"
+    DATA_ANALYTICS   = "Data/Analytics"
+    CUSTOMER_SUPPORT = "Customer Support"
+    SECURITY         = "Security"
+    OPS              = "Ops"          # legacy alias — prefer OPERATIONS for new code
+    UNKNOWN          = "Unknown"
 
 
 class OwnershipConfidence(str, Enum):
