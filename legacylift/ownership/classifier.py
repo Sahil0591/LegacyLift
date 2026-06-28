@@ -26,12 +26,16 @@ The classifier uses multiple signals:
      to classify based on rule description and context
 
 Categories:
-  Finance     — interest rates, fees, pricing, P&L
-  Compliance  — AML, KYC, sanctions, regulatory reporting, audit
-  Product     — product features, customer experience, account types
-  Risk        — credit risk, market risk, operational risk limits
-  Ops         — operational procedures, batch scheduling, SLAs
-  Engineering — purely technical rules (logging, retry logic, etc.)
+  Finance          — interest rates, fees, billing, tax, pricing, P&L
+  Compliance       — AML, KYC, sanctions, regulatory reporting, audit
+  Legal            — contracts, terms, liability, legal review
+  Risk             — credit risk, market risk, operational risk limits
+  Product          — product features, tiers, eligibility, onboarding
+  Operations       — batch scheduling, SLA, reconciliation, fulfilment
+  Engineering      — purely technical rules (logging, retry logic, etc.)
+  Data/Analytics   — reporting, dashboards, metrics, KPIs
+  Customer Support — refunds, tickets, complaints, service desk
+  Security         — authentication, fraud, account lock, access control
 
 Pipeline position:
   Called by api/main.py after a human confirms a BusinessRule.
@@ -66,28 +70,58 @@ KEYWORD_OWNERSHIP_MAP: dict[OwnershipCategory, list[str]] = {
         "interest", "rate", "balance", "fee", "penalty", "charge",
         "credit", "debit", "payment", "invoice", "amount", "price",
         "accrual", "amortisation", "yield", "dividend", "pnl", "profit",
+        "billing", "tax", "vat", "gst", "revenue", "expense", "ledger",
+        "accounting", "tariff", "pricing", "withholding",
     ],
     OwnershipCategory.COMPLIANCE: [
         "aml", "kyc", "sanctions", "regulatory", "compliance", "audit",
-        "reporting", "disclosure", "fatca", "gdpr", "basel", "sox",
-        "statutory", "legal", "fiduciary",
+        "disclosure", "fatca", "gdpr", "basel", "sox", "statutory",
+        "fiduciary", "regulatory reporting", "compliance report",
+        "audit trail", "know your customer", "anti-money laundering",
+    ],
+    OwnershipCategory.LEGAL: [
+        "legal", "contract", "terms and conditions", "warranty",
+        "liability", "indemnity", "litigation", "counsel", "attorney",
+        "subpoena", "consent", "privacy policy", "legal review",
+        "terms of service", "binding agreement",
     ],
     OwnershipCategory.RISK: [
         "risk", "exposure", "limit", "threshold", "var", "concentration",
         "default", "delinquent", "past due", "non-performing", "provision",
-        "impairment", "stress",
-    ],
-    OwnershipCategory.OPS: [
-        "batch", "schedule", "window", "sla", "cut-off", "cutoff",
-        "eod", "end-of-day", "reconciliation", "settlement", "clearing",
+        "impairment", "stress", "credit risk", "market risk",
+        "operational risk", "loss given default",
     ],
     OwnershipCategory.PRODUCT: [
         "product", "feature", "account type", "tier", "premium", "basic",
-        "customer", "eligibility", "onboarding",
+        "eligibility", "onboarding", "subscription", "plan", "upgrade",
+        "downgrade", "product offering", "product feature",
+    ],
+    OwnershipCategory.OPERATIONS: [
+        "batch", "schedule", "window", "sla", "cut-off", "cutoff",
+        "eod", "end-of-day", "reconciliation", "settlement", "clearing",
+        "fulfilment", "fulfillment", "escalation", "dispatch", "logistics",
+        "runbook", "handoff", "operational procedure", "service window",
     ],
     OwnershipCategory.ENGINEERING: [
         "logging", "retry", "timeout", "connection", "cache", "queue",
-        "thread", "async", "performance", "latency",
+        "thread", "async", "performance", "latency", "deploy",
+        "api endpoint", "microservice", "database connection",
+    ],
+    OwnershipCategory.DATA_ANALYTICS: [
+        "reporting", "dashboard", "metrics", "analytics", "kpi",
+        "data warehouse", "aggregate", "statistic", "bi report",
+        "management report", "data pipeline", "business intelligence",
+    ],
+    OwnershipCategory.CUSTOMER_SUPPORT: [
+        "refund", "support ticket", "customer service", "helpdesk",
+        "complaint", "call centre", "call center", "service desk",
+        "case management", "customer support", "help desk",
+    ],
+    OwnershipCategory.SECURITY: [
+        "failed login", "fraud", "account lock", "authentication",
+        "authorization", "breach", "credential", "password", "mfa",
+        "intrusion", "malware", "phishing", "brute force", "lockout",
+        "suspicious activity", "access control", "security incident",
     ],
 }
 
@@ -144,7 +178,9 @@ async def classify_rule_ownership(
         USER:   "Classify the functional owner of this business rule:
                   Title: {rule.title}
                   Description: {rule.description}
-                  Categories: Finance, Compliance, Product, Risk, Ops, Engineering"
+                  Categories: Finance, Compliance, Legal, Risk, Product,
+                  Operations, Engineering, Data/Analytics, Customer Support,
+                  Security"
       Parse the LLM's response into an OwnershipCategory.
 
     Step 4 — Docs search (TODO):

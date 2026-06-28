@@ -42,7 +42,12 @@ os.environ["AUTO_APPROVE"] = "true"   # Tests don't need human interaction
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from legacylift.models.project import Project, ProjectStatus, UploadedFile, SourceLanguage
-from legacylift.models.business_rule import BusinessRule, RuleConfidence, OwnershipResult
+from legacylift.models.business_rule import (
+    BusinessRule,
+    RuleConfidence,
+    OwnershipResult,
+    OwnershipCategory,
+)
 from legacylift.models.chunk import MigrationChunk, ChunkStatus, StaticAnalysisResult, AIReviewResult
 from legacylift.models.validation import ValidationResult, ApprovalDecision, ApprovalAction
 from legacylift.api.websocket_manager import WebSocketManager
@@ -371,6 +376,24 @@ class TestLayer3:
 # Ownership classifier tests
 # ---------------------------------------------------------------------------
 
+def _owner_values(result: OwnershipResult) -> list[str]:
+    """Normalise primary + secondary owners to string enum values."""
+    def _val(owner) -> str:
+        return owner.value if isinstance(owner, OwnershipCategory) else owner
+
+    return [_val(result.primary_owner), *[_val(o) for o in result.secondary_owners]]
+
+
+def _ownership_rule(title: str, description: str) -> BusinessRule:
+    return BusinessRule(
+        id="BR-TAX",
+        title=title,
+        description=description,
+        source_file="test.cbl",
+        source_lines=(1, 10),
+    )
+
+
 class TestOwnershipClassifier:
     """Smoke tests for Simonra's ownership classifier."""
 
@@ -378,8 +401,114 @@ class TestOwnershipClassifier:
     async def test_classify_finance_rule(self, demo_rule: BusinessRule):
         result = await classify_rule_ownership(demo_rule)
         assert isinstance(result, OwnershipResult)
-        # Interest rate rule should be classified as Finance
-        assert result.primary_owner is not None
+        assert result.primary_owner == OwnershipCategory.FINANCE.value
+
+    @pytest.mark.asyncio
+    async def test_classify_finance_billing_tax(self):
+        rule = _ownership_rule(
+            "Billing Tax Calculation",
+            "VAT tax is applied to all billing invoices at checkout.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.FINANCE.value
+
+    @pytest.mark.asyncio
+    async def test_classify_compliance_aml_kyc(self):
+        rule = _ownership_rule(
+            "AML Transaction Monitoring",
+            "AML screening must flag transactions for KYC compliance review.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.COMPLIANCE.value
+
+    @pytest.mark.asyncio
+    async def test_classify_security_failed_login_lockout(self):
+        rule = _ownership_rule(
+            "Failed Login Lockout",
+            "Account lock after three failed login attempts within 15 minutes.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.SECURITY.value
+
+    @pytest.mark.asyncio
+    async def test_classify_security_fraud(self):
+        rule = _ownership_rule(
+            "Fraud Detection Threshold",
+            "Fraud detection flags suspicious activity for security review.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.SECURITY.value
+
+    @pytest.mark.asyncio
+    async def test_classify_product_eligibility(self):
+        rule = _ownership_rule(
+            "Premium Tier Eligibility",
+            "Premium tier eligibility requires an active subscription plan.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.PRODUCT.value
+
+    @pytest.mark.asyncio
+    async def test_classify_customer_support_refund_ticket(self):
+        rule = _ownership_rule(
+            "Refund Ticket Logging",
+            "Refund requests must be logged as a support ticket within 24 hours.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.CUSTOMER_SUPPORT.value
+
+    @pytest.mark.asyncio
+    async def test_classify_legal_contract_review(self):
+        rule = _ownership_rule(
+            "Contract Termination Approval",
+            "Contract termination requires legal counsel approval before processing.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.LEGAL.value
+
+    @pytest.mark.asyncio
+    async def test_classify_refund_eligibility_cross_functional(self):
+        """Ambiguous rule — assert plausible owners appear, not a forced primary."""
+        rule = _ownership_rule(
+            "Refund Eligibility Policy",
+            "Refund eligibility governs whether customers qualify for payout.",
+        )
+        result = await classify_rule_ownership(rule)
+        owners = _owner_values(result)
+        plausible = {
+            OwnershipCategory.PRODUCT.value,
+            OwnershipCategory.CUSTOMER_SUPPORT.value,
+            OwnershipCategory.LEGAL.value,
+            OwnershipCategory.FINANCE.value,
+        }
+        assert any(owner in plausible for owner in owners)
+
+    @pytest.mark.asyncio
+    async def test_classify_data_analytics_reporting(self):
+        rule = _ownership_rule(
+            "Executive Metrics Dashboard",
+            "Monthly metrics dashboard aggregates reporting KPIs for executives.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.DATA_ANALYTICS.value
+
+    @pytest.mark.asyncio
+    async def test_classify_operations_sla_reconciliation(self):
+        rule = _ownership_rule(
+            "EOD Reconciliation SLA",
+            "End-of-day batch reconciliation must complete within the SLA window.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.OPERATIONS.value
+
+    @pytest.mark.asyncio
+    async def test_classify_operations_fulfilment_escalation(self):
+        rule = _ownership_rule(
+            "Order Fulfilment Escalation",
+            "Order fulfilment escalation follows the operational SLA runbook.",
+        )
+        result = await classify_rule_ownership(rule)
+        assert result.primary_owner == OwnershipCategory.OPERATIONS.value
 
     @pytest.mark.asyncio
     async def test_classify_with_no_git_log(self, demo_rule: BusinessRule):
