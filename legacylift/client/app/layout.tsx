@@ -5,11 +5,15 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "LegacyLift — Legacy code. Finally understood.",
+  title: "LegacyLift — Migrate legacy code without losing the why.",
   description:
     "AI-assisted legacy code migration workbench. Extract business rules, map dependencies, migrate chunk by chunk with human approval at every step.",
   keywords: ["COBOL migration", "legacy code", "AI migration", "LegacyLift"],
 };
+
+// Sets the theme class before paint to avoid a flash. Defaults to light unless
+// the user has explicitly chosen dark previously.
+const themeScript = `(function(){try{var t=localStorage.getItem('theme');if(t==='dark'){document.documentElement.classList.add('dark');}}catch(e){}})();`;
 
 export default function RootLayout({
   children,
@@ -17,9 +21,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body
-        className={`${inter.variable} font-sans bg-[#0a0a0a] text-white antialiased min-h-screen`}
+        className={`${inter.variable} font-sans bg-base text-ink antialiased min-h-screen`}
       >
         {children}
       </body>

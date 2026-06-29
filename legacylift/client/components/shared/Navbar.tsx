@@ -1,13 +1,10 @@
 "use client";
-// Navbar — Top navigation bar shown on all pages.
-// Shows the LegacyLift logo, page title (if provided), and an optional
-// WebSocketStatus indicator when a project is active.
-//
-// TODO: Add auth state (login/logout) once JWT auth is wired up.
 
 import Link from "next/link";
+import { motion } from "framer-motion";
 import { Cpu } from "lucide-react";
 import { WebSocketStatus } from "@/components/shared/WebSocketStatus";
+import { ThemeToggle } from "@/components/shared/ThemeToggle";
 import type { ConnectionStatus } from "@/types/legacylift";
 
 interface NavbarProps {
@@ -17,27 +14,32 @@ interface NavbarProps {
 
 export function Navbar({ wsStatus, projectId }: NavbarProps) {
   return (
-    <nav className="sticky top-0 z-50 border-b border-[#222222] bg-[#0a0a0a]/90 backdrop-blur-md">
+    <motion.nav
+      className="sticky top-0 z-50 border-b border-ink/10 bg-base/70 backdrop-blur-2xl"
+      initial={{ opacity: 0, y: -16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+    >
       <div className="mx-auto flex h-14 max-w-screen-2xl items-center justify-between px-6">
-        {/* Logo */}
-        <Link href="/" className="flex items-center gap-2 text-white hover:opacity-80 transition-opacity">
-          <Cpu className="h-5 w-5 text-[#2563EB]" />
+        <Link
+          href="/"
+          className="flex items-center gap-2 text-ink transition-opacity hover:opacity-75"
+        >
+          <Cpu className="h-5 w-5 text-[#7C3AED]" />
           <span className="font-semibold tracking-tight">LegacyLift</span>
         </Link>
 
-        {/* Right section */}
-        <div className="flex items-center gap-4">
-          {projectId && wsStatus && (
-            <WebSocketStatus status={wsStatus} />
-          )}
+        <div className="flex items-center gap-3">
+          {projectId && wsStatus && <WebSocketStatus status={wsStatus} />}
+          <ThemeToggle />
           <Link
             href="/demo"
-            className="rounded-md bg-[#2563EB] px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+            className="rounded-full bg-[#7C3AED] px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-[#6D28D9]"
           >
             New Migration
           </Link>
         </div>
       </div>
-    </nav>
+    </motion.nav>
   );
 }

@@ -57,7 +57,7 @@ export default function DemoPage() {
   };
 
   return (
-    <>
+    <div className="dark min-h-screen bg-[#0a0a0a] text-white">
       <Navbar />
       <main className="mx-auto max-w-2xl px-6 py-16">
         <div className="mb-10">
@@ -90,6 +90,6 @@ export default function DemoPage() {
         </p>
       </main>
       <Footer />
-    </>
+    </div>
   );
 }

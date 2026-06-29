@@ -135,7 +135,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   // ------------------------------------------------------------------
 
   return (
-    <>
+    <div className="dark min-h-screen bg-[#0a0a0a] text-white">
       <Navbar wsStatus={wsStatus} projectId={projectId} />
       <div className="flex h-[calc(100vh-56px)] overflow-hidden">
         {/* Left — Progress sidebar */}
@@ -174,6 +174,6 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 }

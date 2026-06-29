@@ -16,12 +16,18 @@ const config: Config = {
     },
     extend: {
       colors: {
+        // Theme-aware semantic tokens (flip with .dark via CSS vars in globals.css)
+        base: "rgb(var(--c-bg) / <alpha-value>)",
+        surface: "rgb(var(--c-surface) / <alpha-value>)",
+        ink: "rgb(var(--c-text) / <alpha-value>)",
+        sub: "rgb(var(--c-sub) / <alpha-value>)",
+
         // LegacyLift design system
         background: "#0a0a0a",
         card: "#111111",
         border: "#222222",
         primary: {
-          DEFAULT: "#2563EB",
+          DEFAULT: "#7C3AED",
           foreground: "#FFFFFF",
         },
         success: "#00C48C",
