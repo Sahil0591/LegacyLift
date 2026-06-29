@@ -20,10 +20,10 @@ import "reactflow/dist/style.css";
 import type { DependencyGraph as DependencyGraphType } from "@/types/legacylift";
 
 const NODE_COLOURS: Record<string, string> = {
-  section: "#2563EB",
-  paragraph: "#7C3AED",
+  section: "#7C3AED",
+  paragraph: "#8B5CF6",
   copybook: "#F59E0B",
-  external: "#888888",
+  external: "#6B7280",
 };
 
 function toRFNodes(graph: DependencyGraphType): Node[] {
@@ -49,8 +49,8 @@ function toRFEdges(graph: DependencyGraphType): Edge[] {
     source: e.source,
     target: e.target,
     label: e.label,
-    style: { stroke: "#333333" },
-    labelStyle: { fontSize: 9, fill: "#888888" },
+    style: { stroke: "rgba(148,148,160,0.35)" },
+    labelStyle: { fontSize: 9, fill: "#9a9aa5" },
   }));
 }
 
@@ -85,24 +85,27 @@ export function DependencyGraph({ graph }: DependencyGraphProps) {
   const onInit = useCallback(() => {}, []);
 
   return (
-    <div className="rounded-xl border border-[#222222] bg-[#111111] overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#222222]">
-        <h2 className="text-sm font-semibold text-white">Dependency Graph</h2>
-        {!graph && (
-          <span className="text-xs text-[#444444]">placeholder — waiting for Layer 0</span>
-        )}
+    <div className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
+      <div className="flex items-center justify-between border-b border-ink/10 px-4 py-3">
+        <h3 className="text-sm font-semibold text-ink">Dependency graph</h3>
         {/* Legend */}
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           {Object.entries(NODE_COLOURS).map(([type, colour]) => (
-            <div key={type} className="flex items-center gap-1 text-xs text-[#888888]">
-              <span className="h-2 w-2 rounded-full" style={{ background: colour }} />
+            <div
+              key={type}
+              className="flex items-center gap-1 text-[11px] text-sub"
+            >
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ background: colour }}
+              />
               {type}
             </div>
           ))}
         </div>
       </div>
 
-      <div className="h-[400px] w-full">
+      <div className="h-[340px] w-full">
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -113,7 +116,7 @@ export function DependencyGraph({ graph }: DependencyGraphProps) {
           fitView
           proOptions={{ hideAttribution: true }}
         >
-          <Background color="#222222" gap={16} />
+          <Background color="rgba(148,148,160,0.18)" gap={16} />
         </ReactFlow>
       </div>
     </div>

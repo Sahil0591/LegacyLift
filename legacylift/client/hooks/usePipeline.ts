@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { isDemoProject, createDemoState } from "@/lib/demoData";
 import type {
   BusinessRule,
   DependencyGraph,
@@ -41,19 +42,30 @@ interface UsePipelineReturn {
   markChunkRejected: (chunkId: string) => void;
   /** Update a business rule's status after human review. */
   updateRule: (ruleId: string, patch: Partial<BusinessRule>) => void;
+  /** Jump to a pipeline layer (used for navigation in demo mode). */
+  selectLayer: (layer: PipelineLayer) => void;
+  /** Promote the next pending chunk to review, or complete (demo mode). */
+  advanceDemoChunk: () => void;
 }
 
 export function usePipeline(projectId: string | null): UsePipelineReturn {
-  const { status: wsStatus, subscribe } = useWebSocket(projectId);
-  const [state, setState] = useState<PipelineState>({
-    ...INITIAL_STATE,
-    projectId,
-  });
+  const demo = isDemoProject(projectId);
+  // In demo mode we don't open a real socket — the state is fully seeded.
+  const { status: wsStatus, subscribe } = useWebSocket(demo ? null : projectId);
+  const [state, setState] = useState<PipelineState>(() =>
+    demo && projectId
+      ? createDemoState(projectId)
+      : { ...INITIAL_STATE, projectId },
+  );
 
   // Reset when project changes
   useEffect(() => {
-    setState({ ...INITIAL_STATE, projectId });
-  }, [projectId]);
+    setState(
+      demo && projectId
+        ? createDemoState(projectId)
+        : { ...INITIAL_STATE, projectId },
+    );
+  }, [projectId, demo]);
 
   const setLayer = useCallback((layer: PipelineLayer) => {
     setState((prev) => ({ ...prev, currentLayer: layer }));
@@ -286,5 +298,35 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     [],
   );
 
-  return { state, wsStatus, markChunkApproved, markChunkRejected, updateRule };
+  // Demo-only: promote the next pending chunk to review, or finish.
+  const advanceDemoChunk = useCallback(() => {
+    setState((prev) => {
+      const next = prev.chunks.find((c) => c.status === "Pending");
+      if (!next) {
+        return {
+          ...prev,
+          currentChunk: null,
+          currentLayer: 4,
+          migrationComplete: true,
+        };
+      }
+      const promoted: MigrationChunk = { ...next, status: "Review" };
+      return {
+        ...prev,
+        currentLayer: 1,
+        currentChunk: promoted,
+        chunks: prev.chunks.map((c) => (c.id === promoted.id ? promoted : c)),
+      };
+    });
+  }, []);
+
+  return {
+    state,
+    wsStatus: demo ? "connected" : wsStatus,
+    markChunkApproved,
+    markChunkRejected,
+    updateRule,
+    selectLayer: setLayer,
+    advanceDemoChunk,
+  };
 }

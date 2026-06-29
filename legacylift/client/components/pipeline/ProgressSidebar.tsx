@@ -68,9 +68,15 @@ function layerState(layerId: PipelineLayer, current: PipelineLayer): LayerState 
 interface ProgressSidebarProps {
   currentLayer: PipelineLayer;
   wsStatus: ConnectionStatus;
+  /** When provided, layers become clickable (used for demo navigation). */
+  onSelectLayer?: (layer: PipelineLayer) => void;
 }
 
-export function ProgressSidebar({ currentLayer, wsStatus }: ProgressSidebarProps) {
+export function ProgressSidebar({
+  currentLayer,
+  wsStatus,
+  onSelectLayer,
+}: ProgressSidebarProps) {
   return (
     <aside className="flex h-full flex-col justify-between border-r border-[#222222] bg-[#0a0a0a] p-4">
       <div className="flex flex-col gap-1">
@@ -83,24 +89,31 @@ export function ProgressSidebar({ currentLayer, wsStatus }: ProgressSidebarProps
           return (
             <div key={String(layer.id)} className="mb-2">
               {/* Layer header */}
-              <div
-                className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
+              <button
+                type="button"
+                onClick={() => onSelectLayer?.(layer.id)}
+                disabled={!onSelectLayer}
+                className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
                   state === "active"
-                    ? "bg-[#2563EB]/10 text-white"
+                    ? "bg-[#7C3AED]/15 text-white"
                     : state === "complete"
                     ? "text-[#00C48C]"
-                    : "text-[#444444]"
+                    : "text-[#666666]"
+                } ${
+                  onSelectLayer
+                    ? "cursor-pointer hover:bg-white/5"
+                    : "cursor-default"
                 }`}
               >
                 {state === "complete" ? (
                   <CheckCircle2 className="h-4 w-4 shrink-0 text-[#00C48C]" />
                 ) : state === "active" ? (
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#2563EB]" />
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#7C3AED]" />
                 ) : (
                   <Circle className="h-4 w-4 shrink-0 text-[#333333]" />
                 )}
                 <span className="font-medium">{layer.label}</span>
-              </div>
+              </button>
 
               {/* Sub-steps — only shown for active layer */}
               {state === "active" && (

@@ -1,178 +1,149 @@
 "use client";
-// app/project/[id]/page.tsx — Main workbench. Three-column layout:
-//   Left:   ProgressSidebar — pipeline layer navigation
-//   Middle: Layer-specific content (Layer 0 rules → Layer 0.5 profile → Migration diff)
-//   Right:  ApprovalControls — review actions for current chunk
-//
-// All state flows from usePipeline which subscribes to WebSocket events.
-// The middle content switches purely on pipelineState.currentLayer.
-//
-// TODO: Add a top "breadcrumb" bar showing project name and total chunk progress.
-// TODO: Add keyboard shortcuts (A/R/P) for approve/reject/pause.
+// app/project/[id]/page.tsx — Migration review workbench.
+// Two views: Overview (the codebase map) and Review (step through each chunk,
+// see the before/after, and approve or request changes). State comes from
+// usePipeline; demo projects are fully seeded.
 
-import { Navbar } from "@/components/shared/Navbar";
-import { ProgressSidebar } from "@/components/pipeline/ProgressSidebar";
-import { LayerStatus } from "@/components/pipeline/LayerStatus";
-import { ApprovalControls } from "@/components/pipeline/ApprovalControls";
-import { ArchaeologyReport } from "@/components/layer0/ArchaeologyReport";
-import { BusinessRuleList } from "@/components/layer0/BusinessRuleList";
-import { DependencyGraph } from "@/components/layer0/DependencyGraph";
-import { RiskScorePanel } from "@/components/layer0/RiskScorePanel";
-import { TargetProfile } from "@/components/layer0_5/TargetProfile";
-import { DeprecationMap } from "@/components/layer0_5/DeprecationMap";
-import { GotchaRegistry } from "@/components/layer0_5/GotchaRegistry";
-import { ChunkDiffViewer } from "@/components/migration/ChunkDiffViewer";
-import { TestResults } from "@/components/migration/TestResults";
-import { AIReviewPanel } from "@/components/migration/AIReviewPanel";
-import { MigrationComplete } from "@/components/migration/MigrationComplete";
+import { useState } from "react";
+import Link from "next/link";
+import { CheckCircle2, ArrowRight, Loader2 } from "lucide-react";
 import { usePipeline } from "@/hooks/usePipeline";
-import { approveChunk, rejectChunk, updateBusinessRule } from "@/lib/api";
-import type { RuleStatus } from "@/types/legacylift";
+import { approveChunk, rejectChunk } from "@/lib/api";
+import { isDemoProject, DEMO_REPO } from "@/lib/demoData";
+import {
+  WorkbenchHeader,
+  type WorkbenchView,
+} from "@/components/workbench/WorkbenchHeader";
+import { ChunkQueue } from "@/components/workbench/ChunkQueue";
+import { ChunkReview } from "@/components/workbench/ChunkReview";
+import { OverviewPanel } from "@/components/workbench/OverviewPanel";
 
 interface ProjectPageProps {
   params: { id: string };
 }
 
+function CompleteState({ approved, total }: { approved: number; total: number }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center p-8 text-center">
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#10B981]/15">
+        <CheckCircle2 className="h-8 w-8 text-[#10B981]" />
+      </div>
+      <h2 className="mt-5 text-2xl font-bold text-ink">Migration complete</h2>
+      <p className="mt-2 max-w-md text-sm text-sub">
+        Every chunk was reviewed and approved by a human. The migrated codebase
+        is ready to pull.
+      </p>
+      <div className="mt-7 flex gap-8">
+        <div>
+          <div className="text-2xl font-bold text-[#10B981]">{approved}</div>
+          <div className="text-xs text-sub">chunks merged</div>
+        </div>
+        <div>
+          <div className="text-2xl font-bold text-ink">100%</div>
+          <div className="text-xs text-sub">human-approved</div>
+        </div>
+        <div>
+          <div className="text-2xl font-bold text-ink">{total}</div>
+          <div className="text-xs text-sub">total chunks</div>
+        </div>
+      </div>
+      <Link
+        href="/demo"
+        className="mt-8 inline-flex items-center gap-2 rounded-lg bg-[#7C3AED] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#6D28D9]"
+      >
+        Start another migration
+        <ArrowRight className="h-4 w-4" />
+      </Link>
+    </div>
+  );
+}
+
 export default function ProjectPage({ params }: ProjectPageProps) {
   const projectId = params.id;
+  const demo = isDemoProject(projectId);
 
-  const {
-    state,
-    wsStatus,
-    markChunkApproved,
-    markChunkRejected,
-    updateRule,
-  } = usePipeline(projectId);
+  const { state, markChunkApproved, markChunkRejected, advanceDemoChunk } =
+    usePipeline(projectId);
 
-  // ------------------------------------------------------------------
-  // Approval handlers
-  // ------------------------------------------------------------------
+  const [view, setView] = useState<WorkbenchView>("review");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const handleApprove = async (chunkId: string) => {
-    markChunkApproved(chunkId);
-    await approveChunk(projectId, { chunk_id: chunkId });
+  const repo = demo ? DEMO_REPO.replace("github.com/", "") : projectId;
+  const approved = state.chunks.filter((c) => c.status === "Approved").length;
+
+  const explicit = selectedId
+    ? state.chunks.find((c) => c.id === selectedId) ?? null
+    : null;
+  const reviewChunk = explicit ?? state.currentChunk;
+
+  const handleApprove = async (id: string) => {
+    markChunkApproved(id);
+    if (demo) {
+      advanceDemoChunk();
+      setSelectedId(null);
+      return;
+    }
+    await approveChunk(projectId, { chunk_id: id });
   };
 
-  const handleReject = async (chunkId: string, reason: string) => {
-    markChunkRejected(chunkId);
-    await rejectChunk(projectId, { chunk_id: chunkId, reason });
+  const handleReject = async (id: string, reason: string) => {
+    markChunkRejected(id);
+    if (demo) {
+      advanceDemoChunk();
+      setSelectedId(null);
+      return;
+    }
+    await rejectChunk(projectId, { chunk_id: id, reason });
   };
-
-  const handleRuleStatusChange = async (ruleId: string, newStatus: RuleStatus) => {
-    updateRule(ruleId, { status: newStatus });
-    await updateBusinessRule(projectId, ruleId, { status: newStatus });
-  };
-
-  // ------------------------------------------------------------------
-  // Middle content — switches on pipeline layer
-  // ------------------------------------------------------------------
-
-  function MiddleContent() {
-    if (state.migrationComplete) {
-      return (
-        <MigrationComplete
-          projectId={projectId}
-          totalChunks={state.chunks.length}
-          approvedChunks={state.chunks.filter((c) => c.status === "Approved").length}
-        />
-      );
-    }
-
-    if (state.currentLayer === 0) {
-      return (
-        <div className="flex flex-col gap-6">
-          <LayerStatus currentLayer={0} />
-          <ArchaeologyReport
-            totalFiles={new Set(state.businessRules.map((r) => r.source_file)).size}
-            totalRules={state.businessRules.length}
-            riskScores={state.riskScores}
-            complete={Object.keys(state.riskScores).length > 0}
-          />
-          <BusinessRuleList
-            rules={state.businessRules}
-            onStatusChange={handleRuleStatusChange}
-          />
-          <DependencyGraph graph={state.dependencyGraph} />
-          <RiskScorePanel scores={state.riskScores} />
-        </div>
-      );
-    }
-
-    if (state.currentLayer === 0.5) {
-      return (
-        <div className="flex flex-col gap-6">
-          <LayerStatus currentLayer={0.5} />
-          <TargetProfile profile={state.targetProfile} />
-          <DeprecationMap />
-          <GotchaRegistry />
-        </div>
-      );
-    }
-
-    // Layers 1–3: migration review
-    return (
-      <div className="flex flex-col gap-6">
-        <LayerStatus
-          currentLayer={state.currentLayer}
-          chunkName={state.currentChunk?.name}
-        />
-        <ChunkDiffViewer chunk={state.currentChunk} />
-        {state.currentLayer >= 2 && (
-          <AIReviewPanel review={state.currentChunk?.ai_review ?? null} />
-        )}
-        {state.currentLayer >= 3 && (
-          <TestResults
-            results={state.currentChunk?.test_results ?? []}
-            running={state.currentLayer === 3}
-          />
-        )}
-      </div>
-    );
-  }
-
-  // ------------------------------------------------------------------
-  // Render
-  // ------------------------------------------------------------------
 
   return (
-    <div className="dark min-h-screen bg-[#0a0a0a] text-white">
-      <Navbar wsStatus={wsStatus} projectId={projectId} />
-      <div className="flex h-[calc(100vh-56px)] overflow-hidden">
-        {/* Left — Progress sidebar */}
-        <div className="w-56 shrink-0 overflow-y-auto">
-          <ProgressSidebar currentLayer={state.currentLayer} wsStatus={wsStatus} />
-        </div>
+    <div className="dark flex h-screen flex-col bg-base text-ink">
+      <WorkbenchHeader
+        repo={repo}
+        view={view}
+        onViewChange={setView}
+        approved={approved}
+        total={state.chunks.length}
+      />
 
-        {/* Middle — Main content */}
-        <main className="flex-1 overflow-y-auto border-x border-[#222222] p-6">
-          {state.error && (
-            <div className="mb-4 rounded-lg border border-[#EF4444]/30 bg-[#EF4444]/10 px-4 py-3 text-sm text-[#EF4444]">
-              Pipeline error: {state.error}
-            </div>
-          )}
-          <MiddleContent />
-        </main>
-
-        {/* Right — Approval controls */}
-        <div className="w-72 shrink-0 overflow-y-auto p-4">
-          {state.currentChunk && !state.migrationComplete ? (
-            <ApprovalControls
-              chunkId={state.currentChunk.id}
-              chunkName={state.currentChunk.name}
-              status={state.currentChunk.status}
-              onApprove={handleApprove}
-              onReject={handleReject}
-            />
-          ) : (
-            <div className="rounded-xl border border-[#222222] bg-[#111111] p-5 text-center">
-              <p className="text-xs text-[#444444]">
-                {state.migrationComplete
-                  ? "Migration complete — no more chunks to review."
-                  : "Approval controls appear here when a chunk is ready for review."}
-              </p>
-            </div>
-          )}
-        </div>
+      <div className="min-h-0 flex-1">
+        {view === "overview" ? (
+          <div className="h-full overflow-y-auto">
+            <OverviewPanel state={state} />
+          </div>
+        ) : (
+          <div className="flex h-full">
+            <aside className="hidden w-72 shrink-0 border-r border-ink/10 md:block">
+              <ChunkQueue
+                chunks={state.chunks}
+                selectedId={reviewChunk?.id ?? null}
+                onSelect={setSelectedId}
+              />
+            </aside>
+            <main className="min-w-0 flex-1">
+              {explicit ? (
+                <ChunkReview
+                  chunk={explicit}
+                  onApprove={handleApprove}
+                  onReject={handleReject}
+                />
+              ) : state.migrationComplete ? (
+                <CompleteState approved={approved} total={state.chunks.length} />
+              ) : reviewChunk ? (
+                <ChunkReview
+                  chunk={reviewChunk}
+                  onApprove={handleApprove}
+                  onReject={handleReject}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center gap-2 text-sm text-sub">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Waiting for the first migration chunk…
+                </div>
+              )}
+            </main>
+          </div>
+        )}
       </div>
     </div>
   );
