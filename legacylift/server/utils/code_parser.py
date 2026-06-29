@@ -1,290 +1,660 @@
 """
-utils/code_parser.py — Source code parsing via tree-sitter.
+utils/code_parser.py — Structural parser for COBOL, Java, and SQL source files.
 
-This module wraps tree-sitter to give the rest of the pipeline a clean
-interface for turning raw source text into structured AST data.
-
-Currently used by:
-  - core/layer0/archaeologist.py  — scan COBOL for SECTION/PARAGRAPH names
-  - core/layer0/business_extractor.py — find hardcoded literals
-  - core/layer1/static_analyser.py — parse migrated Python for syntax errors
-
-tree-sitter works by compiling language grammars into shared libraries.
-For COBOL we use a community grammar; Python/Java are first-party.
-
-SETUP NOTE for the implementer:
-  tree-sitter >= 0.22 uses a new binding API. You no longer need to call
-  Language.build_library(). Instead install pre-built wheels:
-    pip install tree-sitter-python  (official)
-  For COBOL use the community grammar — see README for build steps.
-
-In DEMO_MODE (no grammar compiled), all parse calls return synthetic AST
-dicts so the pipeline can run end-to-end without the grammar installed.
+Single public entry-point: parse_file(filename, source) -> ParsedFile
+Leaf node for Layer 0 sub-step 0a. No imports from the rest of legacylift.
+Never raises — returns an empty ParsedFile on any unrecoverable error.
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any, Optional
+import logging
+import re
+import unicodedata
+from dataclasses import dataclass, field
+from pathlib import Path
 
-from rich.console import Console
+logger = logging.getLogger(__name__)
 
-console = Console()
-DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 
 # ---------------------------------------------------------------------------
-# Lazy grammar imports — fail gracefully if tree-sitter grammars not built
+# Public data contracts  (consumed by all downstream Layer 0 sub-steps)
 # ---------------------------------------------------------------------------
+
+@dataclass
+class DataItem:
+    name: str
+    kind: str    # "variable" | "table" | "column" | "file"
+    detail: str  # PIC clause, SQL type, or empty string
+
+
+@dataclass
+class CodeChunk:
+    id: str
+    name: str
+    language: str
+    source: str
+    start_line: int
+    end_line: int
+    calls: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ParsedFile:
+    filename: str
+    language: str
+    chunks: list[CodeChunk] = field(default_factory=list)
+    dependencies: list[tuple[str, str]] = field(default_factory=list)
+    data_items: list[DataItem] = field(default_factory=list)
+    raw_lines: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Optional tree-sitter imports — fail gracefully if grammars not installed
+# ---------------------------------------------------------------------------
+
+_COBOL_TS_AVAILABLE = False
+_JAVA_TS_AVAILABLE = False
+_COBOL_LANG = None
+_JAVA_LANG = None
+_TSParser = None
+
 try:
-    import tree_sitter_python as tspython
-    from tree_sitter import Language, Parser
-    PY_LANGUAGE = Language(tspython.language())
-    TREE_SITTER_AVAILABLE = True
+    from tree_sitter import Language as _TSLanguage, Parser as _TSParser  # type: ignore
+    try:
+        import tree_sitter_cobol as _tscobol  # type: ignore
+        _COBOL_LANG = _TSLanguage(_tscobol.language())
+        _COBOL_TS_AVAILABLE = True
+    except Exception:
+        pass
+    try:
+        import tree_sitter_java as _tsjava  # type: ignore
+        _JAVA_LANG = _TSLanguage(_tsjava.language())
+        _JAVA_TS_AVAILABLE = True
+    except Exception:
+        pass
 except Exception:
-    TREE_SITTER_AVAILABLE = False
-    if DEMO_MODE:
-        console.print(
-            "[yellow]code_parser: tree-sitter not available — using stub parser[/yellow]"
-        )
+    pass
 
 
 # ---------------------------------------------------------------------------
-# Public data structures
+# Helpers
 # ---------------------------------------------------------------------------
 
-class ParsedNode:
+def _make_chunk_id(filename: str, name: str) -> str:
+    stem = Path(filename).stem.lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    return f"{stem}__{slug}"
+
+
+def _detect_language(ext: str) -> str:
+    ext = ext.lower()
+    if ext in (".cbl", ".cob", ".cobol"):
+        return "cobol"
+    if ext == ".java":
+        return "java"
+    if ext == ".sql":
+        return "sql"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def parse_file(filename: str, source: str) -> ParsedFile:
+    """Parse a legacy source file into structured pipeline data.
+
+    Never raises. On any error returns an empty ParsedFile with language='unknown'.
     """
-    Lightweight wrapper around a tree-sitter Node.
+    try:
+        ext = Path(filename).suffix
+        language = _detect_language(ext)
 
-    Provides a dict-serialisable interface so layers can work with parsed
-    code without depending directly on the tree-sitter C extension types.
-    """
+        if language == "unknown":
+            logger.warning("code_parser: unsupported extension %r for %s", ext, filename)
+            return ParsedFile(filename=filename, language="unknown",
+                              chunks=[], dependencies=[], data_items=[],
+                              raw_lines=[])
 
-    def __init__(
-        self,
-        type_: str,
-        text: str,
-        start_line: int,
-        end_line: int,
-        children: list["ParsedNode"] | None = None,
-    ) -> None:
-        self.type = type_
-        self.text = text
-        self.start_line = start_line
-        self.end_line = end_line
-        self.children: list[ParsedNode] = children or []
+        raw_lines = source.splitlines()
+        extra_deps: list[tuple[str, str]] = []
 
-    def to_dict(self) -> dict:
-        return {
-            "type": self.type,
-            "text": self.text,
-            "start_line": self.start_line,
-            "end_line": self.end_line,
-            "children": [c.to_dict() for c in self.children],
-        }
+        if language == "cobol":
+            chunks, data_items = _parse_cobol(filename, source)
+        elif language == "java":
+            chunks, data_items = _parse_java(filename, source)
+        else:  # sql
+            chunks, data_items, extra_deps = _parse_sql(filename, source)
 
+        # Build dependency list: chunk.calls edges + SQL FK edges
+        deps: list[tuple[str, str]] = list(extra_deps)
+        for chunk in chunks:
+            for callee in chunk.calls:
+                deps.append((chunk.id, callee))
 
-class CodeParser:
-    """
-    Thin tree-sitter facade used throughout the pipeline.
+        # Deduplicate preserving insertion order
+        seen: set[tuple[str, str]] = set()
+        unique_deps: list[tuple[str, str]] = []
+        for d in deps:
+            if d not in seen:
+                seen.add(d)
+                unique_deps.append(d)
 
-    Instantiate once per language; reuse for multiple files.
-    Falls back to regex-based stub parsing in DEMO_MODE.
-    """
-
-    def __init__(self, language: str = "python") -> None:
-        """
-        Args:
-            language: One of 'python', 'java', 'cobol'. Case-insensitive.
-
-        TODO (implementer): Wire COBOL and Java language grammars.
-          - COBOL: compile tree-sitter-cobol grammar, load with Language()
-          - Java:  pip install tree-sitter-java, load with Language()
-        """
-        self.language = language.lower()
-        self._parser: Optional[Any] = None
-
-        if TREE_SITTER_AVAILABLE and self.language == "python":
-            self._parser = Parser(PY_LANGUAGE)
-
-    # -----------------------------------------------------------------------
-    # Public methods
-    # -----------------------------------------------------------------------
-
-    def parse(self, source: str) -> list[ParsedNode]:
-        """
-        Parse source text and return a flat list of top-level AST nodes.
-
-        Args:
-            source: Raw source code as a UTF-8 string.
-
-        Returns:
-            List of ParsedNode objects representing the top-level
-            definitions/paragraphs/sections found.
-
-        TODO (implementer):
-          - For Python: use self._parser.parse(source.encode())
-          - For COBOL: implement SECTION/PARAGRAPH splitter via regex first,
-            then graduate to tree-sitter once grammar is compiled.
-          - Return one ParsedNode per COBOL SECTION or Python function/class.
-        """
-        if self._parser is not None:
-            return self._parse_with_tree_sitter(source)
-        return self._parse_stub(source)
-
-    def extract_literals(self, source: str) -> list[str]:
-        """
-        Return all numeric and string literals found in the source.
-
-        Used by business_extractor.py to populate BusinessRule.hardcoded_values.
-
-        Args:
-            source: Raw source code text.
-
-        Returns:
-            Deduplicated list of literal values, e.g. ['10000', '0.025', '35'].
-
-        TODO (implementer):
-          - For Python: walk the AST with ast.walk(ast.parse(source)) and
-            yield ast.Constant nodes.
-          - For COBOL: regex on VALUE clauses and numeric literals.
-        """
-        if DEMO_MODE:
-            return ["10000", "0.025", "35", "5", "23"]
-        # TODO: real implementation
-        return []
-
-    def find_dead_code(self, source: str) -> list[tuple[int, int]]:
-        """
-        Detect unreachable or commented-out code sections.
-
-        Args:
-            source: Raw source code text.
-
-        Returns:
-            List of (start_line, end_line) tuples for each dead code block.
-
-        TODO (implementer):
-          - COBOL: find paragraphs that are never PERFORMed or called.
-          - Python: use AST to find code after unconditional return/raise.
-        """
-        if DEMO_MODE:
-            return [(45, 52)]
-        return []
-
-    def split_into_chunks(
-        self, source: str, max_lines: int = 80
-    ) -> list[tuple[str, str, int, int]]:
-        """
-        Split a source file into pipeline-processable chunks.
-
-        Returns a list of (chunk_name, chunk_source, start_line, end_line).
-        Chunks respect COBOL SECTION / PARAGRAPH boundaries or Python
-        function / class boundaries.
-
-        Args:
-            source:    Full file content.
-            max_lines: Soft limit — chunks larger than this are split further.
-
-        Returns:
-            List of (name, source_text, start_line, end_line) tuples.
-
-        TODO (implementer):
-          - COBOL: split on SECTION / PARAGRAPH headers using regex first,
-            then AST-based splitting once grammar is ready.
-          - Python: split on top-level function/class definitions.
-          - Respect max_lines: if a section exceeds it, split at the nearest
-            blank line boundary.
-        """
-        if DEMO_MODE:
-            return self._stub_chunks(source)
-
-        # TODO: real chunker
-        lines = source.splitlines()
-        return [("FULL-FILE", source, 1, len(lines))]
-
-    # -----------------------------------------------------------------------
-    # Internal helpers
-    # -----------------------------------------------------------------------
-
-    def _parse_with_tree_sitter(self, source: str) -> list[ParsedNode]:
-        """Run tree-sitter parser and convert to ParsedNode list."""
-        tree = self._parser.parse(source.encode("utf-8"))
-        nodes = []
-        for child in tree.root_node.children:
-            if child.type in ("function_definition", "class_definition"):
-                nodes.append(ParsedNode(
-                    type_=child.type,
-                    text=source[child.start_byte:child.end_byte],
-                    start_line=child.start_point[0] + 1,
-                    end_line=child.end_point[0] + 1,
-                ))
-        return nodes
-
-    def _parse_stub(self, source: str) -> list[ParsedNode]:
-        """
-        Regex-based stub parser used in DEMO_MODE when tree-sitter is
-        not available.  Splits COBOL on SECTION/PARAGRAPH headers and Python
-        on 'def '/'class ' lines.
-
-        TODO (implementer): remove once tree-sitter grammars are compiled.
-        """
-        import re
-        lines = source.splitlines()
-        nodes: list[ParsedNode] = []
-
-        # Try COBOL SECTION pattern first, then fall back to a single node
-        cobol_pattern = re.compile(
-            r"^([A-Z0-9\-]+)\s+SECTION\.", re.IGNORECASE
-        )
-        para_pattern = re.compile(
-            r"^([A-Z0-9\-]+)\.$", re.IGNORECASE
+        return ParsedFile(
+            filename=filename,
+            language=language,
+            chunks=chunks,
+            dependencies=unique_deps,
+            data_items=data_items,
+            raw_lines=raw_lines,
         )
 
-        current_name = "PREAMBLE"
-        current_start = 1
-        current_lines: list[str] = []
+    except Exception as e:
+        logger.error("parse_file failed for %s: %s", filename, e, exc_info=True)
+        return ParsedFile(filename=filename, language="unknown",
+                          chunks=[], dependencies=[], data_items=[],
+                          raw_lines=[])
 
-        for i, line in enumerate(lines, 1):
-            m = cobol_pattern.match(line.strip()) or para_pattern.match(line.strip())
-            if m and current_lines:
-                nodes.append(ParsedNode(
-                    type_="section",
-                    text="\n".join(current_lines),
-                    start_line=current_start,
-                    end_line=i - 1,
+
+# ---------------------------------------------------------------------------
+# COBOL parsing
+# ---------------------------------------------------------------------------
+
+def _parse_cobol(
+    filename: str, source: str
+) -> tuple[list[CodeChunk], list[DataItem]]:
+    if _COBOL_TS_AVAILABLE:
+        try:
+            return _parse_cobol_ts(filename, source)
+        except Exception as e:
+            logger.warning(
+                "COBOL tree-sitter failed for %s, falling back to regex: %s", filename, e
+            )
+    return _parse_cobol_regex(filename, source)
+
+
+# -- tree-sitter COBOL -------------------------------------------------------
+
+def _parse_cobol_ts(
+    filename: str, source: str
+) -> tuple[list[CodeChunk], list[DataItem]]:
+    parser = _TSParser(_COBOL_LANG)  # type: ignore[call-arg]
+    tree = parser.parse(source.encode("utf-8"))
+    lines = source.splitlines()
+    chunks: list[CodeChunk] = []
+    data_items: list[DataItem] = []
+
+    def _walk_calls(node, calls: list[str]) -> None:
+        if node.type in ("perform_statement", "perform_phrase"):
+            for child in node.children:
+                if child.type in ("paragraph_name", "section_name", "user_defined_word"):
+                    calls.append(source[child.start_byte:child.end_byte].strip())
+        elif node.type == "call_statement":
+            for child in node.children:
+                if child.type in ("string_literal", "alphanumeric_literal"):
+                    calls.append(source[child.start_byte:child.end_byte].strip("'\" "))
+        elif node.type == "go_to_statement":
+            for child in node.children:
+                if child.type in ("paragraph_name", "user_defined_word"):
+                    calls.append(source[child.start_byte:child.end_byte].strip())
+        for child in node.children:
+            _walk_calls(child, calls)
+
+    def _walk_tree(node) -> None:
+        if node.type == "paragraph":
+            try:
+                name_node = next(
+                    (c for c in node.children if c.type == "paragraph_name"), None
+                )
+                if name_node:
+                    name = source[name_node.start_byte:name_node.end_byte].strip()
+                    start_line = node.start_point[0] + 1
+                    end_line = node.end_point[0] + 1
+                    calls: list[str] = []
+                    _walk_calls(node, calls)
+                    chunks.append(CodeChunk(
+                        id=_make_chunk_id(filename, name),
+                        name=name,
+                        language="cobol",
+                        source="\n".join(lines[start_line - 1:end_line]),
+                        start_line=start_line,
+                        end_line=end_line,
+                        calls=list(dict.fromkeys(calls)),
+                    ))
+            except Exception as e:
+                logger.debug("TS COBOL paragraph error in %s: %s", filename, e)
+
+        elif node.type == "data_description_entry":
+            try:
+                level_node = next(
+                    (c for c in node.children if c.type == "level_number"), None
+                )
+                name_node = next(
+                    (c for c in node.children
+                     if c.type in ("user_defined_word", "data_name")), None
+                )
+                pic_node = next(
+                    (c for c in node.children if c.type == "picture_clause"), None
+                )
+                if level_node and name_node and pic_node:
+                    level = source[level_node.start_byte:level_node.end_byte].strip()
+                    if level in ("01", "77"):
+                        data_items.append(DataItem(
+                            name=source[name_node.start_byte:name_node.end_byte].strip(),
+                            kind="variable",
+                            detail=source[pic_node.start_byte:pic_node.end_byte].strip(),
+                        ))
+            except Exception as e:
+                logger.debug("TS COBOL data item error in %s: %s", filename, e)
+
+        for child in node.children:
+            _walk_tree(child)
+
+    _walk_tree(tree.root_node)
+    return chunks, data_items
+
+
+# -- regex COBOL -------------------------------------------------------------
+
+_CB_DIV_RE = re.compile(
+    r"^\s*(IDENTIFICATION|ENVIRONMENT|DATA|PROCEDURE)\s+DIVISION",
+    re.IGNORECASE,
+)
+_CB_SECT_RE = re.compile(
+    r"^([A-Z0-9][A-Z0-9-]*)\s+SECTION\s*\.",
+    re.IGNORECASE,
+)
+_CB_PARA_RE = re.compile(
+    r"^([A-Z0-9][A-Z0-9-]*)\s*\.\s*$",
+    re.IGNORECASE,
+)
+_CB_DATA_RE = re.compile(
+    r"^\s*(01|77)\s+([A-Z0-9][A-Z0-9-]*)\s+(?:PIC|PICTURE)\s+(\S+)",
+    re.IGNORECASE,
+)
+_CB_SELECT_RE = re.compile(
+    r"\bSELECT\s+([A-Z0-9][A-Z0-9-]*)\s+ASSIGN\s+TO\s+(\S+)",
+    re.IGNORECASE,
+)
+_CB_PERFORM_RE = re.compile(r"\bPERFORM\s+([A-Z0-9][A-Z0-9-]+)", re.IGNORECASE)
+_CB_CALL_RE = re.compile(r"\bCALL\s+['\"]([^'\"]+)['\"]", re.IGNORECASE)
+_CB_GOTO_RE = re.compile(r"\bGO\s+TO\s+([A-Z0-9][A-Z0-9-]+)", re.IGNORECASE)
+
+# Words that trail a PERFORM but are not paragraph names
+_CB_NON_CALL = frozenset({
+    "UNTIL", "TIMES", "VARYING", "FROM", "BY", "WITH", "TEST",
+    "BEFORE", "AFTER", "THRU", "THROUGH", "END-PERFORM",
+})
+# Names that look like paragraphs but are division/clause keywords
+_CB_NON_PARA = frozenset({
+    "IDENTIFICATION", "ENVIRONMENT", "DATA", "PROCEDURE",
+    "END", "WORKING-STORAGE", "LOCAL-STORAGE", "LINKAGE",
+    "FILE", "REPORT", "SCREEN", "COMMUNICATION", "DECLARATIVES",
+})
+
+
+def _cobol_strip_line(raw: str) -> tuple[str, str]:
+    """Return (indicator, content_cols_8_to_72) from a fixed-format COBOL line."""
+    padded = raw.ljust(80)
+    indicator = padded[6]
+    return indicator, padded[7:72].rstrip()
+
+
+def _extract_cobol_calls(chunk_source: str) -> list[str]:
+    calls: list[str] = []
+    for m in _CB_PERFORM_RE.finditer(chunk_source):
+        name = m.group(1).upper()
+        if name not in _CB_NON_CALL:
+            calls.append(name)
+    for m in _CB_CALL_RE.finditer(chunk_source):
+        calls.append(m.group(1))
+    for m in _CB_GOTO_RE.finditer(chunk_source):
+        name = m.group(1).upper()
+        if name not in _CB_NON_CALL:
+            calls.append(name)
+    return list(dict.fromkeys(calls))
+
+
+def _parse_cobol_regex(
+    filename: str, source: str
+) -> tuple[list[CodeChunk], list[DataItem]]:
+    raw_lines = source.splitlines()
+    data_items: list[DataItem] = []
+    chunks: list[CodeChunk] = []
+
+    # Strip fixed-format fields; blank out comment/page lines
+    active: list[tuple[int, str]] = []  # (1-indexed lineno, content)
+    for i, raw in enumerate(raw_lines, 1):
+        indicator, content = _cobol_strip_line(raw)
+        active.append((i, "" if indicator in ("*", "/") else content))
+
+    current_div: str = ""
+    # List of (paragraph_name, 1-indexed start line) in order of appearance
+    para_starts: list[tuple[str, int]] = []
+
+    for lineno, content in active:
+        if not content.strip():
+            continue
+
+        # Division boundary
+        div_m = _CB_DIV_RE.match(content)
+        if div_m:
+            current_div = div_m.group(1).upper()
+            continue
+
+        if current_div == "DATA":
+            m = _CB_DATA_RE.match(content)
+            if m:
+                data_items.append(DataItem(
+                    name=m.group(2),
+                    kind="variable",
+                    detail=m.group(3).rstrip("."),
                 ))
-                current_name = m.group(1)
-                current_start = i
-                current_lines = [line]
-            else:
-                current_lines.append(line)
 
-        if current_lines:
-            nodes.append(ParsedNode(
-                type_="section",
-                text="\n".join(current_lines),
-                start_line=current_start,
-                end_line=len(lines),
+        elif current_div == "ENVIRONMENT":
+            m = _CB_SELECT_RE.search(content)
+            if m:
+                data_items.append(DataItem(
+                    name=m.group(1),
+                    kind="file",
+                    detail=m.group(2).strip("'\"").rstrip("."),
+                ))
+
+        elif current_div == "PROCEDURE":
+            # Paragraph/section headers start in Area A: content[0] is non-space
+            if content and content[0] not in (" ", "\t"):
+                sect_m = _CB_SECT_RE.match(content)
+                if sect_m:
+                    para_starts.append((sect_m.group(1).upper() + " SECTION", lineno))
+                    continue
+                para_m = _CB_PARA_RE.match(content)
+                if para_m:
+                    name = para_m.group(1).upper()
+                    if name not in _CB_NON_PARA:
+                        para_starts.append((name, lineno))
+
+    # Build one CodeChunk per paragraph/section
+    total_lines = len(raw_lines)
+    for idx, (para_name, start_line) in enumerate(para_starts):
+        try:
+            end_line = (
+                para_starts[idx + 1][1] - 1
+                if idx + 1 < len(para_starts)
+                else total_lines
+            )
+            chunk_source = "\n".join(raw_lines[start_line - 1:end_line])
+            chunks.append(CodeChunk(
+                id=_make_chunk_id(filename, para_name),
+                name=para_name,
+                language="cobol",
+                source=chunk_source,
+                start_line=start_line,
+                end_line=end_line,
+                calls=_extract_cobol_calls(chunk_source),
+            ))
+        except Exception as e:
+            logger.debug(
+                "COBOL paragraph extraction error in %s line %d: %s",
+                filename, start_line, e,
+            )
+
+    return chunks, data_items
+
+
+# ---------------------------------------------------------------------------
+# Java parsing
+# ---------------------------------------------------------------------------
+
+def _parse_java(
+    filename: str, source: str
+) -> tuple[list[CodeChunk], list[DataItem]]:
+    if _JAVA_TS_AVAILABLE:
+        try:
+            return _parse_java_ts(filename, source)
+        except Exception as e:
+            logger.warning(
+                "Java tree-sitter failed for %s, falling back to regex: %s", filename, e
+            )
+    return _parse_java_regex(filename, source)
+
+
+# -- tree-sitter Java --------------------------------------------------------
+
+_JAVA_TS_KW = frozenset({
+    "if", "for", "while", "switch", "catch", "assert", "new",
+    "return", "throw", "super", "this",
+})
+
+
+def _parse_java_ts(
+    filename: str, source: str
+) -> tuple[list[CodeChunk], list[DataItem]]:
+    parser = _TSParser(_JAVA_LANG)  # type: ignore[call-arg]
+    tree = parser.parse(source.encode("utf-8"))
+    lines = source.splitlines()
+    chunks: list[CodeChunk] = []
+    data_items: list[DataItem] = []
+
+    def _walk_calls(node, calls: list[str]) -> None:
+        if node.type == "method_invocation":
+            name_node = next(
+                (c for c in node.children if c.type == "identifier"), None
+            )
+            if name_node:
+                name = source[name_node.start_byte:name_node.end_byte]
+                if name.lower() not in _JAVA_TS_KW:
+                    calls.append(name)
+        for child in node.children:
+            _walk_calls(child, calls)
+
+    def _walk_tree(node) -> None:
+        if node.type == "class_declaration":
+            name_node = next(
+                (c for c in node.children if c.type == "identifier"), None
+            )
+            if name_node:
+                data_items.append(DataItem(
+                    name=source[name_node.start_byte:name_node.end_byte],
+                    kind="table",
+                    detail="class",
+                ))
+
+        elif node.type == "import_declaration":
+            raw = source[node.start_byte:node.end_byte].strip().rstrip(";")
+            path = re.sub(r"^import\s+(static\s+)?", "", raw, flags=re.IGNORECASE)
+            data_items.append(DataItem(name=path, kind="file", detail=path))
+
+        elif node.type == "method_declaration":
+            try:
+                name_node = next(
+                    (c for c in node.children if c.type == "identifier"), None
+                )
+                if name_node:
+                    method_name = source[name_node.start_byte:name_node.end_byte]
+                    start_line = node.start_point[0] + 1
+                    end_line = node.end_point[0] + 1
+                    calls: list[str] = []
+                    _walk_calls(node, calls)
+                    chunks.append(CodeChunk(
+                        id=_make_chunk_id(filename, method_name),
+                        name=method_name,
+                        language="java",
+                        source="\n".join(lines[start_line - 1:end_line]),
+                        start_line=start_line,
+                        end_line=end_line,
+                        calls=list(dict.fromkeys(calls)),
+                    ))
+            except Exception as e:
+                logger.debug("TS Java method error in %s: %s", filename, e)
+
+        for child in node.children:
+            _walk_tree(child)
+
+    _walk_tree(tree.root_node)
+    return chunks, data_items
+
+
+# -- regex Java --------------------------------------------------------------
+
+_JAVA_METHOD_RE = re.compile(
+    r"(?:(?:public|protected|private|static|final|abstract|"
+    r"synchronized|native|strictfp)\s+)*"
+    r"(?:<[^>]+>\s*)?"                  # optional generics
+    r"(?:void|[\w\[\]<>,? ]+?)\s+"     # return type (non-greedy)
+    r"(\w+)\s*\([^)]*\)\s*"            # method name + params
+    r"(?:throws\s+[\w\s,]+\s*)?\{",    # optional throws + opening brace
+    re.MULTILINE,
+)
+_JAVA_CLASS_RE = re.compile(
+    r"\b(?:class|interface|enum)\s+(\w+)", re.MULTILINE
+)
+_JAVA_IMPORT_RE = re.compile(
+    r"^\s*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;", re.MULTILINE
+)
+_JAVA_CALL_RE = re.compile(r"\b(\w+)\s*\(")
+_JAVA_KW_SET = frozenset({
+    "if", "for", "while", "switch", "catch", "assert", "new",
+    "return", "throw", "super", "this", "instanceof", "else",
+    "synchronized", "try", "finally", "do",
+})
+
+
+def _parse_java_regex(
+    filename: str, source: str
+) -> tuple[list[CodeChunk], list[DataItem]]:
+    chunks: list[CodeChunk] = []
+    data_items: list[DataItem] = []
+
+    for m in _JAVA_CLASS_RE.finditer(source):
+        data_items.append(DataItem(name=m.group(1), kind="table", detail="class"))
+
+    for m in _JAVA_IMPORT_RE.finditer(source):
+        data_items.append(DataItem(name=m.group(1), kind="file", detail=m.group(1)))
+
+    for m in _JAVA_METHOD_RE.finditer(source):
+        try:
+            method_name = m.group(1)
+            if method_name in _JAVA_KW_SET:
+                continue
+
+            # Locate the opening brace and walk to matching close brace
+            brace_pos = source.index("{", m.start())
+            depth = 0
+            end_byte = brace_pos
+            for i in range(brace_pos, len(source)):
+                if source[i] == "{":
+                    depth += 1
+                elif source[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end_byte = i
+                        break
+
+            method_source = source[m.start():end_byte + 1]
+            start_line = source[: m.start()].count("\n") + 1
+            end_line = source[: end_byte + 1].count("\n") + 1
+
+            calls = [
+                c.group(1)
+                for c in _JAVA_CALL_RE.finditer(method_source)
+                if c.group(1) not in _JAVA_KW_SET
+            ]
+
+            chunks.append(CodeChunk(
+                id=_make_chunk_id(filename, method_name),
+                name=method_name,
+                language="java",
+                source=method_source,
+                start_line=start_line,
+                end_line=end_line,
+                calls=list(dict.fromkeys(calls)),
+            ))
+        except Exception as e:
+            logger.debug("Java regex method error in %s: %s", filename, e)
+
+    return chunks, data_items
+
+
+# ---------------------------------------------------------------------------
+# SQL parsing (regex only — no tree-sitter needed)
+# ---------------------------------------------------------------------------
+
+_SQL_TABLE_RE = re.compile(
+    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"([`\"\[]?[\w.]+[`\"\]]?)\s*\(([^;]+?)\)\s*;?",
+    re.IGNORECASE | re.DOTALL,
+)
+_SQL_COLUMN_RE = re.compile(
+    r"^\s*([`\"\[]?[\w]+[`\"\]]?)\s+([\w\(\), ]+?)(?:\s+(?:NOT\s+NULL|NULL|DEFAULT|"
+    r"PRIMARY|UNIQUE|REFERENCES|CHECK|COMMENT|AUTO_INCREMENT|GENERATED).*)?$",
+    re.IGNORECASE,
+)
+_SQL_FK_RE = re.compile(
+    r"FOREIGN\s+KEY\s*\([^)]+\)\s*REFERENCES\s+([`\"\[]?[\w.]+[`\"\]]?)",
+    re.IGNORECASE,
+)
+_SQL_CONSTRAINT_START_RE = re.compile(
+    r"^\s*(?:CONSTRAINT\s+\w+\s+)?(?:PRIMARY|UNIQUE|INDEX|KEY|CHECK|FOREIGN)\b",
+    re.IGNORECASE,
+)
+
+
+def _sql_clean_name(raw: str) -> str:
+    return raw.strip('`"[]').split(".")[-1]
+
+
+def _parse_sql(
+    filename: str, source: str
+) -> tuple[list[CodeChunk], list[DataItem], list[tuple[str, str]]]:
+    stem = Path(filename).stem.lower()
+    chunks: list[CodeChunk] = []
+    data_items: list[DataItem] = []
+    extra_deps: list[tuple[str, str]] = []
+
+    for m in _SQL_TABLE_RE.finditer(source):
+        try:
+            table_name = _sql_clean_name(m.group(1))
+            table_body = m.group(2)
+            start_line = source[: m.start()].count("\n") + 1
+            end_line = source[: m.end()].count("\n") + 1
+            chunk_id = f"{stem}__table_{table_name.lower()}"
+
+            chunks.append(CodeChunk(
+                id=chunk_id,
+                name=table_name,
+                language="sql",
+                source=source[m.start():m.end()],
+                start_line=start_line,
+                end_line=end_line,
+                calls=[],
             ))
 
-        # If no structure found, treat entire file as one chunk
-        if not nodes:
-            nodes.append(ParsedNode(
-                type_="file",
-                text=source,
-                start_line=1,
-                end_line=len(lines),
-            ))
+            data_items.append(DataItem(name=table_name, kind="table", detail=""))
 
-        return nodes
+            # Columns
+            for col_line in table_body.splitlines():
+                stripped = col_line.strip().rstrip(",")
+                if not stripped or _SQL_CONSTRAINT_START_RE.match(stripped):
+                    continue
+                col_m = _SQL_COLUMN_RE.match(stripped)
+                if col_m:
+                    col_name = _sql_clean_name(col_m.group(1))
+                    col_type = col_m.group(2).strip()
+                    data_items.append(DataItem(
+                        name=col_name,
+                        kind="column",
+                        detail=col_type,
+                    ))
 
-    def _stub_chunks(
-        self, source: str
-    ) -> list[tuple[str, str, int, int]]:
-        """Return canned demo chunks so the pipeline has something to process."""
-        nodes = self._parse_stub(source)
-        return [
-            (n.type.upper() + f"_{i}", n.text, n.start_line, n.end_line)
-            for i, n in enumerate(nodes, 1)
-        ]
+            # Foreign key → parent table dependencies
+            for fk_m in _SQL_FK_RE.finditer(table_body):
+                parent = _sql_clean_name(fk_m.group(1))
+                extra_deps.append(
+                    (f"table_{table_name.lower()}", f"table_{parent.lower()}")
+                )
+
+        except Exception as e:
+            logger.debug("SQL table extraction error in %s: %s", filename, e)
+
+    return chunks, data_items, extra_deps
