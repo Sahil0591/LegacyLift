@@ -134,6 +134,13 @@ class Project(BaseModel):
     target_profile: Optional[dict] = None
     """Library/API compatibility profile for the target language version."""
 
+    # --- Layer 0 outputs (populated by core/layer0/__init__.py) ---
+    layer0_rules: list[dict] = Field(default_factory=list)
+    """Serialized BusinessRule dicts from Layer 0 — served by GET /rules."""
+
+    layer0_graph: dict = Field(default_factory=dict)
+    """Serialized DependencyGraph dict (nodes + edges) — served by GET /graph."""
+
     # --- Error tracking ---
     error_log: list[str] = Field(default_factory=list)
     """Chronological list of error messages accumulated during the pipeline."""

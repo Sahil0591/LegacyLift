@@ -476,10 +476,8 @@ async def get_business_rules(project_id: str):
       - Add pagination: ?page=1&limit=20
       - Add sort: ?sort=source_file&dir=asc
     """
-    _get_project(project_id)  # Validates project exists
-
-    rules = project_rules.get(project_id, [])
-    return {"project_id": project_id, "rules": [r.dict() for r in rules]}
+    project = _get_project(project_id)
+    return {"project_id": project_id, "rules": project.layer0_rules}
 
 
 # ---------------------------------------------------------------------------
@@ -503,10 +501,9 @@ async def get_dependency_graph(project_id: str):
       {"nodes": [{"id": "file.cbl"}], "edges": [{"source": "a.cbl", "target": "b.cbl"}]}
     """
     project = _get_project(project_id)
-
     return {
-        "project_id": project_id,
-        "graph":      project.dependency_graph,
+        "project_id":  project_id,
+        "graph":       project.layer0_graph,   # nodes + edges from Layer 0
         "risk_scores": project.risk_scores,
     }
 

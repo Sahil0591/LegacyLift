@@ -44,6 +44,7 @@ from models.chunk import MigrationChunk, ChunkStatus, StaticAnalysisResult, AIRe
 from models.validation import ValidationResult, ApprovalDecision, ApprovalAction
 
 # Layer imports
+import core.layer0 as _layer0_module
 from core.layer0.archaeologist     import Archaeologist
 from core.layer0.business_extractor import BusinessExtractor
 from core.layer0.dependency_mapper  import DependencyMapper
@@ -226,46 +227,42 @@ class MigrationPipeline:
         t_start = time.monotonic()
 
         try:
-            # Step 1: Archaeologist — structural scan
-            archaeologist = Archaeologist()
-            findings = await archaeologist.analyse(project)
+            # Delegate to the full Layer 0 implementation
+            l0 = await _layer0_module.run(project)
 
-            # Step 2: Business rule extraction
-            extractor = BusinessExtractor()
-            rules: list[BusinessRule] = await extractor.extract(project)
-            for rule in rules:
-                await self.manager.emit(
-                    project.id, "business_rule_found", rule=rule.dict()
-                )
+            # Convert Layer0 dataclass MigrationChunks → pydantic MigrationChunks
+            # so downstream Layers 1-3 get the expected type.
+            pydantic_chunks: list[MigrationChunk] = []
+            for dc in l0.chunks:
+                pydantic_chunks.append(MigrationChunk(
+                    id=dc.id,
+                    name=dc.name,
+                    source_code=dc.source,
+                    migrated_code="# TODO: LLM-generated Python goes here\npass",
+                    diff=(
+                        f"--- {dc.filename} (lines {dc.start_line}-{dc.end_line})\n"
+                        "+++ migrated.py\n"
+                        "# diff will be generated after migration\n"
+                    ),
+                    risk_level=dc.risk_level,
+                ))
+            self.chunks = pydantic_chunks
 
-            # Step 3: Dependency mapping
-            mapper = DependencyMapper()
-            graph: dict = await mapper.build_graph(project)
-            project.dependency_graph = graph
-            await self.manager.emit(
-                project.id, "dependency_graph_ready", graph=graph
-            )
-
-            # Step 4: Risk scoring
-            scorer = RiskScorer()
-            scores: dict[str, float] = await scorer.score(project, graph)
-            project.risk_scores = scores
-            await self.manager.emit(
-                project.id, "risk_scores_ready", scores=scores
-            )
-
-            # Build chunks from archaeologist findings
-            chunks = archaeologist.build_chunks(project, scores)
-            self.chunks = chunks
+            # Keep project.dependency_graph as the legacy adjacency dict so
+            # existing pipeline code doesn't break; the rich graph is in
+            # project.layer0_graph (served by GET /graph).
+            project.dependency_graph = {
+                pf.filename: [] for pf in l0.parsed_files
+            }
 
             elapsed = (time.monotonic() - t_start) * 1000
             await self.manager.emit(
                 project.id,
                 "archaeology_complete",
                 findings={
-                    "rules_found": len(rules),
-                    "files_scanned": len(project.files),
-                    "chunks_created": len(chunks),
+                    "rules_found": len(l0.business_rules),
+                    "files_scanned": len(l0.parsed_files),
+                    "chunks_created": len(pydantic_chunks),
                     "elapsed_ms": round(elapsed),
                 },
             )
@@ -273,10 +270,10 @@ class MigrationPipeline:
                 ValidationResult(layer="Layer0", passed=True, duration_ms=elapsed)
             )
             return Layer0Result(
-                business_rules=rules,
-                dependency_graph=graph,
-                risk_scores=scores,
-                chunks=chunks,
+                business_rules=l0.business_rules,
+                dependency_graph=project.dependency_graph,
+                risk_scores=project.risk_scores,
+                chunks=pydantic_chunks,
             )
 
         except Exception as exc:
