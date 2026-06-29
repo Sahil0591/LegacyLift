@@ -582,7 +582,8 @@ def _parse_java_regex(
 
 _SQL_TABLE_RE = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
-    r"([`\"\[]?[\w.]+[`\"\]]?)\s*\(([^;]+?)\)\s*;?",
+    r"([`\"\[]?[\w.]+[`\"\]]?)\s*"
+    r"\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*;?",
     re.IGNORECASE | re.DOTALL,
 )
 _SQL_COLUMN_RE = re.compile(
