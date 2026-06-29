@@ -113,7 +113,6 @@ async def run_pipeline(project: Project) -> None:
         await ws_manager.emit(
             project.id,
             "pipeline_started",
-            project_id=project.id,
             status="analysing",
         )
 
@@ -151,7 +150,16 @@ async def run_pipeline(project: Project) -> None:
         await ws_manager.emit(project.id, "archaeology_complete")
 
         await _transition(project, "ready")
+        project.completed_at = datetime.utcnow()
         logger.info("Project %s: Layer 0 complete, status → ready", project.id)
+        await ws_manager.emit(
+            project.id,
+            "analysis_complete",
+            status="ready",
+            chunk_count=project.chunk_count,
+            rules_extracted=len(layer0_result.business_rules),
+            needs_review_count=project.needs_review_count,
+        )
 
         # ── LAYER 0.5: Target language profiling ───────────────────────────
         # TODO: implement core/layer0_5.py
@@ -183,7 +191,6 @@ async def run_pipeline(project: Project) -> None:
         await ws_manager.emit(
             project.id,
             "pipeline_failed",
-            project_id=project.id,
             error=str(e),
         )
 

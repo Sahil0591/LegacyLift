@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -63,6 +64,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from rich.console import Console
 
 console = Console()
+logger = logging.getLogger(__name__)
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 
 
@@ -102,11 +104,13 @@ class WebSocketManager:
         """
         await websocket.accept()
         self._connections[project_id].append(websocket)
+        n = len(self._connections[project_id])
+        logger.debug("WS %s: %d client(s) connected", project_id, n)
 
         if DEMO_MODE:
             console.print(
                 f"[green]WebSocket:[/green] client connected to project {project_id} "
-                f"(total: {len(self._connections[project_id])})"
+                f"(total: {n})"
             )
 
         # Replay past events to newly connected client so they get full state
@@ -130,11 +134,13 @@ class WebSocketManager:
         connections = self._connections.get(project_id, [])
         if websocket in connections:
             connections.remove(websocket)
+        n = len(connections)
+        logger.debug("WS %s: %d client(s) connected", project_id, n)
 
         if DEMO_MODE:
             console.print(
                 f"[yellow]WebSocket:[/yellow] client disconnected from project {project_id} "
-                f"(remaining: {len(connections)})"
+                f"(remaining: {n})"
             )
 
     # -----------------------------------------------------------------------
@@ -145,6 +151,7 @@ class WebSocketManager:
         self,
         project_id: str,
         event: str,
+        /,
         **payload: Any,
     ) -> None:
         """
@@ -168,6 +175,7 @@ class WebSocketManager:
         TODO (implementer): add event schema validation against the catalogue
         above so malformed events fail fast during development.
         """
+        payload.pop("project_id", None)  # callers sometimes pass project_id as kwarg too
         message = {
             "event":      event,
             "project_id": project_id,
@@ -225,6 +233,22 @@ class WebSocketManager:
             message=message,
             recoverable=recoverable,
         )
+
+    async def broadcast(self, project_id: str, data: dict) -> None:
+        """
+        Send a pre-built JSON dict to all connected clients for a project.
+
+        Never raises. Dead connections are silently removed.
+        """
+        message_text = json.dumps(data, default=str)
+        dead: list[WebSocket] = []
+        for ws in list(self._connections.get(project_id, [])):
+            try:
+                await ws.send_text(message_text)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            await self.disconnect(project_id, ws)
 
     # -----------------------------------------------------------------------
     # Introspection helpers (for testing and debugging)

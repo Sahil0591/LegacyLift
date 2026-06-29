@@ -157,6 +157,14 @@ class Project(BaseModel):
     needs_review_count: int = 0
     """Number of business rules flagged for human review."""
 
+    # --- Upload tracking (populated by POST /project/{id}/upload) ---
+    uploaded_files: dict = Field(default_factory=dict)
+    """filename → content_string, populated on upload for quick lookup."""
+
+    # --- Chunk approval state (populated by POST /project/{id}/approve|reject) ---
+    chunk_approvals: dict = Field(default_factory=dict)
+    """chunk_id → 'approved' | 'rejected', set by the approval endpoints."""
+
     # --- Error tracking ---
     error: Optional[str] = None
     """Most recent unrecoverable pipeline error message."""
