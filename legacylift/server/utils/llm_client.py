@@ -8,7 +8,7 @@ All AI calls in LegacyLift go through this module. Centralising here means:
   - Easy to mock in tests (just patch llm_client.complete)
 
 Usage (in any layer file):
-    from legacylift.utils.llm_client import LLMClient
+    from utils.llm_client import LLMClient
     client = LLMClient()
     response = await client.complete(
         system="You are a COBOL expert.",

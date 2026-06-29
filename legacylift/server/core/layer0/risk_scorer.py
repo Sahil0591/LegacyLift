@@ -29,7 +29,7 @@ import re
 
 from rich.console import Console
 
-from legacylift.models.project import Project
+from models.project import Project
 
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"

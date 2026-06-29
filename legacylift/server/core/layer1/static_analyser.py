@@ -34,7 +34,7 @@ from typing import Any
 
 from rich.console import Console
 
-from legacylift.models.chunk import MigrationChunk, StaticAnalysisResult
+from models.chunk import MigrationChunk, StaticAnalysisResult
 
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"

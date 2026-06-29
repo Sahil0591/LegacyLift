@@ -24,9 +24,9 @@ from typing import Any
 
 from rich.console import Console
 
-from legacylift.models.project import Project
-from legacylift.models.chunk import MigrationChunk, RiskLevel
-from legacylift.utils.code_parser import CodeParser
+from models.project import Project
+from models.chunk import MigrationChunk, RiskLevel
+from utils.code_parser import CodeParser
 
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"

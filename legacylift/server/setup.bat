@@ -55,11 +55,11 @@ echo.
 echo   Next steps:
 echo   1. Copy .env.example to .env and add your OPENAI_API_KEY
 echo   2. Run the API server:
-echo         python -m uvicorn legacylift.api.main:app --reload
+echo         python -m uvicorn api.main:app --reload
 echo   3. In a second terminal, hit the health check:
 echo         curl http://localhost:8000/health
 echo   4. Run the test suite:
-echo         pytest legacylift/tests/ -v
+echo         pytest tests/ -v
 echo.
 echo   DEMO_MODE is ON by default (see .env.example).
 echo   All LLM prompts and responses will be printed to console.

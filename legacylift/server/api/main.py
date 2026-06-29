@@ -13,7 +13,7 @@ Architecture:
   - WebSocket connections managed by the singleton `manager` from websocket_manager.py
 
 To run:
-    uvicorn legacylift.api.main:app --reload --host 0.0.0.0 --port 8000
+    uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 
 Routes:
     POST   /api/project               — create a new project
@@ -45,13 +45,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from legacylift.api.websocket_manager import manager
-from legacylift.core.pipeline import MigrationPipeline
-from legacylift.models.project import Project, ProjectStatus, SourceLanguage, UploadedFile
-from legacylift.models.business_rule import BusinessRule
-from legacylift.models.chunk import MigrationChunk
-from legacylift.models.validation import ApprovalDecision, ApprovalAction
-from legacylift.ownership.classifier import classify_rule_ownership
+from api.websocket_manager import manager
+from core.pipeline import MigrationPipeline
+from models.project import Project, ProjectStatus, SourceLanguage, UploadedFile
+from models.business_rule import BusinessRule
+from models.chunk import MigrationChunk
+from models.validation import ApprovalDecision, ApprovalAction
+from ownership.classifier import classify_rule_ownership
 
 # ---------------------------------------------------------------------------
 # In-memory storage (replace with SQLAlchemy + async DB session for production)

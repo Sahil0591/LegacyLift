@@ -29,9 +29,9 @@ from pathlib import Path
 
 from rich.console import Console
 
-from legacylift.models.project import Project
-from legacylift.models.chunk import MigrationChunk
-from legacylift.utils.schema_parser import SchemaParser, SchemaInfo, TableInfo
+from models.project import Project
+from models.chunk import MigrationChunk
+from utils.schema_parser import SchemaParser, SchemaInfo, TableInfo
 
 
 class SchemaValidationResult:
