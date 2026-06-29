@@ -30,14 +30,16 @@ Usage (from api/main.py):
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
+from datetime import datetime
 from typing import Optional
 
 from rich.console import Console
 from rich.rule import Rule
 
-from api.websocket_manager import WebSocketManager
+from api.websocket_manager import WebSocketManager, manager as ws_manager
 from models.project import Project, ProjectStatus
 from models.business_rule import BusinessRule
 from models.chunk import MigrationChunk, ChunkStatus, StaticAnalysisResult, AIReviewResult
@@ -58,8 +60,132 @@ from core.layer3.test_generator     import TestGenerator
 from core.layer4.schema_validator   import SchemaValidator, SchemaValidationResult
 
 console = Console()
+logger = logging.getLogger(__name__)
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 AUTO_APPROVE = os.getenv("AUTO_APPROVE", "false").lower() == "true"
+
+# ---------------------------------------------------------------------------
+# State machine
+# ---------------------------------------------------------------------------
+
+_VALID_TRANSITIONS: dict[str, list[str]] = {
+    "created":    ["uploading"],
+    "uploading":  ["analysing"],
+    "analysing":  ["ready", "failed"],
+    "ready":      ["migrating"],
+    "migrating":  ["validating", "failed"],
+    "validating": ["complete", "failed"],
+    "failed":     [],
+}
+
+
+async def _transition(project: Project, new_status: str) -> None:
+    """Advance project.status through the allowed state machine."""
+    current = project.status if isinstance(project.status, str) else project.status.value
+    allowed = _VALID_TRANSITIONS.get(current, [])
+    if new_status not in allowed:
+        logger.warning(
+            "Invalid transition %s → %s for project %s",
+            current, new_status, project.id,
+        )
+        return
+    logger.info("Project %s: %s → %s", project.id, current, new_status)
+    project.status = new_status
+
+
+# ---------------------------------------------------------------------------
+# Primary pipeline entry point (called by api/main.py via asyncio.create_task)
+# ---------------------------------------------------------------------------
+
+async def run_pipeline(project: Project) -> None:
+    """
+    Run the full migration pipeline in the background.
+
+    Currently implements Layer 0 (Code Archaeology) and transitions the
+    project to 'ready'. Layers 1–4 are stubbed with TODOs below.
+
+    Never raises — all exceptions are caught, the project transitions to
+    'failed', and a pipeline_failed WebSocket event is broadcast.
+    """
+    try:
+        await _transition(project, "analysing")
+        project.started_at = datetime.utcnow()
+        await ws_manager.emit(
+            project.id,
+            "pipeline_started",
+            project_id=project.id,
+            status="analysing",
+        )
+
+        # ── LAYER 0: Code Archaeology ──────────────────────────────────────
+        logger.info("Project %s: starting Layer 0", project.id)
+        import core.layer0 as layer0  # local import avoids circular dep at module load
+        await ws_manager.emit(project.id, "archaeology_started")
+        layer0_result = await layer0.run(project)
+
+        # Cache summary stats on the project for GET /status
+        project.chunk_count = len(layer0_result.chunks)
+        project.needs_review_count = sum(
+            1 for r in layer0_result.business_rules if r.needs_review
+        )
+        risk_summary: dict[str, int] = {"Low": 0, "Medium": 0, "High": 0, "Critical": 0}
+        for chunk in layer0_result.chunks:
+            lvl = chunk.risk_level
+            risk_summary[lvl] = risk_summary.get(lvl, 0) + 1
+        project.risk_summary = risk_summary
+
+        # Emit events the frontend already handles (layer0.run() serialises
+        # rules and graph onto the project before returning).
+        for rule_dict in project.layer0_rules:
+            await ws_manager.emit(project.id, "business_rule_found", rule=rule_dict)
+        await ws_manager.emit(
+            project.id,
+            "dependency_graph_ready",
+            graph=project.layer0_graph,
+        )
+        await ws_manager.emit(
+            project.id,
+            "risk_scores_ready",
+            scores=project.risk_scores,
+        )
+        await ws_manager.emit(project.id, "archaeology_complete")
+
+        await _transition(project, "ready")
+        logger.info("Project %s: Layer 0 complete, status → ready", project.id)
+
+        # ── LAYER 0.5: Target language profiling ───────────────────────────
+        # TODO: implement core/layer0_5.py
+        # await layer0_5.run(project)
+
+        # ── LAYER 1: Static analysis ───────────────────────────────────────
+        # TODO: implement core/layer1.py
+        # await layer1.run(project)
+
+        # ── LAYER 2: AI semantic review ────────────────────────────────────
+        # TODO: implement core/layer2.py
+        # await layer2.run(project)
+
+        # ── LAYER 3: Test generation ───────────────────────────────────────
+        # TODO: implement core/layer3.py
+        # await layer3.run(project)
+
+        # ── LAYER 4: Schema validation ─────────────────────────────────────
+        # TODO: implement core/layer4.py
+        # await layer4.run(project)
+
+    except Exception as e:
+        logger.error(
+            "Pipeline failed for project %s: %s", project.id, e, exc_info=True
+        )
+        await _transition(project, "failed")
+        project.error = str(e)
+        project.completed_at = datetime.utcnow()
+        await ws_manager.emit(
+            project.id,
+            "pipeline_failed",
+            project_id=project.id,
+            error=str(e),
+        )
 
 
 # ---------------------------------------------------------------------------

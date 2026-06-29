@@ -46,7 +46,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from api.websocket_manager import manager
-from core.pipeline import MigrationPipeline
+from core.pipeline import MigrationPipeline, run_pipeline
 from models.project import Project, ProjectStatus, SourceLanguage, UploadedFile
 from models.business_rule import BusinessRule
 from models.chunk import MigrationChunk
@@ -293,33 +293,29 @@ async def start_pipeline(project_id: str):
     """
     project = _get_project(project_id)
 
-    if not project.files:
+    current_status = (
+        project.status if isinstance(project.status, str) else project.status.value
+    )
+    if current_status not in ("created", "uploading"):
         raise HTTPException(
-            status_code=400,
-            detail="No files uploaded. Call /upload before /start."
+            status_code=409,
+            detail="Pipeline already started or project not ready",
         )
 
-    if project_id in active_pipelines:
-        existing = active_pipelines[project_id]
-        if project.status in (ProjectStatus.ANALYSING, ProjectStatus.MIGRATING):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Pipeline already running for project {project_id}"
-            )
-
-    # Create pipeline and launch as background task
-    pipeline = MigrationPipeline(project, manager)
-    active_pipelines[project_id] = pipeline
+    if current_status == "created":
+        project.status = "uploading"
 
     # Fire and forget — pipeline emits WebSocket events for progress
-    asyncio.create_task(pipeline.run())
+    asyncio.create_task(run_pipeline(project))
 
-    return {
-        "message":    f"Pipeline started for project '{project.name}'",
-        "project_id": project_id,
-        "status":     "running",
-        "tip":        f"Connect to ws://host/ws/{project_id} to receive events",
-    }
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "accepted",
+            "project_id": project_id,
+            "message": "Pipeline started",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -421,37 +417,27 @@ async def reject_chunk(
 # GET /api/project/{id}/status
 # ---------------------------------------------------------------------------
 
-@app.get("/api/project/{project_id}/status", response_model=ProjectStatusResponse)
+@app.get("/api/project/{project_id}/status")
 async def get_project_status(project_id: str):
     """
-    Get the current status and chunk summary for a project.
+    Get the current status and summary for a project.
 
     Args:
         project_id: ID of the project.
 
     Returns:
-        ProjectStatusResponse with chunk counts and current status.
-
-    TODO (implementer): add ETA estimation based on average chunk processing time.
+        JSON with status, timing, chunk count, risk summary, and any error.
     """
     project = _get_project(project_id)
-    pipeline = active_pipelines.get(project_id)
-
-    chunks = pipeline.chunks if pipeline else []
-    approved = sum(1 for c in chunks if c.status == "Approved")
-    rejected  = sum(1 for c in chunks if c.status == "Rejected")
-    pending   = len(chunks) - approved - rejected
-
-    return ProjectStatusResponse(
-        project_id=project.id,
-        name=project.name,
-        status=project.status,
-        files_uploaded=len(project.files),
-        chunks_total=len(chunks),
-        chunks_approved=approved,
-        chunks_rejected=rejected,
-        chunks_pending=pending,
-    )
+    return {
+        "project_id":        project.id,
+        "status":            project.status,
+        "started_at":        project.started_at.isoformat() if project.started_at else None,
+        "chunk_count":       project.chunk_count,
+        "risk_summary":      project.risk_summary,
+        "needs_review_count": project.needs_review_count,
+        "error":             project.error,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +463,11 @@ async def get_business_rules(project_id: str):
       - Add sort: ?sort=source_file&dir=asc
     """
     project = _get_project(project_id)
-    return {"project_id": project_id, "rules": project.layer0_rules}
+    return {
+        "project_id": project_id,
+        "status": project.status,
+        "rules": project.layer0_rules,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -501,10 +491,11 @@ async def get_dependency_graph(project_id: str):
       {"nodes": [{"id": "file.cbl"}], "edges": [{"source": "a.cbl", "target": "b.cbl"}]}
     """
     project = _get_project(project_id)
+    graph = project.layer0_graph
     return {
-        "project_id":  project_id,
-        "graph":       project.layer0_graph,   # nodes + edges from Layer 0
-        "risk_scores": project.risk_scores,
+        "project_id": project_id,
+        "nodes": graph.get("nodes", []),
+        "edges": graph.get("edges", []),
     }
 
 
