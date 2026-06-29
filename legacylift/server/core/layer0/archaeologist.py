@@ -26,7 +26,7 @@ from rich.console import Console
 
 from models.project import Project
 from models.chunk import MigrationChunk, RiskLevel
-from utils.code_parser import CodeParser
+from utils.code_parser import parse_file
 
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
@@ -116,15 +116,15 @@ class Archaeologist:
         if DEMO_MODE:
             console.print("[dim]Archaeologist.build_chunks() → building stub chunks[/dim]")
 
-        parser = CodeParser(language=project.source_language)
         chunks: list[MigrationChunk] = []
 
         for f in project.files:
-            raw_chunks = parser.split_into_chunks(f.content or "-- empty --")
+            parsed = parse_file(f.filename, f.content or "-- empty --")
             file_risk = risk_scores.get(f.filename, 0.5)
             risk_level = self._score_to_level(file_risk)
 
-            for chunk_name, chunk_src, start, end in raw_chunks:
+            for c in parsed.chunks:
+                chunk_name, chunk_src, start, end = c.name, c.source, c.start_line, c.end_line
                 chunk = MigrationChunk(
                     name=f"{f.filename.upper().replace('.', '_')}__{chunk_name}",
                     source_code=chunk_src,
