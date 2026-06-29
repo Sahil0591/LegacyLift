@@ -125,3 +125,6 @@ ehthumbs_vista.db
 [Dd]esktop.ini
 $RECYCLE.BIN/
 *.lnk
+# Allow client source utilities
+!client/lib/
+!client/lib/**
