@@ -27,9 +27,9 @@ from typing import Any
 
 from rich.console import Console
 
-from legacylift.models.project import Project
-from legacylift.models.business_rule import BusinessRule, RuleConfidence
-from legacylift.utils.llm_client import LLMClient
+from models.project import Project
+from models.business_rule import BusinessRule, RuleConfidence
+from utils.llm_client import LLMClient
 
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"

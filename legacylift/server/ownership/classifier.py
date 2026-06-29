@@ -46,13 +46,13 @@ from typing import Optional
 
 from rich.console import Console
 
-from legacylift.models.business_rule import (
+from models.business_rule import (
     BusinessRule,
     OwnershipCategory,
     OwnershipConfidence,
     OwnershipResult,
 )
-from legacylift.utils.llm_client import LLMClient
+from utils.llm_client import LLMClient
 
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"

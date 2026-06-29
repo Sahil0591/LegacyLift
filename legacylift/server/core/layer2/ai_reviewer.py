@@ -30,8 +30,8 @@ import os
 
 from rich.console import Console
 
-from legacylift.models.chunk import MigrationChunk, AIReviewResult
-from legacylift.utils.llm_client import LLMClient
+from models.chunk import MigrationChunk, AIReviewResult
+from utils.llm_client import LLMClient
 
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"

@@ -36,8 +36,8 @@ from pathlib import Path
 
 from rich.console import Console
 
-from legacylift.models.chunk import MigrationChunk, TestResult
-from legacylift.utils.llm_client import LLMClient
+from models.chunk import MigrationChunk, TestResult
+from utils.llm_client import LLMClient
 
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"

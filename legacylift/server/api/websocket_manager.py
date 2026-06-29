@@ -46,7 +46,7 @@ Error events:
   error                      — layer: str, message: str, recoverable: bool
 
 Usage (from pipeline.py):
-    from legacylift.api.websocket_manager import manager
+    from api.websocket_manager import manager
     await manager.emit(project_id, "business_rule_found", rule=rule.dict())
 """
 
@@ -253,5 +253,5 @@ class WebSocketManager:
 # ---------------------------------------------------------------------------
 
 # Import this instance everywhere instead of creating new ones:
-#   from legacylift.api.websocket_manager import manager
+#   from api.websocket_manager import manager
 manager = WebSocketManager()

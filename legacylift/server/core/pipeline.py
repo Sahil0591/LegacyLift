@@ -37,24 +37,24 @@ from typing import Optional
 from rich.console import Console
 from rich.rule import Rule
 
-from legacylift.api.websocket_manager import WebSocketManager
-from legacylift.models.project import Project, ProjectStatus
-from legacylift.models.business_rule import BusinessRule
-from legacylift.models.chunk import MigrationChunk, ChunkStatus, StaticAnalysisResult, AIReviewResult
-from legacylift.models.validation import ValidationResult, ApprovalDecision, ApprovalAction
+from api.websocket_manager import WebSocketManager
+from models.project import Project, ProjectStatus
+from models.business_rule import BusinessRule
+from models.chunk import MigrationChunk, ChunkStatus, StaticAnalysisResult, AIReviewResult
+from models.validation import ValidationResult, ApprovalDecision, ApprovalAction
 
 # Layer imports
-from legacylift.core.layer0.archaeologist     import Archaeologist
-from legacylift.core.layer0.business_extractor import BusinessExtractor
-from legacylift.core.layer0.dependency_mapper  import DependencyMapper
-from legacylift.core.layer0.risk_scorer        import RiskScorer
-from legacylift.core.layer0_5.doc_fetcher      import DocFetcher
-from legacylift.core.layer0_5.deprecation_mapper import DeprecationMapper
-from legacylift.core.layer0_5.gotcha_registry  import GotchaRegistry
-from legacylift.core.layer1.static_analyser    import StaticAnalyser
-from legacylift.core.layer2.ai_reviewer        import AIReviewer
-from legacylift.core.layer3.test_generator     import TestGenerator
-from legacylift.core.layer4.schema_validator   import SchemaValidator, SchemaValidationResult
+from core.layer0.archaeologist     import Archaeologist
+from core.layer0.business_extractor import BusinessExtractor
+from core.layer0.dependency_mapper  import DependencyMapper
+from core.layer0.risk_scorer        import RiskScorer
+from core.layer0_5.doc_fetcher      import DocFetcher
+from core.layer0_5.deprecation_mapper import DeprecationMapper
+from core.layer0_5.gotcha_registry  import GotchaRegistry
+from core.layer1.static_analyser    import StaticAnalyser
+from core.layer2.ai_reviewer        import AIReviewer
+from core.layer3.test_generator     import TestGenerator
+from core.layer4.schema_validator   import SchemaValidator, SchemaValidationResult
 
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"

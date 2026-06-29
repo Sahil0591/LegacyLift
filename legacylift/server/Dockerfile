@@ -74,7 +74,7 @@ EXPOSE 8000
 # TODO (implementer): switch to multi-worker + Redis for pipeline state when
 # scaling beyond a single instance.
 # ---------------------------------------------------------------------------
-CMD ["uvicorn", "legacylift.api.main:app", \
+CMD ["uvicorn", "api.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--workers", "1", \

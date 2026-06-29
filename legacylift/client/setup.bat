@@ -1,17 +1,17 @@
 @echo off
-:: LegacyLift frontend setup — Windows only, runs inside frontend/ directory.
+:: LegacyLift client setup — Windows only, runs inside client/ directory.
 :: Does NOT touch the parent legacylift/ Python environment.
 
 echo.
 echo  =========================================
-echo   LegacyLift Frontend Setup
+echo   LegacyLift Client Setup
 echo  =========================================
 echo.
 
 :: Verify we're in the right folder
 if not exist package.json (
-    echo ERROR: Run this script from inside frontend/
-    echo        e.g.  cd legacylift\frontend ^&^& setup.bat
+    echo ERROR: Run this script from inside client/
+    echo        e.g.  cd legacylift\client ^&^& setup.bat
     exit /b 1
 )
 

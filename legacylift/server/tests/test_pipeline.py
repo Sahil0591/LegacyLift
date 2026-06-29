@@ -14,7 +14,7 @@ yet) but to ensure that:
   5. Approval flow works (both approve and reject paths)
 
 Run with:
-    pytest legacylift/tests/ -v
+    pytest tests/ -v
 
 For async tests, pytest-asyncio is required (in requirements.txt).
 The asyncio_mode = "auto" pragma in conftest.py makes all async tests auto-detected.
@@ -41,25 +41,25 @@ os.environ["AUTO_APPROVE"] = "true"   # Tests don't need human interaction
 # Add project root to path so imports work without `pip install -e .`
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from legacylift.models.project import Project, ProjectStatus, UploadedFile, SourceLanguage
-from legacylift.models.business_rule import BusinessRule, RuleConfidence, OwnershipResult
-from legacylift.models.chunk import MigrationChunk, ChunkStatus, StaticAnalysisResult, AIReviewResult
-from legacylift.models.validation import ValidationResult, ApprovalDecision, ApprovalAction
-from legacylift.api.websocket_manager import WebSocketManager
-from legacylift.core.pipeline import MigrationPipeline
-from legacylift.core.layer0.archaeologist import Archaeologist
-from legacylift.core.layer0.business_extractor import BusinessExtractor
-from legacylift.core.layer0.dependency_mapper import DependencyMapper
-from legacylift.core.layer0.risk_scorer import RiskScorer
-from legacylift.core.layer0_5.doc_fetcher import DocFetcher
-from legacylift.core.layer0_5.deprecation_mapper import DeprecationMapper
-from legacylift.core.layer0_5.gotcha_registry import GotchaRegistry
-from legacylift.core.layer1.static_analyser import StaticAnalyser
-from legacylift.core.layer2.ai_reviewer import AIReviewer
-from legacylift.core.layer3.test_generator import TestGenerator
-from legacylift.utils.code_parser import CodeParser
-from legacylift.utils.schema_parser import SchemaParser
-from legacylift.ownership.classifier import classify_rule_ownership
+from models.project import Project, ProjectStatus, UploadedFile, SourceLanguage
+from models.business_rule import BusinessRule, RuleConfidence, OwnershipResult
+from models.chunk import MigrationChunk, ChunkStatus, StaticAnalysisResult, AIReviewResult
+from models.validation import ValidationResult, ApprovalDecision, ApprovalAction
+from api.websocket_manager import WebSocketManager
+from core.pipeline import MigrationPipeline
+from core.layer0.archaeologist import Archaeologist
+from core.layer0.business_extractor import BusinessExtractor
+from core.layer0.dependency_mapper import DependencyMapper
+from core.layer0.risk_scorer import RiskScorer
+from core.layer0_5.doc_fetcher import DocFetcher
+from core.layer0_5.deprecation_mapper import DeprecationMapper
+from core.layer0_5.gotcha_registry import GotchaRegistry
+from core.layer1.static_analyser import StaticAnalyser
+from core.layer2.ai_reviewer import AIReviewer
+from core.layer3.test_generator import TestGenerator
+from utils.code_parser import CodeParser
+from utils.schema_parser import SchemaParser
+from ownership.classifier import classify_rule_ownership
 
 # ---------------------------------------------------------------------------
 # Demo COBOL content (inline so tests work without the demo/ folder)
@@ -565,7 +565,7 @@ class TestPipelineE2E:
 
         # Create a fake pending chunk future
         loop = asyncio.get_event_loop()
-        from legacylift.models.validation import ApprovalDecision, ApprovalAction
+        from models.validation import ApprovalDecision, ApprovalAction
         future = loop.create_future()
         test_chunk_id = "chunk-test-001"
         pipeline.pending_approvals[test_chunk_id] = future
