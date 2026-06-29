@@ -5,8 +5,8 @@
   "installCommand": "npm install",
   "outputDirectory": ".next",
   "env": {
-    "NEXT_PUBLIC_API_URL": "https://legacylift.fly.dev",
-    "NEXT_PUBLIC_WEBSOCKET_URL": "wss://legacylift.fly.dev",
+    "NEXT_PUBLIC_API_URL": "https://your-app-name.azurewebsites.net",
+    "NEXT_PUBLIC_WEBSOCKET_URL": "wss://your-app-name.azurewebsites.net",
     "NEXT_PUBLIC_DEMO_MODE": "false"
   }
 }
