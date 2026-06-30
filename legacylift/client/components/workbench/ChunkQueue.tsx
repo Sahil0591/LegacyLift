@@ -4,7 +4,12 @@
 // risk, click to review.
 
 import type { MigrationChunk } from "@/types/legacylift";
-import { RiskBadge, StatusDot, STATUS_META } from "@/components/workbench/shared";
+import {
+  RiskBadge,
+  StatusDot,
+  STATUS_META,
+  RISK_RANK,
+} from "@/components/workbench/shared";
 
 interface ChunkQueueProps {
   chunks: MigrationChunk[];
@@ -15,6 +20,15 @@ interface ChunkQueueProps {
 export function ChunkQueue({ chunks, selectedId, onSelect }: ChunkQueueProps) {
   const approved = chunks.filter((c) => c.status === "Approved").length;
   const pct = chunks.length ? Math.round((approved / chunks.length) * 100) : 0;
+
+  // Sort by attention: highest risk first, then by original order (stable).
+  const ordered = chunks
+    .map((c, i) => ({ c, i }))
+    .sort(
+      (a, b) =>
+        RISK_RANK[b.c.risk_level] - RISK_RANK[a.c.risk_level] || a.i - b.i,
+    )
+    .map(({ c }) => c);
 
   return (
     <div className="flex h-full flex-col">
@@ -34,7 +48,7 @@ export function ChunkQueue({ chunks, selectedId, onSelect }: ChunkQueueProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">
-        {chunks.map((chunk) => {
+        {ordered.map((chunk) => {
           const active = chunk.id === selectedId;
           return (
             <button

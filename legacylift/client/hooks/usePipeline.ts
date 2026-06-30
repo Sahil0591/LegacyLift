@@ -10,6 +10,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { isDemoProject, createDemoState } from "@/lib/demoData";
+import { loadAnalysis } from "@/lib/projectStore";
+import { RISK_RANK } from "@/components/workbench/shared";
+import type { AnalyzeResult } from "@/lib/analyze";
 import type {
   BusinessRule,
   DependencyGraph,
@@ -46,26 +49,64 @@ interface UsePipelineReturn {
   selectLayer: (layer: PipelineLayer) => void;
   /** Promote the next pending chunk to review, or complete (demo mode). */
   advanceDemoChunk: () => void;
+  /** Patch a chunk's fields (migrated_code, ai_review, status, …). */
+  patchChunk: (chunkId: string, patch: Partial<MigrationChunk>) => void;
+}
+
+function stateFromAnalysis(
+  projectId: string,
+  a: AnalyzeResult,
+): PipelineState {
+  // Highest-attention units first so the review opens on what matters most.
+  const chunks = [...a.chunks].sort(
+    (x, y) => RISK_RANK[y.risk_level] - RISK_RANK[x.risk_level],
+  );
+  return {
+    projectId,
+    currentLayer: 0,
+    businessRules: a.businessRules,
+    dependencyGraph: a.dependencyGraph,
+    riskScores: a.riskScores,
+    targetProfile: a.targetProfile,
+    currentChunk: chunks[0] ?? null,
+    chunks,
+    migrationComplete: false,
+    error: null,
+  };
 }
 
 export function usePipeline(projectId: string | null): UsePipelineReturn {
   const demo = isDemoProject(projectId);
-  // In demo mode we don't open a real socket — the state is fully seeded.
-  const { status: wsStatus, subscribe } = useWebSocket(demo ? null : projectId);
+  const isLocal = !!projectId && projectId.startsWith("local");
+  const offline = demo || isLocal;
+  // Demo + locally-analysed projects don't open a real socket.
+  const { status: wsStatus, subscribe } = useWebSocket(
+    offline ? null : projectId,
+  );
   const [state, setState] = useState<PipelineState>(() =>
     demo && projectId
       ? createDemoState(projectId)
       : { ...INITIAL_STATE, projectId },
   );
 
-  // Reset when project changes
+  // Reset / load when the project changes. sessionStorage is client-only, so
+  // local projects are loaded here (in an effect) rather than in the initializer.
   useEffect(() => {
-    setState(
-      demo && projectId
-        ? createDemoState(projectId)
-        : { ...INITIAL_STATE, projectId },
-    );
-  }, [projectId, demo]);
+    if (demo && projectId) {
+      setState(createDemoState(projectId));
+      return;
+    }
+    if (isLocal && projectId) {
+      const analysis = loadAnalysis(projectId);
+      setState(
+        analysis
+          ? stateFromAnalysis(projectId, analysis)
+          : { ...INITIAL_STATE, projectId },
+      );
+      return;
+    }
+    setState({ ...INITIAL_STATE, projectId });
+  }, [projectId, demo, isLocal]);
 
   const setLayer = useCallback((layer: PipelineLayer) => {
     setState((prev) => ({ ...prev, currentLayer: layer }));
@@ -320,13 +361,30 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     });
   }, []);
 
+  const patchChunk = useCallback(
+    (chunkId: string, patch: Partial<MigrationChunk>) => {
+      setState((prev) => ({
+        ...prev,
+        currentChunk:
+          prev.currentChunk?.id === chunkId
+            ? { ...prev.currentChunk, ...patch }
+            : prev.currentChunk,
+        chunks: prev.chunks.map((c) =>
+          c.id === chunkId ? { ...c, ...patch } : c,
+        ),
+      }));
+    },
+    [],
+  );
+
   return {
     state,
-    wsStatus: demo ? "connected" : wsStatus,
+    wsStatus: offline ? "connected" : wsStatus,
     markChunkApproved,
     markChunkRejected,
     updateRule,
     selectLayer: setLayer,
     advanceDemoChunk,
+    patchChunk,
   };
 }

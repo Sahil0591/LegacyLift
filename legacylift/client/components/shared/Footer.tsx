@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Cpu, Github } from "lucide-react";
+import { DEMO_PROJECT_ID } from "@/lib/demoData";
 
 export function Footer() {
   return (
@@ -26,7 +27,7 @@ export function Footer() {
             GitHub
           </a>
           <Link
-            href="/demo"
+            href={`/project/${DEMO_PROJECT_ID}`}
             className="transition-colors hover:text-ink"
           >
             Try the demo

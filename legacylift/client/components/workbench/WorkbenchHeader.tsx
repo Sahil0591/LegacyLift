@@ -3,7 +3,12 @@
 // an Overview/Review switch, and live migration progress.
 
 import Link from "next/link";
-import { Cpu, LayoutDashboard, GitPullRequestArrow } from "lucide-react";
+import {
+  Cpu,
+  LayoutDashboard,
+  GitPullRequestArrow,
+  Download,
+} from "lucide-react";
 
 export type WorkbenchView = "overview" | "review";
 
@@ -13,6 +18,8 @@ interface WorkbenchHeaderProps {
   onViewChange: (view: WorkbenchView) => void;
   approved: number;
   total: number;
+  onDownload?: () => void;
+  canDownload?: boolean;
 }
 
 const TABS: { id: WorkbenchView; label: string; Icon: typeof Cpu }[] = [
@@ -26,6 +33,8 @@ export function WorkbenchHeader({
   onViewChange,
   approved,
   total,
+  onDownload,
+  canDownload = false,
 }: WorkbenchHeaderProps) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-ink/10 bg-base/80 px-4 backdrop-blur-xl">
@@ -77,6 +86,22 @@ export function WorkbenchHeader({
           {approved}/{total}
         </span>
       </div>
+
+      {onDownload && (
+        <button
+          onClick={onDownload}
+          disabled={!canDownload}
+          title={
+            canDownload
+              ? "Download migrated code"
+              : "Generate at least one unit first"
+          }
+          className="inline-flex items-center gap-1.5 rounded-lg border border-ink/12 px-3 py-1.5 text-sm font-medium text-ink/80 transition-colors hover:bg-ink/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Download className="h-4 w-4" />
+          <span className="hidden sm:inline">Download</span>
+        </button>
+      )}
     </header>
   );
 }
