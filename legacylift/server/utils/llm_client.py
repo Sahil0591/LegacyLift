@@ -69,7 +69,7 @@ class LLMClient:
 
     def __init__(self) -> None:
         self.api_key: str = os.getenv("VENICE_API_KEY", "")
-        self.model: str = os.getenv("VENICE_MODEL", "qwen-2.5-coder-32b")
+        self.model: str = os.getenv("VENICE_MODEL", "openai-gpt-52-codex")
         self.base_url: str = os.getenv(
             "VENICE_BASE_URL", "https://api.venice.ai/api/v1"
         )

@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 VENICE_BASE_URL = os.getenv("VENICE_BASE_URL", "https://api.venice.ai/api/v1")
 VENICE_API_KEY  = os.getenv("VENICE_API_KEY", "")
-VENICE_MODEL    = os.getenv("VENICE_MODEL", "kimi-k2-5")
+VENICE_MODEL    = os.getenv("VENICE_MODEL", "openai-gpt-52-codex")
 DEMO_MODE       = os.getenv("DEMO_MODE", "false").lower() == "true"
 
 

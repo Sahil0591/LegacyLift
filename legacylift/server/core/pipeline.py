@@ -306,10 +306,55 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             chunk_id=chunk_id,
         )
 
+        # ── Layer 2: AI semantic review ─────────────────────────────────────
+        from core.layer2.ai_reviewer import review as _ai_review, AIReviewInput  # noqa: PLC0415
+        from utils.code_parser import CodeChunk as _CodeChunk  # noqa: PLC0415
+        from models.business_rule import BusinessRule as _BusinessRule  # noqa: PLC0415
+
+        _code_chunk = _CodeChunk(
+            id=chunk_id,
+            name=chunk_dict.get("name", chunk_id),
+            language=chunk_dict.get("language", "cobol"),
+            source=chunk_dict.get("source", ""),
+            start_line=chunk_dict.get("start_line", 0),
+            end_line=chunk_dict.get("end_line", 0),
+        )
+        _business_rule = _BusinessRule(
+            title=rule_dict.get("title", "Extracted Rule") if rule_dict else "Unknown Rule",
+            description=(
+                rule_dict.get("rule", "No business rule identified for this chunk")
+                if rule_dict
+                else "No business rule identified for this chunk"
+            ),
+            source_file=chunk_dict.get("filename", "unknown"),
+        )
+        _ai_review_input = AIReviewInput(
+            chunk=_code_chunk,
+            migrated_code=result.migrated_code,
+            business_rule=_business_rule,
+            static_analysis=static_result,
+            source_language=chunk_dict.get("language", "cobol"),
+        )
+
+        ai_result = await _ai_review(_ai_review_input)
+
+        await ws_manager.emit(
+            project.id,
+            "ai_review_complete",
+            chunk_id=chunk_id,
+            issues_found=ai_result.issues_found,
+            issues=[dataclasses.asdict(issue) for issue in ai_result.issues],
+            confidence=ai_result.reviewer_confidence,
+            retry_recommended=ai_result.retry_recommended,
+        )
+
         logger.info(
-            "Migration + static analysis complete for chunk %s (passed=%s)",
+            "Migration + static analysis + AI review complete for chunk %s "
+            "(static_passed=%s, ai_issues=%d, ai_confidence=%s)",
             chunk_id,
             static_result.passed,
+            ai_result.issues_found,
+            ai_result.reviewer_confidence,
         )
 
     except Exception as exc:
