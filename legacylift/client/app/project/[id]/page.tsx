@@ -91,6 +91,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [regenError, setRegenError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [regenCounts, setRegenCounts] = useState<Record<string, number>>({});
 
   const repo = demo ? DEMO_REPO.replace("github.com/", "") : projectId;
@@ -107,23 +108,39 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const reviewChunk = explicit ?? state.currentChunk;
 
   const handleApprove = async (id: string) => {
-    markChunkApproved(id);
+    setActionError(null);
     if (offline) {
+      markChunkApproved(id);
       advanceDemoChunk();
       setSelectedId(null);
       return;
     }
-    await approveChunk(projectId, { chunk_id: id });
+    try {
+      await approveChunk(projectId, { chunk_id: id });
+      markChunkApproved(id);
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Approve failed — please try again.",
+      );
+    }
   };
 
   const handleReject = async (id: string, reason: string) => {
-    markChunkRejected(id);
+    setActionError(null);
     if (offline) {
+      markChunkRejected(id);
       advanceDemoChunk();
       setSelectedId(null);
       return;
     }
-    await rejectChunk(projectId, { chunk_id: id, reason });
+    try {
+      await rejectChunk(projectId, { chunk_id: id, reason });
+      markChunkRejected(id);
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Reject failed — please try again.",
+      );
+    }
   };
 
   // Generate (and then review) this chunk's migration with Venice.
@@ -248,7 +265,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                   onReject={handleReject}
                   onRegenerate={(instr) => handleRegenerate(explicit, instr)}
                   regenerating={busyId === explicit.id}
-                  regenError={regenError}
+                  regenError={actionError ?? regenError}
                   regenRemaining={regenLeft(explicit.id)}
                   regenerateLabel={
                     offline ? "Regenerate with Venice" : "Start backend migration"
@@ -263,7 +280,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                   onReject={handleReject}
                   onRegenerate={(instr) => handleRegenerate(reviewChunk, instr)}
                   regenerating={busyId === reviewChunk.id}
-                  regenError={regenError}
+                  regenError={actionError ?? regenError}
                   regenRemaining={regenLeft(reviewChunk.id)}
                   regenerateLabel={
                     offline ? "Regenerate with Venice" : "Start backend migration"

@@ -69,7 +69,6 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 from rich.console import Console
-from api.auth import verify_ws_token
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -99,24 +98,14 @@ class WebSocketManager:
         """
         Accept a new WebSocket connection and register it.
 
-        Called by the /ws/{project_id} endpoint in main.py on each new
-        client connection.
+        Called by the /ws/{project_id} endpoint in main.py AFTER auth and
+        ownership have already been verified. This method assumes the caller
+        has confirmed the token is valid and the user owns the project.
 
         Args:
             project_id: The project this client is subscribing to.
             websocket:  The FastAPI WebSocket object.
-
         """
-        token = websocket.query_params.get("token")
-        if not token:
-            await websocket.close(code=4001, reason="Missing auth token")
-            return
-        try:
-            verify_ws_token(token)
-        except Exception:
-            await websocket.close(code=4001, reason="Invalid auth token")
-            return
-
         await websocket.accept()
         self._connections[project_id].append(websocket)
         n = len(self._connections[project_id])

@@ -32,7 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from api.auth import get_current_user_id
+from api.auth import get_current_user_id, verify_ws_token
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition
 from core.storage import storage
@@ -49,6 +49,22 @@ from utils.migration_prompts import (
 logger = logging.getLogger(__name__)
 
 active_pipelines: dict[str, asyncio.Task] = {}
+_project_locks: dict[str, asyncio.Lock] = {}
+
+# Upload limits
+_MAX_UPLOAD_FILES = int(os.getenv("MAX_UPLOAD_FILES", "25"))
+_MAX_FILE_BYTES   = int(os.getenv("MAX_FILE_SIZE_MB", "5")) * 1024 * 1024
+_MAX_TOTAL_BYTES  = _MAX_UPLOAD_FILES * _MAX_FILE_BYTES
+_ALLOWED_EXTENSIONS = {
+    ".cbl", ".cob", ".cobol", ".jcl", ".txt", ".sql",
+    ".py", ".java", ".js", ".ts", ".cpy", ".pco",
+}
+
+
+def _get_project_lock(project_id: str) -> asyncio.Lock:
+    if project_id not in _project_locks:
+        _project_locks[project_id] = asyncio.Lock()
+    return _project_locks[project_id]
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +104,7 @@ app = FastAPI(
 # CORS — specific origins for production safety
 _allow_origins = [
     "http://localhost:3000",          # Next.js dev
-    "https://legacylift.vercel.app",  # production
+    "https://legacy-lift-six.vercel.app",  # production
 ]
 if os.getenv("FRONTEND_URL"):
     _allow_origins.append(os.environ["FRONTEND_URL"])
@@ -98,7 +114,6 @@ if os.getenv("FRONTEND_HOST"):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allow_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -110,9 +125,9 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class CreateProjectRequest(BaseModel):
-    name: str = "Untitled"
+    name: str = Field("Untitled", min_length=1, max_length=120)
     source_language: SourceLanguage = SourceLanguage.COBOL
-    target_language: str = "Python"
+    target_language: str = Field("Python", min_length=1, max_length=64)
 
     @field_validator("source_language", mode="before")
     @classmethod
@@ -123,12 +138,12 @@ class CreateProjectRequest(BaseModel):
 
 
 class ApproveChunkRequest(BaseModel):
-    comment: Optional[str] = None
+    comment: Optional[str] = Field(None, max_length=2_000)
 
 
 class RejectChunkRequest(BaseModel):
-    comment: str
-    feedback: Optional[str] = None
+    comment: str = Field(..., min_length=1, max_length=2_000)
+    feedback: Optional[str] = Field(None, max_length=2_000)
 
 
 # ---------------------------------------------------------------------------
@@ -187,16 +202,59 @@ async def upload_files(
     """Upload one or more legacy source files. Stores content keyed by filename."""
     project = _get_project(project_id, user_id)
 
+    if len(files) > _MAX_UPLOAD_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many files — max {_MAX_UPLOAD_FILES} per upload.",
+        )
+
+    seen_names: set[str] = set()
+    total_bytes = 0
     filenames: list[str] = []
+
     for upload in files:
+        filename = (upload.filename or "unnamed.txt").strip()
+        ext = os.path.splitext(filename)[1].lower()
+        if ext and ext not in _ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=415,
+                detail=f"File type {ext!r} is not allowed.",
+            )
+        if filename in seen_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate filename: {filename!r}",
+            )
+        seen_names.add(filename)
+
         try:
-            content = (await upload.read()).decode("utf-8", errors="replace")
-            filename = upload.filename or "unnamed.txt"
+            raw = await upload.read(_MAX_FILE_BYTES + 1)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not read {filename!r}: {exc}")
+
+        if len(raw) == 0:
+            raise HTTPException(status_code=400, detail=f"{filename!r} is empty.")
+        if len(raw) > _MAX_FILE_BYTES:
+            limit_mb = _MAX_FILE_BYTES // (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=f"{filename!r} exceeds the {limit_mb} MB per-file limit.",
+            )
+
+        total_bytes += len(raw)
+        if total_bytes > _MAX_TOTAL_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Total upload size exceeds the allowed limit.",
+            )
+
+        try:
+            content = raw.decode("utf-8", errors="replace")
             f = UploadedFile(
                 filename=filename,
                 language=project.source_language,
                 content=content,
-                size_bytes=len(content.encode("utf-8")),
+                size_bytes=len(raw),
             )
             project.files.append(f)
             project.uploaded_files[filename] = content
@@ -204,7 +262,7 @@ async def upload_files(
         except Exception as exc:
             raise HTTPException(
                 status_code=400,
-                detail=f"Failed to process {upload.filename}: {exc}",
+                detail=f"Failed to process {filename!r}: {exc}",
             )
 
     if _status_str(project) == "created":
@@ -508,38 +566,38 @@ async def select_chunk(project_id: str, chunk_id: str, user_id: str = Depends(ge
       - Broadcasts { event: 'chunk_selected', chunk_id }
       - Returns 202 immediately
     """
-    project = _get_project(project_id, user_id)
+    async with _get_project_lock(project_id):
+        project = _get_project(project_id, user_id)
 
-    current = _status_str(project)
-    if current not in ("ready", "migrating"):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Project must be ready to select a chunk (current: {current})",
+        current = _status_str(project)
+        if current != "ready":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Project must be in 'ready' state to select a chunk (current: {current})",
+            )
+
+        chunk_dict = next(
+            (c for c in project.layer0_chunks if c["id"] == chunk_id), None
         )
+        if chunk_dict is None:
+            raise HTTPException(
+                status_code=404, detail=f"Chunk '{chunk_id}' not found in Layer 0 output"
+            )
+        if project.chunk_approvals.get(chunk_id) == "approved":
+            raise HTTPException(
+                status_code=409, detail=f"Chunk '{chunk_id}' is already approved"
+            )
 
-    chunk_dict = next(
-        (c for c in project.layer0_chunks if c["id"] == chunk_id), None
-    )
-    if chunk_dict is None:
-        raise HTTPException(
-            status_code=404, detail=f"Chunk '{chunk_id}' not found in Layer 0 output"
-        )
-    if project.chunk_approvals.get(chunk_id) == "approved":
-        raise HTTPException(
-            status_code=409, detail=f"Chunk '{chunk_id}' is already approved"
-        )
+        rule_status = project.chunk_rule_statuses.get(chunk_id, "Pending")
+        if rule_status != "Confirmed":
+            raise HTTPException(
+                status_code=400,
+                detail="Business rule must be confirmed before migration can begin",
+            )
 
-    rule_status = project.chunk_rule_statuses.get(chunk_id, "Pending")
-    if rule_status != "Confirmed":
-        raise HTTPException(
-            status_code=400,
-            detail="Business rule must be confirmed before migration can begin",
-        )
-
-    project.selected_chunk_id = chunk_id
-    await _transition(project, "migrating")
-
-    asyncio.create_task(run_migration_generation(project, chunk_id))
+        project.selected_chunk_id = chunk_id
+        await _transition(project, "migrating")
+        asyncio.create_task(run_migration_generation(project, chunk_id))
 
     await ws_manager.emit(project.id, "chunk_selected", chunk_id=chunk_id)
 
@@ -665,40 +723,40 @@ async def get_user_limits(user_id: str = Depends(get_current_user_id)):
 # ===========================================================================
 
 class _BusinessRuleIn(BaseModel):
-    title: str = ""
-    description: str = ""
-    hardcoded_values: list[str] = Field(default_factory=list)
+    title: str = Field("", max_length=200)
+    description: str = Field("", max_length=2_000)
+    hardcoded_values: list[str] = Field(default_factory=list, max_length=50)
 
 
 class _TargetProfileIn(BaseModel):
-    language: str = "Python"
-    version: str = ""
-    test_framework: str = ""
-    notes: str = ""
+    language: str = Field("Python", max_length=64)
+    version: str = Field("", max_length=32)
+    test_framework: str = Field("", max_length=64)
+    notes: str = Field("", max_length=1_000)
 
 
 class MigrateUnitRequest(BaseModel):
-    name: str
-    source_code: str
-    source_lang: str = "COBOL"
-    target_lang: str = "Python"
-    business_rules: list[_BusinessRuleIn] = Field(default_factory=list)
+    name: str = Field(..., min_length=1, max_length=200)
+    source_code: str = Field(..., min_length=1, max_length=80_000)
+    source_lang: str = Field("COBOL", max_length=32)
+    target_lang: str = Field("Python", max_length=32)
+    business_rules: list[_BusinessRuleIn] = Field(default_factory=list, max_length=20)
     target_profile: Optional[_TargetProfileIn] = None
-    instructions: Optional[str] = None
+    instructions: Optional[str] = Field(None, max_length=4_000)
 
 
 class ReviewUnitRequest(BaseModel):
-    name: str
-    source_code: str
-    migrated_code: str
-    source_lang: str = "COBOL"
-    target_lang: str = "Python"
+    name: str = Field(..., min_length=1, max_length=200)
+    source_code: str = Field(..., min_length=1, max_length=80_000)
+    migrated_code: str = Field(..., min_length=1, max_length=120_000)
+    source_lang: str = Field("COBOL", max_length=32)
+    target_lang: str = Field("Python", max_length=32)
 
 
 class TestsUnitRequest(BaseModel):
-    name: str
-    migrated_code: str
-    target_lang: str = "Python"
+    name: str = Field(..., min_length=1, max_length=200)
+    migrated_code: str = Field(..., min_length=1, max_length=120_000)
+    target_lang: str = Field("Python", max_length=32)
 
 
 # --- Lazy LLM client singleton (re-uses one AsyncOpenAI connection pool) -----
@@ -722,9 +780,13 @@ _RL_LIMIT = int(os.getenv("LLM_ROUTE_RATE_LIMIT", "20"))
 _RL_WINDOW = 60.0
 
 
-def _rate_limit(request: Request, bucket: str) -> None:
-    client_ip = request.client.host if request.client else "unknown"
-    key = f"{bucket}:{client_ip}"
+def _rate_limit(request: Request, bucket: str, user_id: Optional[str] = None) -> None:
+    # Key by authenticated user_id when available; fall back to IP for unauthenticated paths.
+    if user_id:
+        identity = user_id
+    else:
+        identity = request.client.host if request.client else "unknown"
+    key = f"{bucket}:{identity}"
     now = asyncio.get_event_loop().time()
     hits = [t for t in _rl_hits.get(key, []) if now - t < _RL_WINDOW]
     if len(hits) >= _RL_LIMIT:
@@ -736,6 +798,17 @@ def _rate_limit(request: Request, bucket: str) -> None:
         )
     hits.append(now)
     _rl_hits[key] = hits
+
+
+def _check_and_charge_quota(user_id: str) -> None:
+    """Raise HTTP 429 if the user has exhausted their daily migration budget."""
+    lim = storage.get_limits(user_id)
+    lim.reset_daily_if_needed()
+    if lim.migrations_remaining_today <= 0:
+        raise HTTPException(
+            status_code=429,
+            detail="Daily migration quota exhausted. Resets at midnight UTC.",
+        )
 
 
 def _require_configured(llm: LLMClient) -> None:
@@ -765,9 +838,14 @@ def _ensure_real_output(content: str) -> str:
 # ---------------------------------------------------------------------------
 
 @app.post("/llm/migrate")
-async def llm_migrate(body: MigrateUnitRequest, request: Request):
+async def llm_migrate(
+    body: MigrateUnitRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
     """Generate a migrated unit from legacy source. Returns {migrated_code, model}."""
-    _rate_limit(request, "migrate")
+    _rate_limit(request, "migrate", user_id)
+    _check_and_charge_quota(user_id)
     llm = _get_llm()
     _require_configured(llm)
 
@@ -782,6 +860,7 @@ async def llm_migrate(body: MigrateUnitRequest, request: Request):
     )
     content = await llm.complete(system=system, user=user, temperature=0.1, max_tokens=8000)
     content = _ensure_real_output(content)
+    storage.increment_migrations_today(user_id)
     return {"migrated_code": strip_code_fence(content), "model": llm.model}
 
 
@@ -790,9 +869,14 @@ async def llm_migrate(body: MigrateUnitRequest, request: Request):
 # ---------------------------------------------------------------------------
 
 @app.post("/llm/review")
-async def llm_review(body: ReviewUnitRequest, request: Request):
+async def llm_review(
+    body: ReviewUnitRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
     """AI semantic-equivalence review of a migrated unit. Returns an AIReviewResult."""
-    _rate_limit(request, "review")
+    _rate_limit(request, "review", user_id)
+    _check_and_charge_quota(user_id)
     llm = _get_llm()
     _require_configured(llm)
 
@@ -805,6 +889,7 @@ async def llm_review(body: ReviewUnitRequest, request: Request):
     )
     content = await llm.complete(system=system, user=user, temperature=0.1, max_tokens=5000)
     content = _ensure_real_output(content)
+    storage.increment_migrations_today(user_id)
 
     parsed = parse_json_loose(content)
     if not parsed:
@@ -843,9 +928,14 @@ async def llm_review(body: ReviewUnitRequest, request: Request):
 # ---------------------------------------------------------------------------
 
 @app.post("/llm/tests")
-async def llm_tests(body: TestsUnitRequest, request: Request):
+async def llm_tests(
+    body: TestsUnitRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
     """Generate pytest tests for a migrated unit. Returns {tests, code}."""
-    _rate_limit(request, "tests")
+    _rate_limit(request, "tests", user_id)
+    _check_and_charge_quota(user_id)
     llm = _get_llm()
     _require_configured(llm)
 
@@ -856,6 +946,7 @@ async def llm_tests(body: TestsUnitRequest, request: Request):
     )
     content = await llm.complete(system=system, user=user, temperature=0.2, max_tokens=6000)
     content = _ensure_real_output(content)
+    storage.increment_migrations_today(user_id)
 
     parsed = parse_json_loose(content) or {}
     tests = [
@@ -874,9 +965,26 @@ async def websocket_endpoint(websocket: WebSocket, project_id: str):
     """
     WebSocket stream for real-time pipeline events.
 
+    Requires a valid Clerk token in the ?token= query parameter.
+    The authenticated user must own the requested project_id.
     Past events are replayed on connect so clients can reconstruct state
     even if they connect after the pipeline has started.
     """
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4001, reason="Missing auth token")
+        return
+    try:
+        ws_user_id = verify_ws_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid auth token")
+        return
+
+    project = storage.get(project_id)
+    if not project or project.owner_id != ws_user_id:
+        await websocket.close(code=4003, reason="Access denied")
+        return
+
     await ws_manager.connect(project_id, websocket)
     try:
         while True:

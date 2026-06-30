@@ -528,24 +528,20 @@ async def generate_and_run_tests(inp: TestGenerationInput) -> TestGenerationResu
                 execution_time_seconds=0.0,
             )
 
-        # ── Phase 2: Execution ─────────────────────────────────────────────
+        # ── Phase 2: Execution (DISABLED — sandbox not available) ─────────
+        # AI-generated code must not run in the server process.
+        # Tests are returned as "manual verification required" so reviewers
+        # can inspect them; execution can be re-enabled once a locked-down
+        # sandbox (no network, read-only FS, non-root, ephemeral) is in place.
         exec_start = time.monotonic()
-        test_results: list[TestResult] = []
-
-        try:
-            test_results = await asyncio.to_thread(
-                _execute_tests, inp.migrated_code, tests_generated
+        test_results: list[TestResult] = [
+            TestResult(
+                test_name=t.name, passed=False,
+                expected=t.expected_output, actual=None,
+                error="Execution disabled — manual verification required",
             )
-        except Exception as exec_exc:
-            logger.error("Layer 3: execution phase error: %s", exec_exc, exc_info=True)
-            test_results = [
-                TestResult(
-                    test_name=t.name, passed=False,
-                    expected=t.expected_output, actual=None,
-                    error=f"Execution phase error: {exec_exc}",
-                )
-                for t in tests_generated
-            ]
+            for t in tests_generated
+        ]
 
         execution_time = time.monotonic() - exec_start
 
