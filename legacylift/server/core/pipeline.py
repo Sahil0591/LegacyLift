@@ -74,7 +74,7 @@ _VALID_TRANSITIONS: dict[str, list[str]] = {
     "uploading":  ["analysing"],
     "analysing":  ["ready", "failed"],
     "ready":      ["migrating"],
-    "migrating":  ["validating", "failed"],
+    "migrating":  ["ready", "validating", "failed"],
     "validating": ["complete", "failed"],
     "failed":     [],
 }
@@ -392,6 +392,14 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             summary=layer3_result.summary,
         )
 
+        await _transition(project, "ready")
+        await ws_manager.emit(
+            project.id,
+            "chunk_ready_for_approval",
+            chunk_id=chunk_id,
+            diff=result.migrated_code,
+        )
+
         logger.info(
             "Migration + static analysis + AI review + tests complete for chunk %s "
             "(static_passed=%s, ai_issues=%d, tests=%d/%d passed)",
@@ -415,6 +423,9 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             str(exc),
             recoverable=True,
         )
+        current = project.status if isinstance(project.status, str) else project.status.value
+        if current == "migrating":
+            await _transition(project, "ready")
 
 
 # ---------------------------------------------------------------------------

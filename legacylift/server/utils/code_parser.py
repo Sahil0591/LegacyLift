@@ -157,6 +157,51 @@ def parse_file(filename: str, source: str) -> ParsedFile:
                           raw_lines=[])
 
 
+class CodeParser:
+    """
+    Backward-compatible object API for older pipeline code and tests.
+
+    Newer Layer 0 code uses parse_file(filename, source) directly. This wrapper
+    keeps the original parser shape available without duplicating parsing logic.
+    """
+
+    def __init__(self, language: str = "cobol", filename: str | None = None) -> None:
+        self.language = language.lower()
+        self.filename = filename or self._default_filename(self.language)
+
+    def parse(self, source: str) -> list[CodeChunk]:
+        """Parse source and return structural chunks."""
+        return parse_file(self.filename, source).chunks
+
+    def extract_literals(self, source: str) -> list[str]:
+        """Extract simple quoted and numeric literals from source."""
+        quoted = re.findall(r"'([^']*)'|\"([^\"]*)\"", source)
+        literals = [single or double for single, double in quoted]
+        literals.extend(
+            m.group(0)
+            for m in re.finditer(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", source)
+        )
+        return literals
+
+    def split_into_chunks(self, source: str) -> list[tuple[str, str, int, int]]:
+        """Return legacy tuple chunks: (name, source, start_line, end_line)."""
+        parsed = parse_file(self.filename, source)
+        return [
+            (chunk.name, chunk.source, chunk.start_line, chunk.end_line)
+            for chunk in parsed.chunks
+        ]
+
+    @staticmethod
+    def _default_filename(language: str) -> str:
+        if language == "java":
+            return "input.java"
+        if language == "sql":
+            return "input.sql"
+        if language == "cobol":
+            return "input.cbl"
+        return "input.txt"
+
+
 # ---------------------------------------------------------------------------
 # COBOL parsing
 # ---------------------------------------------------------------------------

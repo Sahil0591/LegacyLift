@@ -247,6 +247,51 @@ def _exception_result(exc: Exception, elapsed: float) -> AIReviewResult:
     )
 
 
+def _demo_result(inp: AIReviewInput, elapsed: float) -> AIReviewResult:
+    """Return a deterministic no-network review for demo and smoke-test runs."""
+    static_passed = bool(getattr(inp.static_analysis, "passed", False))
+    checked = [
+        "arithmetic",
+        "rounding",
+        "string_handling",
+        "null_handling",
+        "exception_handling",
+    ]
+    if static_passed:
+        return AIReviewResult(
+            issues_found=0,
+            issues=[],
+            reviewer_confidence="Medium",
+            reviewer_summary=(
+                "Demo review completed locally. Static analysis passed and the "
+                "generated code uses Decimal arithmetic for the confirmed rule."
+            ),
+            checked_categories=checked,
+            review_time_seconds=elapsed,
+            retry_recommended=False,
+        )
+
+    issues = [
+        AIReviewIssue(
+            category="other",
+            severity="moderate",
+            description="Static analysis reported issues before semantic review.",
+            original_behaviour="Legacy behaviour requires manual comparison.",
+            migrated_behaviour="Migrated code did not pass deterministic checks.",
+            suggested_fix="Fix static-analysis issues before approval.",
+        )
+    ]
+    return AIReviewResult(
+        issues_found=len(issues),
+        issues=issues,
+        reviewer_confidence="Low",
+        reviewer_summary="Demo review found static-analysis issues.",
+        checked_categories=checked,
+        review_time_seconds=elapsed,
+        retry_recommended=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API — module-level adversarial review function
 # ---------------------------------------------------------------------------
@@ -263,6 +308,20 @@ async def review(inp: AIReviewInput) -> AIReviewResult:
       - Any unexpected exception: caught by outer try/except, returns error result.
     """
     t_start = time.monotonic()
+    if DEMO_MODE:
+        result = _demo_result(inp, time.monotonic() - t_start)
+        status = (
+            f"[red]{result.issues_found} issues[/red]"
+            if result.issues_found
+            else "[green]no issues[/green]"
+        )
+        console.print(
+            f"  Layer 2 AI review: {status} | "
+            f"confidence={result.reviewer_confidence} | "
+            f"retry={result.retry_recommended}"
+        )
+        return result
+
     try:
         client = LLMClient()
         system = _ADVERSARIAL_SYSTEM

@@ -20,6 +20,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -29,7 +30,7 @@ load_dotenv()
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition
@@ -101,6 +102,15 @@ app.add_middleware(
 
 class CreateProjectRequest(BaseModel):
     name: str = "Untitled"
+    source_language: SourceLanguage = SourceLanguage.COBOL
+    target_language: str = "Python"
+
+    @field_validator("source_language", mode="before")
+    @classmethod
+    def normalise_source_language(cls, value):
+        if isinstance(value, str) and value.lower() == "cobol":
+            return SourceLanguage.COBOL
+        return value
 
 
 class ApproveChunkRequest(BaseModel):
@@ -129,7 +139,11 @@ async def health_check():
 async def create_project(body: CreateProjectRequest):
     """Create a new migration project. Returns id, name, status, created_at."""
     try:
-        project = Project(name=body.name)
+        project = Project(
+            name=body.name,
+            source_language=body.source_language,
+            target_language=body.target_language,
+        )
         projects[project.id] = project
         return {
             "id": project.id,
@@ -160,7 +174,7 @@ async def upload_files(
             filename = upload.filename or "unnamed.txt"
             f = UploadedFile(
                 filename=filename,
-                language=SourceLanguage.COBOL,
+                language=project.source_language,
                 content=content,
                 size_bytes=len(content.encode("utf-8")),
             )
@@ -235,17 +249,49 @@ async def approve_chunk(
     # concatenate it across all approved chunks later.  current_migration holds
     # the result of the most recent run_migration_generation call, which is
     # always the chunk the user is currently reviewing.
-    if project.current_migration:
+    if (
+        project.current_migration
+        and project.current_migration.get("chunk_id") == chunk_id
+    ):
         migrated_code = project.current_migration.get("migrated_code", "")
         if migrated_code:
             project.chunk_migrations[chunk_id] = migrated_code
 
-    # If the pipeline is still running and waiting for this chunk, resolve it
-    pipeline = active_pipelines.get(project_id)
-    if pipeline is not None and not pipeline.done():
-        # The run_pipeline coroutine doesn't use MigrationPipeline.resolve_approval
-        # (it's the lightweight path); nothing extra to do here.
-        pass
+    await ws_manager.emit(project.id, "chunk_approved", chunk_id=chunk_id)
+
+    all_approved = bool(project.layer0_chunks) and all(
+        project.chunk_approvals.get(c["id"]) == "approved"
+        for c in project.layer0_chunks
+    )
+
+    if all_approved:
+        current = _status_str(project)
+        if current == "ready":
+            await _transition(project, "migrating")
+        if _status_str(project) == "migrating":
+            await _transition(project, "validating")
+        if _status_str(project) == "validating":
+            await _transition(project, "complete")
+        project.completed_at = datetime.utcnow()
+        approved_count = sum(
+            1 for decision in project.chunk_approvals.values()
+            if decision == "approved"
+        )
+        await ws_manager.emit(
+            project.id,
+            "migration_complete",
+            report={
+                "project_id": project.id,
+                "project_name": project.name,
+                "chunks_total": len(project.layer0_chunks),
+                "chunks_approved": approved_count,
+            },
+        )
+    else:
+        current = _status_str(project)
+        if current == "migrating":
+            await _transition(project, "ready")
+        await ws_manager.emit(project.id, "ready_for_next_chunk")
 
     return {
         "project_id": project_id,
