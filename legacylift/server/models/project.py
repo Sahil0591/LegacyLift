@@ -36,6 +36,7 @@ class ProjectStatus(str, Enum):
     CREATED    = "created"       # Project exists, no files uploaded yet
     UPLOADING  = "uploading"     # Files being received
     ANALYSING  = "analysing"     # Layer 0 running
+    READY      = "ready"         # Layer 0 complete, awaiting chunk selection
     MIGRATING  = "migrating"     # Layer 1-3 churning through chunks
     VALIDATING = "validating"    # Layer 4 schema check
     COMPLETE   = "complete"      # All chunks approved, report generated

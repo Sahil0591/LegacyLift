@@ -81,7 +81,6 @@ app = FastAPI(
 # CORS — specific origins for production safety
 _allow_origins = [
     "http://localhost:3000",          # Next.js dev
-    "https://*.vercel.app",           # Vercel preview deployments
     "https://legacylift.vercel.app",  # production
 ]
 if os.getenv("FRONTEND_URL"):
@@ -90,6 +89,7 @@ if os.getenv("FRONTEND_URL"):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allow_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -146,7 +146,7 @@ async def create_project(body: CreateProjectRequest):
         )
         projects[project.id] = project
         return {
-            "id": project.id,
+            "project_id": project.id,
             "name": project.name,
             "status": _status_str(project),
             "created_at": project.created_at.isoformat(),
@@ -244,6 +244,7 @@ async def approve_chunk(
     """
     project = _get_project(project_id)
     project.chunk_approvals[chunk_id] = "approved"
+    await ws_manager.emit(project.id, "chunk_approved", chunk_id=chunk_id)
 
     # Snapshot the migrated code at approval time so validate-schema can
     # concatenate it across all approved chunks later.  current_migration holds
@@ -257,26 +258,20 @@ async def approve_chunk(
         if migrated_code:
             project.chunk_migrations[chunk_id] = migrated_code
 
-    await ws_manager.emit(project.id, "chunk_approved", chunk_id=chunk_id)
-
     all_approved = bool(project.layer0_chunks) and all(
         project.chunk_approvals.get(c["id"]) == "approved"
         for c in project.layer0_chunks
     )
-
+    approved_count = sum(
+        1 for decision in project.chunk_approvals.values() if decision == "approved"
+    )
     if all_approved:
         current = _status_str(project)
-        if current == "ready":
-            await _transition(project, "migrating")
-        if _status_str(project) == "migrating":
+        if current in ("ready", "migrating"):
             await _transition(project, "validating")
         if _status_str(project) == "validating":
             await _transition(project, "complete")
         project.completed_at = datetime.utcnow()
-        approved_count = sum(
-            1 for decision in project.chunk_approvals.values()
-            if decision == "approved"
-        )
         await ws_manager.emit(
             project.id,
             "migration_complete",
@@ -314,6 +309,13 @@ async def reject_chunk(
     """Reject a migration chunk with required comment and optional feedback."""
     project = _get_project(project_id)
     project.chunk_approvals[chunk_id] = "rejected"
+    await _transition(project, "ready")
+    await ws_manager.emit(
+        project.id,
+        "chunk_rejected",
+        chunk_id=chunk_id,
+        feedback=body.feedback or body.comment,
+    )
 
     return {
         "project_id": project_id,
@@ -484,10 +486,10 @@ async def select_chunk(project_id: str, chunk_id: str):
     project = _get_project(project_id)
 
     current = _status_str(project)
-    if current != "ready":
+    if current not in ("ready", "migrating"):
         raise HTTPException(
             status_code=409,
-            detail=f"Project must be in 'ready' state to select a chunk (current: {current})",
+            detail=f"Project must be ready to select a chunk (current: {current})",
         )
 
     chunk_dict = next(
@@ -496,6 +498,10 @@ async def select_chunk(project_id: str, chunk_id: str):
     if chunk_dict is None:
         raise HTTPException(
             status_code=404, detail=f"Chunk '{chunk_id}' not found in Layer 0 output"
+        )
+    if project.chunk_approvals.get(chunk_id) == "approved":
+        raise HTTPException(
+            status_code=409, detail=f"Chunk '{chunk_id}' is already approved"
         )
 
     rule_status = project.chunk_rule_statuses.get(chunk_id, "Pending")

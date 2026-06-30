@@ -20,6 +20,7 @@ import type {
   PipelineLayer,
   PipelineState,
   RiskLevel,
+  RuleConfidence,
   TargetProfile,
 } from "@/types/legacylift";
 
@@ -72,6 +73,130 @@ function stateFromAnalysis(
     chunks,
     migrationComplete: false,
     error: null,
+  };
+}
+
+function confidenceFromNumber(value: unknown): RuleConfidence {
+  if (typeof value !== "number") return "Medium";
+  if (value >= 0.8) return "High";
+  if (value >= 0.5) return "Medium";
+  return "Low";
+}
+
+function isRiskLevel(value: unknown): value is RiskLevel {
+  return (
+    value === "Low" ||
+    value === "Medium" ||
+    value === "High" ||
+    value === "Critical"
+  );
+}
+
+function normalizeBusinessRule(raw: unknown): BusinessRule {
+  const r = raw as Record<string, unknown>;
+  const chunkId = typeof r.chunk_id === "string" ? r.chunk_id : undefined;
+  const title =
+    typeof r.title === "string"
+      ? r.title
+      : typeof r.rule === "string"
+        ? r.rule.split(/[.!?]/)[0] || "Business rule"
+        : "Business rule";
+  const description =
+    typeof r.description === "string"
+      ? r.description
+      : typeof r.rule === "string"
+        ? r.rule
+        : "Business rule requires review.";
+  const startLine = typeof r.start_line === "number" ? r.start_line : 1;
+  const endLine = typeof r.end_line === "number" ? r.end_line : startLine;
+
+  return {
+    id: typeof r.id === "string" ? r.id : `rule-${chunkId ?? title}`,
+    chunk_id: chunkId,
+    title,
+    description,
+    source_file:
+      typeof r.source_file === "string"
+        ? r.source_file
+        : typeof r.filename === "string"
+          ? r.filename
+          : "",
+    source_lines: [startLine, endLine],
+    confidence:
+      typeof r.confidence === "string"
+        ? (r.confidence as RuleConfidence)
+        : confidenceFromNumber(r.confidence),
+    hardcoded_values: Array.isArray(r.hardcoded_values)
+      ? r.hardcoded_values.filter((v): v is string => typeof v === "string")
+      : [],
+    warnings: Array.isArray(r.warnings)
+      ? r.warnings.filter((v): v is string => typeof v === "string")
+      : [],
+    status: "Pending",
+    ownership_category:
+      typeof r.ownership_category === "string"
+        ? (r.ownership_category as BusinessRule["ownership_category"])
+        : typeof r.owner === "string"
+          ? (r.owner as BusinessRule["ownership_category"])
+          : "Unknown",
+    ownership_evidence:
+      typeof r.ownership_evidence === "string"
+        ? r.ownership_evidence
+        : typeof r.owner_reasoning === "string"
+          ? r.owner_reasoning
+          : "Inferred by backend Layer 0.",
+    ownership_confidence: "Low",
+    ownership_detail: null,
+  };
+}
+
+function normalizeGraph(raw: unknown): DependencyGraph {
+  const g = raw as { nodes?: unknown[]; edges?: unknown[] };
+  return {
+    nodes: (g.nodes ?? []).map((node) => {
+      const n = node as Record<string, unknown>;
+      return {
+        id: String(n.id ?? n.label ?? "unknown"),
+        label: String(n.label ?? n.id ?? "unknown"),
+        file: String(n.file ?? n.filename ?? ""),
+        type:
+          n.type === "section" ||
+          n.type === "paragraph" ||
+          n.type === "copybook" ||
+          n.type === "external"
+            ? n.type
+            : "paragraph",
+      };
+    }),
+    edges: (g.edges ?? []).map((edge) => {
+      const e = edge as Record<string, unknown>;
+      return {
+        source: String(e.source ?? ""),
+        target: String(e.target ?? ""),
+        label:
+          typeof e.label === "string"
+            ? e.label
+            : typeof e.edge_type === "string"
+              ? e.edge_type
+              : undefined,
+      };
+    }),
+  };
+}
+
+function chunkFromGraphNode(node: Record<string, unknown>): MigrationChunk {
+  return {
+    id: String(node.id ?? node.label ?? "unknown"),
+    name: String(node.label ?? node.id ?? "unknown"),
+    source_code: "",
+    migrated_code: "",
+    diff: "",
+    risk_level: isRiskLevel(node.risk_level) ? node.risk_level : "Medium",
+    status: "Pending",
+    retry_count: 0,
+    test_results: [],
+    static_analysis: null,
+    ai_review: null,
   };
 }
 
@@ -132,19 +257,64 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     );
 
     unsubs.push(
+      subscribe("layer0_complete", () => {
+        // Lower-level backend summary; archaeology_complete is the UI signal.
+      }),
+    );
+
+    unsubs.push(
+      subscribe("analysis_complete", () => {
+        setLayer(0);
+      }),
+    );
+
+    unsubs.push(
+      subscribe("pipeline_failed", (e) => {
+        setState((prev) => ({ ...prev, error: e.error }));
+      }),
+    );
+
+    unsubs.push(
       subscribe("business_rule_found", (e) => {
+        const rule = normalizeBusinessRule(e.rule);
         setState((prev) => ({
           ...prev,
-          businessRules: [...prev.businessRules, e.rule],
+          businessRules: [...prev.businessRules, rule],
+          chunks:
+            rule.chunk_id && !prev.chunks.some((c) => c.id === rule.chunk_id)
+              ? [
+                  ...prev.chunks,
+                  {
+                    id: rule.chunk_id,
+                    name: rule.title,
+                    source_code: "",
+                    migrated_code: "",
+                    diff: "",
+                    risk_level: "Medium" as RiskLevel,
+                    status: "Pending",
+                    retry_count: 0,
+                    test_results: [],
+                    static_analysis: null,
+                    ai_review: null,
+                  },
+                ]
+              : prev.chunks,
         }));
       }),
     );
 
     unsubs.push(
       subscribe("dependency_graph_ready", (e) => {
+        const graph = normalizeGraph(e.graph);
+        const rawNodes =
+          ((e.graph as unknown as { nodes?: Record<string, unknown>[] }).nodes ??
+            []);
+        const graphChunks = rawNodes.map(chunkFromGraphNode);
         setState((prev) => ({
           ...prev,
-          dependencyGraph: e.graph as unknown as DependencyGraph,
+          dependencyGraph: graph,
+          chunks: prev.chunks.length > 0 ? prev.chunks : graphChunks,
+          currentChunk: prev.currentChunk ?? graphChunks[0] ?? null,
         }));
       }),
     );
@@ -167,34 +337,93 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
 
     unsubs.push(
       subscribe("chunk_started", (e) => {
-        const newChunk: MigrationChunk = {
-          id: e.chunk_id,
-          name: e.name,
-          source_code: "",
-          migrated_code: "",
-          diff: "",
-          risk_level: "Medium" as RiskLevel,
-          status: "Running",
-          retry_count: 0,
-          test_results: [],
-          static_analysis: null,
-          ai_review: null,
-        };
-        setState((prev) => ({
-          ...prev,
-          currentLayer: 1,
-          currentChunk: newChunk,
-          chunks: [...prev.chunks.filter((c) => c.id !== e.chunk_id), newChunk],
-        }));
+        setState((prev) => {
+          const existing = prev.chunks.find((c) => c.id === e.chunk_id);
+          const newChunk: MigrationChunk = {
+            ...(existing ?? {}),
+            id: e.chunk_id,
+            name: e.name,
+            source_code: existing?.source_code ?? "",
+            migrated_code: existing?.migrated_code ?? "",
+            diff: existing?.diff ?? "",
+            risk_level: existing?.risk_level ?? ("Medium" as RiskLevel),
+            status: "Running",
+            retry_count: existing?.retry_count ?? 0,
+            test_results: existing?.test_results ?? [],
+            static_analysis: existing?.static_analysis ?? null,
+            ai_review: existing?.ai_review ?? null,
+          };
+          return {
+            ...prev,
+            currentLayer: 1,
+            currentChunk: newChunk,
+            chunks: [...prev.chunks.filter((c) => c.id !== e.chunk_id), newChunk],
+          };
+        });
+      }),
+    );
+
+    unsubs.push(
+      subscribe("chunk_selected", (e) => {
+        setState((prev) => {
+          const selected = prev.chunks.find((c) => c.id === e.chunk_id);
+          return {
+            ...prev,
+            currentLayer: 1,
+            currentChunk: selected
+              ? { ...selected, status: "Running" }
+              : prev.currentChunk,
+            chunks: prev.chunks.map((c) =>
+              c.id === e.chunk_id ? { ...c, status: "Running" } : c,
+            ),
+          };
+        });
+      }),
+    );
+
+    unsubs.push(
+      subscribe("migration_generated", (e) => {
+        setState((prev) => {
+          const existing =
+            prev.chunks.find((c) => c.id === e.chunk_id) ?? prev.currentChunk;
+          const updated: MigrationChunk = {
+            ...(existing ?? {
+              id: e.chunk_id,
+              name: e.chunk_id,
+              source_code: "",
+              diff: "",
+              risk_level: "Medium" as RiskLevel,
+              retry_count: 0,
+              test_results: [],
+              static_analysis: null,
+              ai_review: null,
+            }),
+            id: e.chunk_id,
+            migrated_code: e.migrated_code,
+            status: "Review",
+          };
+          return {
+            ...prev,
+            currentLayer: 1,
+            currentChunk: updated,
+            chunks: prev.chunks.some((c) => c.id === updated.id)
+              ? prev.chunks.map((c) => (c.id === updated.id ? updated : c))
+              : [...prev.chunks, updated],
+          };
+        });
       }),
     );
 
     unsubs.push(
       subscribe("static_analysis_complete", (e) => {
         setState((prev) => {
-          if (!prev.currentChunk) return prev;
+          const target =
+            (e.chunk_id
+              ? prev.chunks.find((c) => c.id === e.chunk_id)
+              : prev.currentChunk) ?? prev.currentChunk;
+          if (!target) return prev;
           const updated: MigrationChunk = {
-            ...prev.currentChunk,
+            ...target,
             static_analysis: {
               passed: e.passed,
               issues: e.issues,
@@ -283,6 +512,30 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
             c.id === e.chunk_id ? { ...c, status: "Approved" } : c,
           ),
         }));
+      }),
+    );
+
+    unsubs.push(
+      subscribe("chunk_rejected", (e) => {
+        setState((prev) => ({
+          ...prev,
+          chunks: prev.chunks.map((c) =>
+            c.id === e.chunk_id ? { ...c, status: "Review" } : c,
+          ),
+        }));
+      }),
+    );
+
+    unsubs.push(
+      subscribe("ready_for_next_chunk", () => {
+        setState((prev) => {
+          const next = prev.chunks.find((c) => c.status === "Pending");
+          return {
+            ...prev,
+            currentLayer: next ? 0 : prev.currentLayer,
+            currentChunk: next ?? prev.currentChunk,
+          };
+        });
       }),
     );
 

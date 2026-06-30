@@ -8,7 +8,12 @@ import { useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, ArrowRight, Loader2 } from "lucide-react";
 import { usePipeline } from "@/hooks/usePipeline";
-import { approveChunk, rejectChunk } from "@/lib/api";
+import {
+  approveChunk,
+  confirmBusinessRule,
+  rejectChunk,
+  selectChunkForMigration,
+} from "@/lib/api";
 import {
   generateMigration,
   reviewMigration,
@@ -136,6 +141,13 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     setRegenError(null);
     setRegenCounts((m) => ({ ...m, [chunk.id]: (m[chunk.id] ?? 0) + 1 }));
     try {
+      if (!offline) {
+        await confirmBusinessRule(projectId, chunk.id);
+        await selectChunkForMigration(projectId, chunk.id);
+        patchChunk(chunk.id, { status: "Running" });
+        return;
+      }
+
       const businessRules = state.businessRules.map((r) => ({
         title: r.title,
         description: r.description,
@@ -238,6 +250,9 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                   regenerating={busyId === explicit.id}
                   regenError={regenError}
                   regenRemaining={regenLeft(explicit.id)}
+                  regenerateLabel={
+                    offline ? "Regenerate with Venice" : "Start backend migration"
+                  }
                 />
               ) : state.migrationComplete ? (
                 <CompleteState approved={approved} total={state.chunks.length} />
@@ -250,6 +265,9 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                   regenerating={busyId === reviewChunk.id}
                   regenError={regenError}
                   regenRemaining={regenLeft(reviewChunk.id)}
+                  regenerateLabel={
+                    offline ? "Regenerate with Venice" : "Start backend migration"
+                  }
                 />
               ) : (
                 <div className="flex h-full items-center justify-center gap-2 text-sm text-sub">

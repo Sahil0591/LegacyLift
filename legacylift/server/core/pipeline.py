@@ -73,7 +73,7 @@ _VALID_TRANSITIONS: dict[str, list[str]] = {
     "created":    ["uploading"],
     "uploading":  ["analysing"],
     "analysing":  ["ready", "failed"],
-    "ready":      ["migrating"],
+    "ready":      ["migrating", "validating"],
     "migrating":  ["ready", "validating", "failed"],
     "validating": ["complete", "failed"],
     "failed":     [],
@@ -154,7 +154,6 @@ async def run_pipeline(project: Project) -> None:
         await ws_manager.emit(project.id, "archaeology_complete")
 
         await _transition(project, "ready")
-        project.completed_at = datetime.utcnow()
         logger.info("Project %s: Layer 0 complete, status → ready", project.id)
         await ws_manager.emit(
             project.id,
@@ -397,7 +396,11 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             project.id,
             "chunk_ready_for_approval",
             chunk_id=chunk_id,
-            diff=result.migrated_code,
+            diff=(
+                f"--- {chunk_dict.get('name', chunk_id)}\n"
+                "+++ migrated.py\n"
+                f"{result.migrated_code}"
+            ),
         )
 
         logger.info(
@@ -417,6 +420,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             exc,
             exc_info=True,
         )
+        await _transition(project, "ready")
         await ws_manager.emit_error(
             project.id,
             "migration",
