@@ -1,6 +1,9 @@
 import type { ConnectionStatus, WSEvent, WSEventName } from "@/types/legacylift";
 
-const WS_BASE_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL ?? "ws://localhost:8000";
+const WS_BASE_URL =
+  process.env.NEXT_PUBLIC_API_HOST
+    ? `wss://${process.env.NEXT_PUBLIC_API_HOST}`
+    : process.env.NEXT_PUBLIC_WEBSOCKET_URL ?? "ws://localhost:8000";
 const MAX_RECONNECT_ATTEMPTS = 6;
 const BASE_RECONNECT_DELAY_MS = 500;
 

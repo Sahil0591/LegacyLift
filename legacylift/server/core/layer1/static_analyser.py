@@ -1,105 +1,455 @@
 """
-core/layer1/static_analyser.py — Rule-based static analysis of migrated code.
+core/layer1/static_analyser.py — Static structural analysis of migrated code.
 
-Layer 1 is the FIRST quality gate that migrated Python code passes through.
-It runs BEFORE the LLM review (Layer 2) to catch obvious errors cheaply,
-without spending AI tokens on code that won't even parse.
+Layer 1 is the first quality gate after a human selects a chunk and an LLM
+proposes a Python migration.  It is fast, deterministic, and makes NO LLM
+calls and NO external API calls.
 
-Checks performed (in order):
-  1. Syntax check: ast.parse() — does the Python parse at all?
-  2. Type annotation completeness: are all function params and return types annotated?
-  3. Complexity: cyclomatic complexity (McCabe) per function
-  4. LegacyLift-specific rules:
-     - Is `float` used for any variable that looks financial? → CRITICAL
-     - Are bare `except:` clauses present? → WARNING
-     - Is `print()` used instead of `logging`? → WARNING
-     - Are raw string comparisons used where numeric types are expected? → WARNING
+Checks (execution order):
+  5. Empty output detection    — BLOCKING  (short-circuits all other checks)
+  1. Branch count matching     — BLOCKING  if counts differ by > 1
+  2. Deprecated pattern        — WARNING only
+  3. Gotcha detection          — BLOCKING for CRITICAL items
+  4. Business rule coverage    — WARNING only
 
-Layer 1 is intentionally strict about CRITICAL issues (fail the chunk) and
-lenient about WARNINGs (note them, don't fail).
+Public API:
+  analyse(inp: StaticAnalysisInput) -> StaticAnalysisResult
+    Never raises.  Returns a failed result with ANALYSER_ERROR code if an
+    unexpected exception escapes the per-check try/except guards.
 
-If the chunk fails Layer 1, the pipeline regenerates it (up to LLM_MAX_RETRIES)
-before escalating to human review.
-
-Pipeline position: First step of per-chunk migration, called by pipeline.run_layer1().
+Legacy API (kept for pipeline.py backward compatibility):
+  StaticAnalyser class with async def analyse(self, chunk: MigrationChunk)
 """
 
 from __future__ import annotations
 
 import ast
+import logging
 import os
 import re
 import textwrap
-from typing import Any
+from dataclasses import dataclass, field
 
 from rich.console import Console
 
-from models.chunk import MigrationChunk, StaticAnalysisResult
+from models.business_rule import BusinessRule
+from models.chunk import MigrationChunk
+from models.chunk import StaticAnalysisResult as _LegacyStaticAnalysisResult
+from utils.code_parser import CodeChunk
 
+logger = logging.getLogger(__name__)
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 
 
+# ---------------------------------------------------------------------------
+# Data contracts  (dataclass-only; no Pydantic)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StaticIssue:
+    code: str
+    severity: str       # "error" | "warning"
+    message: str
+    line: int | None = None
+
+
+@dataclass
+class StaticAnalysisInput:
+    chunk: CodeChunk
+    migrated_code: str
+    business_rule: BusinessRule
+    deprecation_map: list = field(default_factory=list)
+    gotcha_registry: list = field(default_factory=list)
+
+
+@dataclass
+class StaticAnalysisResult:
+    passed: bool
+    issues: list[StaticIssue]
+    warnings: list[StaticIssue]
+    branch_count_original: int
+    branch_count_migrated: int
+    has_deprecated_patterns: bool
+    deprecated_patterns_found: list[str]
+    gotchas_triggered: list[str]
+    retry_recommended: bool
+    summary: str
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def analyse(inp: StaticAnalysisInput) -> StaticAnalysisResult:
+    """
+    Run all static checks on a proposed Python migration.
+
+    Never raises.  On unexpected crash returns a failed result with
+    ANALYSER_ERROR so the pipeline can retry without an unhandled exception.
+    """
+    try:
+        return _run_all_checks(inp)
+    except Exception as e:
+        logger.error("Static analysis crashed: %s", e, exc_info=True)
+        return StaticAnalysisResult(
+            passed=False,
+            issues=[StaticIssue(
+                code="ANALYSER_ERROR",
+                severity="error",
+                message=f"Static analyser crashed: {e}",
+                line=None,
+            )],
+            warnings=[],
+            branch_count_original=0,
+            branch_count_migrated=0,
+            has_deprecated_patterns=False,
+            deprecated_patterns_found=[],
+            gotchas_triggered=[],
+            retry_recommended=True,
+            summary=f"Analysis failed: {e}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Internal orchestrator
+# ---------------------------------------------------------------------------
+
+def _run_all_checks(inp: StaticAnalysisInput) -> StaticAnalysisResult:
+    errors: list[StaticIssue] = []
+    warnings_: list[StaticIssue] = []
+    deprecated_patterns_found: list[str] = []
+    gotchas_triggered: list[str] = []
+    retry_recommended = False
+    branch_count_original = 0
+    branch_count_migrated = 0
+
+    code = inp.migrated_code
+
+    # ------------------------------------------------------------------
+    # CHECK 5 — Empty output detection (must run first; returns early)
+    # ------------------------------------------------------------------
+    try:
+        stripped = code.strip()
+        if not stripped or len(stripped.splitlines()) < 5:
+            issue = StaticIssue(
+                code="EMPTY_MIGRATION",
+                severity="error",
+                message="Migrated code is empty or fewer than 5 lines",
+                line=None,
+            )
+            return StaticAnalysisResult(
+                passed=False,
+                issues=[issue],
+                warnings=[],
+                branch_count_original=0,
+                branch_count_migrated=0,
+                has_deprecated_patterns=False,
+                deprecated_patterns_found=[],
+                gotchas_triggered=[],
+                retry_recommended=True,
+                summary="1 error — retry recommended",
+            )
+    except Exception as e:
+        logger.warning("Check 5 (empty detection) error: %s", e)
+
+    # ------------------------------------------------------------------
+    # CHECK 1 — Branch count matching
+    # ------------------------------------------------------------------
+    try:
+        branch_count_original = _count_cobol_branches(inp.chunk.source)
+        branch_count_migrated = _count_python_branches(code)
+        diff = abs(branch_count_original - branch_count_migrated)
+        if diff > 1:
+            errors.append(StaticIssue(
+                code="BRANCH_MISMATCH",
+                severity="error",
+                message=(
+                    f"Branch count mismatch: COBOL={branch_count_original}, "
+                    f"Python={branch_count_migrated} (differ by {diff})"
+                ),
+                line=None,
+            ))
+            retry_recommended = True
+        elif diff == 1:
+            warnings_.append(StaticIssue(
+                code="BRANCH_COUNT_WARNING",
+                severity="warning",
+                message=(
+                    f"Branch count differs by 1: COBOL={branch_count_original}, "
+                    f"Python={branch_count_migrated}"
+                ),
+                line=None,
+            ))
+    except Exception as e:
+        logger.warning("Check 1 (branch count) error: %s", e)
+
+    # ------------------------------------------------------------------
+    # CHECK 2 — Deprecated pattern detection (warnings only)
+    # ------------------------------------------------------------------
+    try:
+        for pattern in inp.deprecation_map:
+            try:
+                if hasattr(pattern, "avoid"):
+                    avoid_term = pattern.avoid
+                    use_instead = getattr(pattern, "use_instead", "")
+                else:
+                    # Plain strings from current DeprecationMapper are narrative
+                    # descriptions, not detectable Python tokens — skip detection.
+                    continue
+
+                if avoid_term and avoid_term in code:
+                    deprecated_patterns_found.append(avoid_term)
+                    msg = (
+                        f"Use {use_instead} instead of {avoid_term}"
+                        if use_instead
+                        else f"Deprecated pattern found: {avoid_term}"
+                    )
+                    warnings_.append(StaticIssue(
+                        code="DEPRECATED_PATTERN",
+                        severity="warning",
+                        message=msg,
+                        line=None,
+                    ))
+            except Exception as e:
+                logger.warning("Deprecation check for one pattern failed: %s", e)
+    except Exception as e:
+        logger.warning("Check 2 (deprecated patterns) error: %s", e)
+
+    has_deprecated_patterns = bool(deprecated_patterns_found)
+
+    # ------------------------------------------------------------------
+    # CHECK 3 — Gotcha detection
+    # ------------------------------------------------------------------
+    try:
+        # 3a: Registry-provided gotchas (structured objects only; strings are
+        #     narrative descriptions without a detectable Python pattern).
+        for gotcha in inp.gotcha_registry:
+            try:
+                if not hasattr(gotcha, "pattern"):
+                    continue
+                pattern_str = gotcha.pattern
+                risk_level = getattr(gotcha, "risk_level", "WARNING").upper()
+                description = getattr(gotcha, "description", str(gotcha))
+
+                if pattern_str and re.search(pattern_str, code):
+                    gotchas_triggered.append(description)
+                    if risk_level == "CRITICAL":
+                        errors.append(StaticIssue(
+                            code="CRITICAL_GOTCHA",
+                            severity="error",
+                            message=description,
+                            line=None,
+                        ))
+                        retry_recommended = True
+                    else:
+                        warnings_.append(StaticIssue(
+                            code="GOTCHA_WARNING",
+                            severity="warning",
+                            message=description,
+                            line=None,
+                        ))
+            except Exception as e:
+                logger.warning("Gotcha check for one item failed: %s", e)
+
+        # 3b: Hardcoded safety-net checks (always run)
+        if _check_hardcoded_gotchas(code, errors, warnings_, gotchas_triggered):
+            retry_recommended = True
+
+    except Exception as e:
+        logger.warning("Check 3 (gotcha detection) error: %s", e)
+
+    # ------------------------------------------------------------------
+    # CHECK 4 — Business rule keyword coverage
+    # ------------------------------------------------------------------
+    try:
+        _check_rule_coverage(inp.business_rule, code, warnings_)
+    except Exception as e:
+        logger.warning("Check 4 (rule coverage) error: %s", e)
+
+    # ------------------------------------------------------------------
+    # Assemble result
+    # ------------------------------------------------------------------
+    passed = not errors
+    summary = _build_summary(len(errors), len(warnings_), retry_recommended)
+
+    return StaticAnalysisResult(
+        passed=passed,
+        issues=errors,
+        warnings=warnings_,
+        branch_count_original=branch_count_original,
+        branch_count_migrated=branch_count_migrated,
+        has_deprecated_patterns=has_deprecated_patterns,
+        deprecated_patterns_found=deprecated_patterns_found,
+        gotchas_triggered=gotchas_triggered,
+        retry_recommended=retry_recommended,
+        summary=summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Branch-counting helpers
+# ---------------------------------------------------------------------------
+
+def _count_cobol_branches(source: str) -> int:
+    """Count conditional/iteration branch points in COBOL source."""
+    patterns = [
+        r'\bIF\b',
+        r'\bEVALUATE\b',
+        r'\bPERFORM\s+UNTIL\b',
+        r'\bPERFORM\s+VARYING\b',
+    ]
+    total = 0
+    for pat in patterns:
+        total += len(re.findall(pat, source, re.IGNORECASE))
+    return total
+
+
+def _count_python_branches(code: str) -> int:
+    """Count conditional/iteration branch points in Python source."""
+    branch_re = re.compile(
+        r'^\s*(?:if|elif|else\s*:|for|while|case)\b',
+        re.MULTILINE,
+    )
+    return len(branch_re.findall(code))
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded safety-net gotchas (Check 3b)
+# ---------------------------------------------------------------------------
+
+def _check_hardcoded_gotchas(
+    code: str,
+    errors: list[StaticIssue],
+    warnings: list[StaticIssue],
+    gotchas_triggered: list[str],
+) -> bool:
+    """
+    Four always-on gotcha checks that cover the highest-risk COBOL→Python
+    migration mistakes.  Returns True if any CRITICAL issue was found.
+    """
+    retry = False
+
+    # 1. float used for monetary values — CRITICAL
+    if re.search(
+        r'\bfloat\b.*(?:amount|balance|price|rate|fee|cost)',
+        code,
+        re.IGNORECASE,
+    ):
+        msg = "Never use float for monetary values. Use Decimal."
+        gotchas_triggered.append(msg)
+        errors.append(StaticIssue(code="CRITICAL_GOTCHA", severity="error", message=msg, line=None))
+        retry = True
+
+    # 2. Integer division with / where // may be needed — WARNING
+    if re.search(r'\d+\s*/\s*\d+', code) and '//' not in code:
+        msg = "Check integer division — COBOL truncates, Python / does not"
+        gotchas_triggered.append(msg)
+        warnings.append(StaticIssue(code="GOTCHA_WARNING", severity="warning", message=msg, line=None))
+
+    # 3. datetime.utcnow() deprecated — WARNING
+    if "datetime.utcnow()" in code:
+        msg = "Use datetime.now(timezone.utc) instead of datetime.utcnow()"
+        gotchas_triggered.append(msg)
+        warnings.append(StaticIssue(code="GOTCHA_WARNING", severity="warning", message=msg, line=None))
+
+    # 4. Bare except clause — WARNING
+    if re.search(r'except\s*:', code):
+        msg = "Bare except catches everything including KeyboardInterrupt"
+        gotchas_triggered.append(msg)
+        warnings.append(StaticIssue(code="GOTCHA_WARNING", severity="warning", message=msg, line=None))
+
+    return retry
+
+
+# ---------------------------------------------------------------------------
+# Business rule coverage helper (Check 4)
+# ---------------------------------------------------------------------------
+
+_STOP_WORDS: frozenset[str] = frozenset({
+    "the", "and", "that", "with", "from", "this", "have", "will",
+    "been", "are", "was", "were", "for", "not", "but", "they",
+    "which", "when", "what", "their", "into", "there", "than",
+    "then", "some", "more", "also", "each", "all", "its", "has",
+    "any", "may", "must", "should", "shall", "where", "while",
+    "would", "could", "does",
+})
+
+
+def _check_rule_coverage(
+    rule: BusinessRule,
+    code: str,
+    warnings: list[StaticIssue],
+) -> None:
+    """Warn if fewer than 50% of meaningful keywords from the rule description appear in code."""
+    description = getattr(rule, "description", "") or ""
+    words = re.findall(r'\b[a-zA-Z]+\b', description)
+    meaningful = [w.lower() for w in words if len(w) > 4 and w.lower() not in _STOP_WORDS]
+    if not meaningful:
+        return
+    code_lower = code.lower()
+    present = sum(1 for w in meaningful if w in code_lower)
+    if present / len(meaningful) < 0.5:
+        warnings.append(StaticIssue(
+            code="RULE_COVERAGE_LOW",
+            severity="warning",
+            message="Migrated code may not implement the full business rule",
+            line=None,
+        ))
+
+
+# ---------------------------------------------------------------------------
+# Summary formatter
+# ---------------------------------------------------------------------------
+
+def _build_summary(error_count: int, warning_count: int, retry_recommended: bool) -> str:
+    if error_count == 0 and warning_count == 0:
+        return "All checks passed"
+    parts: list[str] = []
+    if error_count:
+        parts.append(f"{error_count} error{'s' if error_count != 1 else ''}")
+    if warning_count:
+        parts.append(f"{warning_count} warning{'s' if warning_count != 1 else ''}")
+    suffix = " — retry recommended" if retry_recommended else ""
+    return ", ".join(parts) + suffix
+
+
+# ---------------------------------------------------------------------------
+# Legacy StaticAnalyser class  (kept for pipeline.py backward compatibility)
+# ---------------------------------------------------------------------------
+
 class StaticAnalyser:
     """
-    Runs static checks on the migrated Python code for a single chunk.
+    Async class-based interface used by the existing pipeline.py.
+    Calls:  await self._static_analyser.analyse(chunk: MigrationChunk)
+    Returns the Pydantic StaticAnalysisResult from models.chunk.
     """
 
-    async def analyse(self, chunk: MigrationChunk) -> StaticAnalysisResult:
-        """
-        Run all static checks on the chunk's migrated_code.
-
-        Args:
-            chunk: MigrationChunk with migrated_code populated.
-
-        Returns:
-            StaticAnalysisResult with passed=True if no CRITICAL issues found.
-
-        TODO (implementer):
-          - Add radon for cyclomatic complexity:
-              from radon.complexity import cc_visit
-              results = cc_visit(chunk.migrated_code)
-          - Add mypy for type checking:
-              Run mypy programmatically via mypy.api.run()
-              Parse the output into StaticAnalysisResult.issues.
-          - Add flake8 or ruff for style:
-              Run via subprocess.run(['ruff', 'check', '--stdin-filename', 'migrated.py'])
-        """
+    async def analyse(self, chunk: MigrationChunk) -> _LegacyStaticAnalysisResult:
         if DEMO_MODE:
-            console.print(
-                f"[dim]StaticAnalyser.analyse() → checking chunk [{chunk.name}][/dim]"
-            )
+            console.print(f"[dim]StaticAnalyser.analyse() → checking chunk [{chunk.name}][/dim]")
 
         code = chunk.migrated_code or "pass"
         issues: list[str] = []
         critical_found = False
 
-        # --- Check 1: Syntax ---
-        syntax_issues = self._check_syntax(code)
-        for issue in syntax_issues:
+        for issue in self._check_syntax(code):
             issues.append(f"CRITICAL: {issue}")
             critical_found = True
 
-        # --- Check 2: Type annotations ---
-        annotation_issues = self._check_annotations(code)
-        for issue in annotation_issues:
+        for issue in self._check_annotations(code):
             issues.append(f"WARNING: {issue}")
 
-        # --- Check 3: Financial float usage ---
-        float_issues = self._check_float_usage(code)
-        for issue in float_issues:
+        for issue in self._check_float_usage(code):
             issues.append(f"CRITICAL: {issue}")
             critical_found = True
 
-        # --- Check 4: Anti-patterns ---
-        pattern_issues = self._check_antipatterns(code)
-        for issue in pattern_issues:
+        for issue in self._check_antipatterns(code):
             issues.append(f"WARNING: {issue}")
 
-        # --- Check 5: Complexity ---
         complexity, line_count = self._estimate_complexity(code)
 
-        result = StaticAnalysisResult(
+        result = _LegacyStaticAnalysisResult(
             passed=not critical_found,
             issues=issues,
             complexity_score=complexity,
@@ -115,20 +465,7 @@ class StaticAnalyser:
 
         return result
 
-    # -----------------------------------------------------------------------
-    # Individual checks
-    # -----------------------------------------------------------------------
-
     def _check_syntax(self, code: str) -> list[str]:
-        """
-        Use ast.parse() to check for Python syntax errors.
-
-        Returns:
-            List of error strings (empty = no syntax errors).
-
-        TODO (implementer): also run compile() to catch some errors ast.parse()
-        misses (though this is rare in Python 3.12).
-        """
         try:
             ast.parse(textwrap.dedent(code))
             return []
@@ -138,15 +475,6 @@ class StaticAnalyser:
             return [f"ParseError: {e}"]
 
     def _check_annotations(self, code: str) -> list[str]:
-        """
-        Check that all function definitions have type annotations.
-
-        Returns:
-            List of warning strings for unannotated parameters.
-
-        TODO (implementer): use ast.walk() to visit FunctionDef nodes and
-        check args.annotations and returns annotation completeness.
-        """
         issues: list[str] = []
         try:
             tree = ast.parse(textwrap.dedent(code))
@@ -157,40 +485,22 @@ class StaticAnalyser:
                         if arg.annotation is None and arg.arg != "self"
                     ]
                     if unannotated:
-                        issues.append(
-                            f"Function '{node.name}' has unannotated params: {unannotated}"
-                        )
+                        issues.append(f"Function '{node.name}' has unannotated params: {unannotated}")
                     if node.returns is None:
                         issues.append(f"Function '{node.name}' is missing return type annotation")
         except SyntaxError:
-            pass  # Syntax errors caught separately
+            pass
         return issues
 
     def _check_float_usage(self, code: str) -> list[str]:
-        """
-        Detect float usage near financial variable names.
-
-        COBOL COMP-3 must be migrated to decimal.Decimal, not float.
-        This check catches the most common mistake in COBOL migrations.
-
-        Returns:
-            List of CRITICAL issue strings.
-
-        TODO (implementer): use AST to find:
-          - float() calls
-          - variable annotations with float type
-          - function signatures with float params named like bal/amt/rate
-        """
         issues: list[str] = []
-        financial_patterns = re.compile(
+        financial_re = re.compile(
             r"(balance|amount|rate|interest|fee|total|price|cost|penalty|charge)",
             re.IGNORECASE,
         )
-        float_pattern = re.compile(r"\bfloat\b")
-
-        lines = code.splitlines()
-        for i, line in enumerate(lines, 1):
-            if float_pattern.search(line) and financial_patterns.search(line):
+        float_re = re.compile(r"\bfloat\b")
+        for i, line in enumerate(code.splitlines(), 1):
+            if float_re.search(line) and financial_re.search(line):
                 issues.append(
                     f"float used for financial variable at line {i}: '{line.strip()}' — "
                     "use decimal.Decimal instead"
@@ -198,15 +508,6 @@ class StaticAnalyser:
         return issues
 
     def _check_antipatterns(self, code: str) -> list[str]:
-        """
-        Check for common Python anti-patterns in migrated code.
-
-        Returns:
-            List of WARNING strings.
-
-        TODO (implementer): extend this list based on patterns seen in real
-        COBOL migrations at your organisation.
-        """
         issues: list[str] = []
         checks = [
             (re.compile(r"^\s*except\s*:", re.MULTILINE), "Bare except: clause — catch specific exceptions"),
@@ -220,28 +521,9 @@ class StaticAnalyser:
         return issues
 
     def _estimate_complexity(self, code: str) -> tuple[float, int]:
-        """
-        Estimate cyclomatic complexity and line count.
-
-        Returns:
-            (complexity_score, non_blank_line_count)
-
-        Complexity approximation: count decision points (if/for/while/except/and/or).
-        True cyclomatic complexity requires radon — install it and replace this.
-
-        TODO (implementer):
-            from radon.complexity import cc_visit
-            blocks = cc_visit(code)
-            complexity = max((b.complexity for b in blocks), default=1)
-        """
-        lines = [l for l in code.splitlines() if l.strip() and not l.strip().startswith("#")]
-        line_count = len(lines)
-
-        # Count decision points as a proxy for cyclomatic complexity
-        decision_keywords = re.compile(
-            r"\b(if|elif|for|while|except|and|or|case)\b"
+        lines = [ln for ln in code.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+        decisions = sum(
+            len(re.findall(r"\b(if|elif|for|while|except|and|or|case)\b", ln))
+            for ln in lines
         )
-        decisions = sum(len(decision_keywords.findall(line)) for line in lines)
-        complexity = 1.0 + decisions  # McCabe baseline is 1
-
-        return complexity, line_count
+        return 1.0 + decisions, len(lines)

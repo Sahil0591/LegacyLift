@@ -30,7 +30,7 @@ load_dotenv(find_dotenv(usecwd=True))
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from api.auth import get_current_user_id
 from api.websocket_manager import manager as ws_manager
@@ -84,6 +84,8 @@ _allow_origins = [
 ]
 if os.getenv("FRONTEND_URL"):
     _allow_origins.append(os.environ["FRONTEND_URL"])
+if os.getenv("FRONTEND_HOST"):
+    _allow_origins.append(f"https://{os.environ['FRONTEND_HOST']}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -103,6 +105,13 @@ class CreateProjectRequest(BaseModel):
     name: str = "Untitled"
     source_language: SourceLanguage = SourceLanguage.COBOL
     target_language: str = "Python"
+
+    @field_validator("source_language", mode="before")
+    @classmethod
+    def normalise_source_language(cls, value):
+        if isinstance(value, str) and value.lower() == "cobol":
+            return SourceLanguage.COBOL
+        return value
 
 
 class ApproveChunkRequest(BaseModel):
@@ -251,6 +260,18 @@ async def approve_chunk(
     project.chunk_approvals[chunk_id] = "approved"
     await ws_manager.emit(project.id, "chunk_approved", chunk_id=chunk_id)
 
+    # Snapshot the migrated code at approval time so validate-schema can
+    # concatenate it across all approved chunks later.  current_migration holds
+    # the result of the most recent run_migration_generation call, which is
+    # always the chunk the user is currently reviewing.
+    if (
+        project.current_migration
+        and project.current_migration.get("chunk_id") == chunk_id
+    ):
+        migrated_code = project.current_migration.get("migrated_code", "")
+        if migrated_code:
+            project.chunk_migrations[chunk_id] = migrated_code
+
     all_approved = bool(project.layer0_chunks) and all(
         project.chunk_approvals.get(c["id"]) == "approved"
         for c in project.layer0_chunks
@@ -259,8 +280,11 @@ async def approve_chunk(
         1 for decision in project.chunk_approvals.values() if decision == "approved"
     )
     if all_approved:
-        await _transition(project, "validating")
-        await _transition(project, "complete")
+        current = _status_str(project)
+        if current in ("ready", "migrating"):
+            await _transition(project, "validating")
+        if _status_str(project) == "validating":
+            await _transition(project, "complete")
         project.completed_at = datetime.now(timezone.utc)
         await ws_manager.emit(
             project.id,
@@ -273,7 +297,9 @@ async def approve_chunk(
             },
         )
     else:
-        await _transition(project, "ready")
+        current = _status_str(project)
+        if current == "migrating":
+            await _transition(project, "ready")
         await ws_manager.emit(project.id, "ready_for_next_chunk")
 
     asyncio.ensure_future(storage.persist())
@@ -314,6 +340,115 @@ async def reject_chunk(
         "decision": "rejected",
         "feedback": body.feedback or body.comment,
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /project/{id}/validate-schema
+# ---------------------------------------------------------------------------
+
+@app.post("/project/{project_id}/validate-schema", status_code=200)
+async def validate_schema(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """
+    Run Layer 4 schema coverage validation against all approved chunks.
+
+    Must be called after at least one chunk has been approved.  Concatenates
+    the migrated_code for every approved chunk and passes it to SchemaValidator,
+    which checks that every table in the legacy SQL schema is referenced.
+
+    Broadcasts:
+      schema_validation_started  — before the check begins
+      schema_validation_complete — with full coverage results
+      error                      — if SchemaValidator itself raises unexpectedly
+    """
+    project = _get_project(project_id, user_id)
+
+    approved_chunk_ids = [
+        cid for cid, decision in project.chunk_approvals.items()
+        if decision == "approved"
+    ]
+
+    if not approved_chunk_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one chunk must be approved before validating schema coverage",
+        )
+
+    # Gather migrated code for each approved chunk.
+    # chunk_migrations is populated by approve_chunk at the moment of approval.
+    code_parts = [
+        project.chunk_migrations[cid]
+        for cid in approved_chunk_ids
+        if cid in project.chunk_migrations and project.chunk_migrations[cid]
+    ]
+    chunks_with_code = len(code_parts)
+
+    await ws_manager.emit(
+        project_id,
+        "schema_validation_started",
+        chunks_checked=chunks_with_code,
+    )
+
+    try:
+        from core.layer4.schema_validator import SchemaValidator  # noqa: PLC0415
+        from models.chunk import MigrationChunk                   # noqa: PLC0415
+
+        pseudo_chunks = [
+            MigrationChunk(name=cid, migrated_code=project.chunk_migrations[cid])
+            for cid in approved_chunk_ids
+            if cid in project.chunk_migrations and project.chunk_migrations[cid]
+        ]
+
+        validator = SchemaValidator()
+        result = await validator.validate(project, pseudo_chunks)
+
+        # Derive per-table coverage from the issues list so the frontend
+        # can show covered vs missing without parsing strings itself.
+        tables_missing = [
+            issue.split("'")[1]
+            for issue in result.issues
+            if issue.startswith("MISSING TABLE") and "'" in issue
+        ]
+        column_warnings = [
+            issue for issue in result.issues if issue.startswith("WARNING")
+        ]
+        covered_count = result.tables_checked - len(tables_missing)
+        coverage_pct = (
+            round(covered_count / result.tables_checked * 100, 1)
+            if result.tables_checked > 0
+            else 100.0
+        )
+        summary = (
+            f"{covered_count} of {result.tables_checked} tables covered "
+            f"({coverage_pct}%)"
+            + (f"; {len(tables_missing)} missing table(s)" if tables_missing else "")
+            + (f"; {len(column_warnings)} column warning(s)" if column_warnings else "")
+        )
+
+        payload = {
+            "passed":             result.passed,
+            "tables_checked":     result.tables_checked,
+            "tables_missing":     tables_missing,
+            "column_warnings":    column_warnings,
+            "coverage_percentage": coverage_pct,
+            "issues":             result.issues,
+            "summary":            summary,
+        }
+
+        await ws_manager.emit(project_id, "schema_validation_complete", **payload)
+
+        return payload
+
+    except Exception as exc:
+        logger.error(
+            "Schema validation failed for project %s: %s", project_id, exc, exc_info=True
+        )
+        await ws_manager.emit_error(
+            project_id, "schema_validation", str(exc), recoverable=True
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Schema validation failed: {exc}",
+        )
 
 
 # ---------------------------------------------------------------------------
