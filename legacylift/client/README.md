@@ -22,7 +22,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 | Variable | Description | Default |
 |---|---|---|
-| `NEXT_PUBLIC_API_URL` | Backend REST API base URL | `http://localhost:8080` |
+| `NEXT_PUBLIC_API_URL` | Backend REST API base URL | `http://localhost:8000` |
 | `NEXT_PUBLIC_WEBSOCKET_URL` | Backend WebSocket URL | `ws://localhost:8765` |
 | `NEXT_PUBLIC_DEMO_MODE` | Load sample COBOL fixtures | `true` |
 
@@ -126,7 +126,7 @@ To see the live pipeline, run the backend:
 ```bat
 cd legacylift
 pip install -r requirements.txt
-uvicorn api.main:app --port 8080
+uvicorn api.main:app --port 8000
 ```
 
 Then re-run the demo flow.

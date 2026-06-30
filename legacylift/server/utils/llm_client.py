@@ -15,8 +15,8 @@ Usage (in any layer file):
         user="Extract business rules from: ...",
     )
 
-The client reads OPENAI_API_KEY, OPENAI_MODEL, and DEMO_MODE from the
-environment (loaded by python-dotenv in main.py at startup).
+The client reads VENICE_API_KEY, VENICE_MODEL, VENICE_BASE_URL, and DEMO_MODE
+from the environment (loaded by python-dotenv in main.py at startup).
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ console = Console()
 # ---------------------------------------------------------------------------
 DEMO_RESPONSE = (
     "[DEMO] This is a placeholder LLM response. "
-    "Set OPENAI_API_KEY in .env to get real AI output."
+    "Set VENICE_API_KEY in .env to get real AI output."
 )
 
 
@@ -68,15 +68,18 @@ class LLMClient:
     """
 
     def __init__(self) -> None:
-        self.api_key: str = os.getenv("OPENAI_API_KEY", "")
-        self.model: str = os.getenv("OPENAI_MODEL", "gpt-4o")
+        self.api_key: str = os.getenv("VENICE_API_KEY", "")
+        self.model: str = os.getenv("VENICE_MODEL", "qwen-2.5-coder-32b")
+        self.base_url: str = os.getenv(
+            "VENICE_BASE_URL", "https://api.venice.ai/api/v1"
+        )
         self.demo_mode: bool = os.getenv("DEMO_MODE", "true").lower() == "true"
         self.max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
         self.retry_delay: float = float(os.getenv("LLM_RETRY_DELAY", "2"))
 
         # Instantiate client only if key is available
-        if OPENAI_AVAILABLE and self.api_key and self.api_key != "sk-your-openai-api-key-here":
-            self._client = AsyncOpenAI(api_key=self.api_key)
+        if OPENAI_AVAILABLE and self.api_key and self.api_key != "your-venice-api-key":
+            self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
         else:
             self._client = None
             if self.demo_mode:
@@ -113,7 +116,7 @@ class LLMClient:
         TODO (implementer):
             The skeleton returns a dummy string in DEMO_MODE.
             For real behaviour the call is already wired — just ensure
-            OPENAI_API_KEY is set in .env.
+            VENICE_API_KEY is set in .env.
         """
         resolved_model = model or self.model
         self._log_prompt(system, user, resolved_model)

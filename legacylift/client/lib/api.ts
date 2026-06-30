@@ -7,7 +7,7 @@ import type {
   RuleStatus,
 } from "@/types/legacylift";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 interface ApiErrorBody {
   detail?: string;
@@ -56,7 +56,7 @@ function toSourceLanguage(language: ProjectLanguage): string {
 export async function createProject(
   body: CreateProjectRequest,
 ): Promise<CreateProjectResponse> {
-  return request<CreateProjectResponse>("/api/project", {
+  const response = await request<CreateProjectResponse & { id?: string }>("/project", {
     method: "POST",
     body: JSON.stringify({
       name: body.name,
@@ -64,6 +64,11 @@ export async function createProject(
       target_language: "Python",
     }),
   });
+
+  return {
+    project_id: response.project_id ?? response.id ?? "",
+    status: response.status,
+  };
 }
 
 export async function uploadFiles(
@@ -78,14 +83,14 @@ export async function uploadFiles(
     formData.append("files", schema);
   }
 
-  await request<unknown>(`/api/project/${encodeURIComponent(projectId)}/upload`, {
+  await request<unknown>(`/project/${encodeURIComponent(projectId)}/upload`, {
     method: "POST",
     body: formData,
   });
 }
 
 export async function startPipeline(projectId: string): Promise<void> {
-  await request<unknown>(`/api/project/${encodeURIComponent(projectId)}/start`, {
+  await request<unknown>(`/project/${encodeURIComponent(projectId)}/start`, {
     method: "POST",
   });
 }
@@ -95,12 +100,12 @@ export async function approveChunk(
   body: ApproveChunkRequest,
 ): Promise<void> {
   await request<unknown>(
-    `/api/project/${encodeURIComponent(projectId)}/approve/${encodeURIComponent(
+    `/project/${encodeURIComponent(projectId)}/approve/${encodeURIComponent(
       body.chunk_id,
     )}`,
     {
       method: "POST",
-      body: JSON.stringify({ reviewer_comment: null }),
+      body: JSON.stringify({ comment: null }),
     },
   );
 }
@@ -110,12 +115,12 @@ export async function rejectChunk(
   body: RejectChunkRequest,
 ): Promise<void> {
   await request<unknown>(
-    `/api/project/${encodeURIComponent(projectId)}/reject/${encodeURIComponent(
+    `/project/${encodeURIComponent(projectId)}/reject/${encodeURIComponent(
       body.chunk_id,
     )}`,
     {
       method: "POST",
-      body: JSON.stringify({ reviewer_comment: body.reason }),
+      body: JSON.stringify({ comment: body.reason }),
     },
   );
 }
@@ -126,7 +131,7 @@ export async function updateBusinessRule(
   patch: { status: RuleStatus },
 ): Promise<void> {
   await request<unknown>(
-    `/api/project/${encodeURIComponent(projectId)}/rules/${encodeURIComponent(ruleId)}`,
+    `/project/${encodeURIComponent(projectId)}/rules/${encodeURIComponent(ruleId)}`,
     {
       method: "PATCH",
       body: JSON.stringify(patch),
