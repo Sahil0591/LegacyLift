@@ -1,241 +1,230 @@
 # LegacyLift Conduct-Track Presentation And Demo Script
 
-This script frames LegacyLift for a Conduct-track demo: practical AI assistance, credible technical depth, visible human judgment, and no claims beyond what this repository can show today.
+This script frames LegacyLift for a Conduct-track demo: practical AI assistance, credible technical depth, visible human judgment, and claims scoped to what the deployed app and repo actually prove today.
 
-**Keep in sync:** auto-generated sections below refresh from the repo via `python legacylift/scripts/sync_conduct_demo_script.py`. Install git hooks with `legacylift/scripts/install_git_hooks.bat` so pulls and branch switches update the snapshot automatically.
+<!-- conduct-demo:autogen:start -->
 
-## One-Line Pitch
+## Repo Snapshot (auto-generated)
 
-LegacyLift is an AI-assisted legacy migration workbench that turns COBOL and SQL into reviewable business rules, a dependency graph, risk scores, and approval owners before anyone rewrites production code.
+_Last synced: 2026-06-30 14:29 UTC · branch `docs/layer0-demo-contract` · commit `0195bd4`_
 
-## Problem
+### Deployed demo
 
-Banks still run critical workflows on legacy COBOL systems backed by old relational schemas. The risk in migration is not just syntax translation. The real risk is that nobody has a current, shared map of what the code means, what data it touches, which rules are business-critical, and who is allowed to approve a change.
+- **Production (Vercel):** [https://legacy-lift-six.vercel.app/](https://legacy-lift-six.vercel.app/)
+- **Fastest live path:** open deploy URL → **Map my codebase** → `/project/demo-loan-engine` (seeded COBOL loan-engine workbench, no backend required)
+- **Interactive path:** [https://legacy-lift-six.vercel.app/demo](https://legacy-lift-six.vercel.app/demo) → paste a public GitHub repo or upload COBOL/SQL files → `/api/analyze` → workbench review
 
-Modernization teams often start with manual archaeology: reading paragraphs, tracing SQL tables, interviewing business owners, and building spreadsheets of fragile assumptions. That work is slow, expensive, and hard to audit. Worse, jumping straight to AI code generation can produce confident rewrites of misunderstood policy.
+### Demo surfaces in this repo
 
-LegacyLift focuses on the first safe mile: Layer 0 code archaeology, with humans approving meaning and migration risk before deeper transformation.
+**Client (Vercel primary)**
 
-## Core Insight
+- `/demo`
+- `/`
+- `/project/{id}`
 
-Legacy migration should begin with accountability, not code generation.
-
-The key question is not "Can an AI rewrite this COBOL?" It is "Can the team explain what this legacy system does, why each rule matters, what it depends on, how risky it is, and who must approve the migration?" LegacyLift uses AI as an analyst and migration assistant inside a human-in-the-loop workbench, turning legacy source into reviewable migration evidence.
-
-## Product Workflow
-
-1. Start from `/demo`: upload legacy files or point at a public GitHub repo.
-2. Run Layer 0-style analysis to split code into units, extract candidate business rules, build a dependency graph, and score risk.
-3. Open the workbench at `/project/{id}` and review the codebase map: rules, graph, and chunk queue sorted by risk.
-4. For each high-risk chunk, generate migrated code (`/api/migrate`), run static checks, AI semantic review (`/api/review`), and optional tests (`/api/tests`).
-5. Approve or reject each chunk with human judgment; rejected chunks can be regenerated with reviewer instructions.
-6. Download the human-approved migration bundle when review is complete.
-
-**Banking demo fixtures** (also used by the backend smoke path): `interest_calc.cbl`, `account_master.cbl`, `end_of_day_batch.cbl`, and `legacy_bank.sql`.
-
-**Optional backend proof path:** create a project on the FastAPI server, upload the same fixtures, start Layer 0, and inspect `/project/{id}/rules`, `/project/{id}/graph`, and WebSocket events.
-
-<!-- AUTO-GENERATED:REPO-SNAPSHOT:START -->
-## Repo Snapshot (Auto-Generated)
-
-> Synced from repo at `713f8bb` on 2026-06-30 14:26 UTC. Regenerate with `python legacylift/scripts/sync_conduct_demo_script.py`.
-
-### Demo Paths In This Repo
-
-| Path | Role | Best for Conduct demo |
-|------|------|------------------------|
-| Client workbench | `client/app/demo` → `POST /api/analyze` → `client/app/project/[id]` | **Primary live demo** — upload COBOL/SQL or a public GitHub repo; deterministic Layer 0-style analysis in Next.js; Venice-backed migrate/review via `/api/migrate` and `/api/review` |
-| Backend Layer 0 API | `POST /project` → upload → start → WebSocket + `/rules` + `/graph` | **Secondary proof path** — FastAPI archaeology spine; use `server/smoke_test.py` or REST/WS JSON if the client is unavailable |
-
-### Banking Demo Fixtures
-
-- `server/demo/sample_cobol/account_master.cbl`
-- `server/demo/sample_cobol/end_of_day_batch.cbl`
-- `server/demo/sample_cobol/interest_calc.cbl`
-- `server/demo/sample_schema/legacy_bank.sql`
-
-### Backend Routes (`server/api/main.py`)
-
-- `GET /health`
-- `POST /project`
-- `POST /project/{project_id}/upload`
-- `POST /project/{project_id}/start`
-- `POST /project/{project_id}/approve/{chunk_id}`
-- `POST /project/{project_id}/reject/{chunk_id}`
-- `POST /project/{project_id}/confirm-rule/{chunk_id}`
-- `POST /project/{project_id}/select-chunk/{chunk_id}`
-- `GET /project/{project_id}/status`
-- `GET /project/{project_id}/rules`
-- `GET /project/{project_id}/graph`
-- `WS /ws/{project_id}`
-
-- Default local base URL: `http://localhost:8000`
-- Frontend proxy contract may expose these as `/api/project...`
-
-### Client API Routes (`client/app/api`)
+**Client API routes (Next.js)**
 
 - `POST /api/analyze`
 - `POST /api/migrate`
 - `POST /api/review`
 - `POST /api/tests`
 
-- Analysis is deterministic (`client/lib/analyze.ts`); migration/review/tests use Venice when `VENICE_API_KEY` is set.
+**Server demo fixtures (COBOL/SQL banking)**
 
-### Layer 0 Backend Spine Today
+- `account_master.cbl`
+- `end_of_day_batch.cbl`
+- `interest_calc.cbl`
+- `legacy_bank.sql`
 
-- Entry point: `core.pipeline.run_pipeline(project)` → `core.layer0.run(project)`
-- Scope: Layer 0 (Code Archaeology) and transitions the.
-- Key WebSocket events: `analysis_complete`, `pipeline_started`, `layer0_complete`, `ai_review_complete`, `archaeology_complete`, `archaeology_started`, `business_rule_found`, `chunk_approved`, `chunk_ready_for_approval`, `chunk_selected`, `chunk_started`, `dependency_graph_ready`, … (+10 more)
-- Smoke test expects: `pipeline_started` → `layer0_complete` → `analysis_complete`
+**Default public repo on `/demo`**
 
-### Ownership / Approval Signals
+- `github.com/aws-samples/aws-mainframe-modernization-carddemo`
 
-- **Client analyze path:** Finance (money-related signals), Risk (SQL/table signals), Engineering (date/time/format signals), Unknown (fallback)
-- **Backend Layer 0 rules:** fields include `id`, `chunk_id`, `rule`, `confidence`, `owner`, `owner_reasoning`, `key_variables`, `depends_on`, `needs_review`; treat `owner` as a review-routing signal, not authority.
+**Auditable client risk rules (`client/lib/analyze.ts`)**
 
-### Regenerate This Section
+- Rule 1: touches money.
+- Rule 2: packed-decimal precision.
+- Rule 3: non-trivial financial arithmetic.
+- Rule 4: blast radius from inbound calls.
+- Rule 5: magic numbers.
+- Rule 6: commented-out / dead code.
+- Rule 7: external I/O / DB.
+- Rule 8: size.
 
-```bash
-python legacylift/scripts/sync_conduct_demo_script.py
-```
+**Backend Layer 0 spine (optional local proof)**
 
-After `git pull` or `git merge`, hooks in `.githooks/` can run this automatically if installed via `legacylift/scripts/install_git_hooks.bat`.
-<!-- AUTO-GENERATED:REPO-SNAPSHOT:END -->
+- Base URL: `http://localhost:8000`
+- Flow: `POST /project` → upload demo files → `POST /project/{{id}}/start` → `GET /project/{{id}}/rules` + `/graph`
+- Contract details: `legacylift/docs/layer0_api_contract.md`
+
+Re-run `python legacylift/scripts/sync_conduct_demo_script.py` after pulls, or rely on the GitHub Action on pushes to `main`.
+
+<!-- conduct-demo:autogen:end -->
+
+## One-Line Pitch
+
+LegacyLift is an AI-assisted legacy migration workbench that maps COBOL banking code into business rules, dependencies, and risk scores — then migrates chunk by chunk with a human approving every step.
+
+## Problem
+
+Banks still run critical workflows on legacy COBOL systems backed by old relational schemas. The risk in migration is not just syntax translation. Teams need a shared map of what the code means, what data it touches, which rules are business-critical, how risky each chunk is, and who should approve changes.
+
+Manual archaeology — reading paragraphs, tracing SQL, interviewing owners, building spreadsheets — is slow, expensive, and hard to audit. Jumping straight to AI code generation can produce confident rewrites of misunderstood policy.
+
+## Core Insight
+
+Safe migration starts with accountability before generation.
+
+The first question is not "Can AI rewrite this COBOL?" It is "Can the team explain what the legacy system does, why each rule matters, what it depends on, how risky it is, and who must sign off?" LegacyLift uses AI inside a human-in-the-loop workbench: deterministic mapping first, AI-assisted migration second, human approval always.
+
+## Product Workflow
+
+The live product story on [legacy-lift-six.vercel.app](https://legacy-lift-six.vercel.app/) follows six gates:
+
+1. **Connect** — paste a public GitHub repo or upload legacy source files.
+2. **Map** — extract candidate business rules in plain English.
+3. **Dependencies** — trace calls and data relationships in a graph.
+4. **Risk** — score every node with explicit, auditable rules.
+5. **Migrate** — generate target code and tests per chunk (Venice-backed when configured).
+6. **Approve** — hard-stop for human approve, edit, or reject on every chunk.
+
+Banking demo fixtures in-repo: `interest_calc.cbl`, `account_master.cbl`, `end_of_day_batch.cbl`, and `legacy_bank.sql`.
 
 ## 90-Second Pitch
 
-"LegacyLift is an AI-assisted migration workbench for banks with critical COBOL systems.
+"LegacyLift helps banks migrate legacy COBOL without losing the why.
 
-Most modernization demos jump straight to rewriting code. In regulated systems, that is not the first problem. Before a bank can migrate, the team needs to know what the old system actually does, which business rules are embedded in the code, which tables are touched, which parts are risky, and who has authority to sign off.
+Most demos jump straight to rewriting code. In regulated systems, the first problem is discovery: what business rules are buried in the code, what tables they touch, what depends on what, and who should approve a change.
 
-Our demo uploads a small COBOL and SQL banking workload—or points at a public legacy repo. LegacyLift runs Layer 0 code archaeology and produces three things: plain-English business rules, a dependency graph, and risk and ownership signals. Reviewers then walk the chunk queue, approve AI-generated migrations one piece at a time, and reject anything that drifts from policy.
+We built an AI-assisted migration workbench. Paste a repo or upload COBOL files. LegacyLift maps business rules, builds a dependency graph, and scores risk with explicit rules — money keywords, call fan-in, hardcoded values, external I/O — not a black-box score.
 
-For example, an interest-calculation paragraph becomes a reviewable business rule, connected to the account data it depends on, scored for migration risk, and routed to a likely Finance or Compliance reviewer. The system is not claiming the migration is done. It is creating the evidence layer that lets engineers and business owners make safe migration decisions together.
+Then migration happens chunk by chunk. AI proposes the rewrite and tests. A human approves, edits, or rejects every chunk before anything merges.
 
-The core insight is simple: AI can speed up legacy migration, but only if it stays explainable, accountable, and human-in-the-loop."
+The deployed demo is live at legacy-lift-six.vercel.app. The core insight: AI can accelerate legacy migration only when it stays explainable, accountable, and human-in-the-loop."
 
 ## 3-Minute Demo Script
 
-**Recommended path:** client workbench (`npm run dev` in `legacylift/client`). **Fallback:** backend smoke test or REST/WS JSON.
+_Use the deployed app first: [https://legacy-lift-six.vercel.app/](https://legacy-lift-six.vercel.app/)_
 
-1. Opening problem, 20 seconds:
-   "Imagine a bank wants to migrate a legacy COBOL batch system. The risky shortcut is to ask AI to rewrite everything. LegacyLift starts earlier: what does this system do, what does it touch, how risky is each part, and who should approve changes?"
+1. **Landing + problem, 20 seconds**
+   Open the site. Read the headline: "Migrate legacy code without losing the why." Say: "This is not a translator. It is a system of record for why legacy code behaves the way it does."
 
-2. Start migration, 25 seconds:
-   Open `/demo`. Choose **Upload files** and add `interest_calc.cbl`, `account_master.cbl`, `end_of_day_batch.cbl`, and `legacy_bank.sql`. Say: "This gives the workbench both application logic and the database context behind it."
+2. **Fast seeded path, 25 seconds**
+   Click **Map my codebase** → `/project/demo-loan-engine`. Say: "This is a COBOL loan-engine workload with rules, graph, and risk already mapped — good when Wi-Fi or APIs are flaky."
 
-3. Layer 0 archaeology, 35 seconds:
-   Submit and land on `/project/local-…`. Explain that `/api/analyze` runs deterministic archaeology: unit splitting, business-rule extraction, dependency graph construction, and risk scoring—no LLM on this step.
+3. **Overview: rules + ownership, 40 seconds**
+   Stay on Overview. Pick one business rule (e.g. daily interest accrual or late-fee cap). Point to ownership signals (Finance, Compliance, Product). Say: "These are reviewable candidate rules with likely approval functions — not authoritative ownership."
 
-4. Business-rule extraction, 35 seconds:
-   Open Overview or the rules panel. Pick one rule and narrate it as a business artifact, not just code. "This is the kind of policy hidden in a COBOL paragraph that Finance or Compliance must validate before migration."
+4. **Overview: dependency graph + risk, 35 seconds**
+   Show the graph and risk panel. Explain auditable scoring: money keywords, fan-in, hardcoded values, external I/O. Highlight one high-risk chunk and say: "This tells the team what to review first."
 
-5. Ownership and approval, 25 seconds:
-   Point to the likely owner signal. "LegacyLift does not make this owner authoritative. It suggests Finance, Risk, Engineering, or another approval function so the right human reviews it."
+5. **Review: migrate + approve, 45 seconds**
+   Switch to Review. Select a chunk, show generate → static check → AI review → tests → **Approve / Edit / Reject**. Say: "Nothing merges without a human. The pipeline hard-stops at every chunk."
 
-6. Dependency graph and risk, 30 seconds:
-   Show the graph and chunk queue sorted by risk. Highlight a higher-risk batch or money-handling unit. "This gives the team a review order—start where business impact and coupling are highest."
+6. **Live analyze path (optional), 30 seconds**
+   Go to `/demo`. Paste a public GitHub COBOL repo or upload the banking demo files. Show `/api/analyze` populating a fresh workbench. Say: "Mapping is deterministic and auditable; AI is used for migration and review, not for the initial risk score."
 
-7. Human-in-the-loop migration, 30 seconds:
-   Select a chunk, generate migration, show AI review, and approve or reject. "AI accelerates discovery and draft migration, but humans approve meaning, risk, and rollout."
-
-8. Honest scope, 10 seconds:
-   "Today we prove the archaeology and review control plane. The backend also exposes a Layer 0 API spine; full multi-layer server orchestration is scaffolded beyond Layer 0."
+7. **Honest close, 15 seconds**
+   "Today we prove the full judge journey on the deployed workbench. The Python backend also exposes a Layer 0 archaeology API for local smoke tests — but the Conduct demo should lead with the live URL."
 
 ## Slide Outline
 
-1. Title: "LegacyLift: AI-Assisted Legacy Migration Workbench"
-2. Problem: "Banks cannot safely modernize legacy COBOL by treating it as raw text."
-3. Core Insight: "Safe migration starts with accountability before generation."
-4. Demo System: "COBOL banking workload plus SQL schema—interest, accounts, end-of-day batch."
-5. Layer 0 Code Archaeology: "Parse source, extract rules, build graph, score risk, suggest owners."
-6. Product Workflow: "Analyze → review map → migrate chunk-by-chunk → human approve/reject."
-7. Human-In-The-Loop Migration: "AI proposes evidence and drafts; people approve policy and risk."
-8. Conduct Fit: "Practical AI for a regulated workflow with explainability and reviewability."
-9. What We Prove Today: "A working archaeology and review spine on real legacy fixtures."
-10. Next Step: "Use approved Layer 0 evidence to drive deeper migration planning and transformation."
+1. **Title** — LegacyLift: AI-assisted legacy migration workbench (Conduct AI · Imperial)
+2. **Problem** — Legacy COBOL hides business policy; migration fails when teams skip discovery
+3. **Core insight** — Accountability before generation
+4. **Live demo** — [legacy-lift-six.vercel.app](https://legacy-lift-six.vercel.app/)
+5. **Workflow** — Connect → Map → Dependencies → Risk → Migrate → Approve
+6. **Banking demo** — COBOL batch + SQL schema fixtures
+7. **Layer 0 archaeology** — Parse, extract rules, graph, score, suggest owners
+8. **Human-in-the-loop** — Approve / edit / reject on every chunk
+9. **What we prove today** — Deployed workbench + auditable mapping + gated migration
+10. **Next** — Deeper backend pipeline layers, persistence, commit lineage
 
 ## Mapping To Conduct Judging Criteria
 
 ### Real-World Impact
 
-- Targets a painful, high-stakes problem: modernizing banking systems where legacy code still encodes live business policy.
-- Value is concrete: shorten discovery, reduce migration uncertainty, and create an audit-friendly review trail before transformation.
-- Claim acceleration of archaeology and triage—not unattended production migration.
+- Targets a painful, high-stakes problem: regulated banking systems still on COBOL.
+- Value is concrete: shorten discovery, reduce migration uncertainty, create a review trail before transformation.
+- Claim speed-up for archaeology, triage, and gated migration — not overnight full-system replacement.
 
 ### Technical Execution
 
-- Primary demo: `/demo` → `POST /api/analyze` → workbench with rules, graph, chunk queue, migrate/review routes.
-- Secondary proof: FastAPI Layer 0 (`POST /project`, upload, start, WebSocket, `/rules`, `/graph`) or `server/smoke_test.py`.
-- Point to concrete outputs: rule count, graph nodes/edges, risk tiers, ownership signals, chunk approval state.
+- Lead with the deployed demo: landing → seeded workbench or `/demo` analyze → review flow.
+- Show concrete artifacts: business rules, dependency nodes/edges, risk levels, chunk diffs, test output, approval state.
+- Mention deterministic `/api/analyze` (explicit risk rules in `client/lib/analyze.ts`) plus Venice routes for `/api/migrate`, `/api/review`, `/api/tests`.
+- Optional proof path: backend Layer 0 at `http://localhost:8000` per `layer0_api_contract.md`.
 
 ### AI Usefulness
 
-- Deterministic analysis handles explainable archaeology; Venice-backed routes handle migration draft, semantic review, and tests when configured.
-- Emphasize reviewable evidence and diff-based chunk approval—not silent autopilot rewrites.
+- AI assists migration generation, semantic review, and test synthesis — not the initial risk map.
+- Emphasize reviewable evidence: rules, graph, diffs, reviewer comments, regeneration limits.
+- Pair AI with deterministic parsing/scoring so the product is not a thin prompt wrapper.
 
 ### Product Thinking
 
-- Matches how regulated teams work: engineers need dependency and risk context; business owners need plain-English rules and approval queues.
-- Ownership signals route review to likely functions; risk scoring creates a prioritized queue.
+- Matches how regulated teams work: engineers need dependency/risk context; business owners need plain-English rules and approval queues.
+- Six-step workflow mirrors real migration governance: map before migrate, approve before merge.
+- Seeded demo plus live analyze covers both stable judging and interactive credibility.
 
 ### Human-In-The-Loop And Trust
 
-- Approval, rejection, and regeneration with reviewer instructions stay with people.
-- Use "likely owner," "candidate business rule," and "review priority" language.
+- Every chunk requires explicit human approval.
+- Use honest language: "candidate rule," "likely owner," "review priority."
+- Reject/regenerate paths and regen caps show the human stays in control.
 
 ### Demo Quality
 
-- One journey: upload banking fixtures → inspect one strong rule → show graph → approve one chunk.
-- If the UI fails, show `/api/analyze` JSON or backend `/rules` and `/graph` responses.
+- Prefer one strong path: seeded demo-loan-engine → one rule → one graph moment → one approve action.
+- Keep the deployed URL visible on every slide after the title.
+- If Venice keys fail, still demo mapping + static checks + seeded migration state.
 
 ## Fallback Demo Plan
 
-If the client fails:
+**If Venice / migrate APIs fail**
 
-- Run or describe `server/smoke_test.py` against `http://localhost:8000`.
-- Walk through create project, upload four demo files, start pipeline, WebSocket events, then fetch `/project/{id}/rules` and `/project/{id}/graph`.
-- Use `docs/layer0_api_contract.md` for response shapes.
+- Stay on `/project/demo-loan-engine` and walk Overview + pre-seeded chunk state.
+- Explain mapping and approval UX; skip live regeneration.
 
-If Venice / migrate fails:
+**If `/api/analyze` or GitHub fetch fails**
 
-- Stay on the analyze + review-map story; show deterministic rules, graph, and risk without generating migrated code.
-- Say migration routes need `VENICE_API_KEY`; archaeology does not.
+- Use the seeded demo project from the landing page CTA.
+- Or upload local demo files from `server/demo/sample_cobol/` and `server/demo/sample_schema/`.
 
-If the backend fails:
+**If the deployed site fails**
 
-- Demo the client-only path: `/demo` upload → `/api/analyze` JSON → workbench with seeded local project state.
-- Use checked-in demo files and this script as a static walkthrough.
+- Run the client locally: `cd legacylift/client && npm run dev`.
+- Fall back to backend smoke at `http://localhost:8000`: create project, upload four demo files, start pipeline, fetch rules/graph JSON.
 
-If everything fails:
+**If everything fails**
 
-- Deliver the slide narrative: problem, COBOL/SQL workload, Layer 0 archaeology, example rule, graph, risk/ownership, human approval loop.
+- Deliver slides only: problem → six-step workflow → example rule → graph → risk formula → human approval loop.
+- Say: "The repo and deployed URL document the intended Conduct path; today I am walking the architecture."
 
-<!-- AUTO-GENERATED:OVERCLAIMS:START -->
-## Overclaims To Avoid (Auto-Generated)
+## Overclaims To Avoid
 
-These guardrails are derived from the current repo layout and should stay honest in pitch and demo narration.
-
-- Do not say LegacyLift completes a full regulated migration automatically. The backend `run_pipeline` currently stops after Layer 0 and marks the project `ready`; deeper layers exist as scaffolding in `core/pipeline.py`.
-- Do not say the client `/api/analyze` path uses an LLM. It is deterministic, rule-based archaeology (`client/lib/analyze.ts`).
-- Do not say Venice migration/review works without configuration. `/api/migrate`, `/api/review`, and `/api/tests` require `VENICE_API_KEY` on the Next.js server.
-- Do not say ownership labels are authoritative. Client ownership is inferred from static signals; backend `owner` is a suggested approval function.
-- Do not say risk scores are compliance-grade. They are migration triage signals from explicit heuristics.
-- Do not say the dependency graph is complete program analysis. It reflects current parser/analyze output only.
-- Do not claim production persistence or auth. Backend projects are in-memory; client `local-*` projects live in browser session storage.
-- Do not say frontend and backend are fully wire-compatible without adapters. See `docs/layer0_api_contract.md` for known field, route, port, and WebSocket mismatches.
-- Do not imply every uploaded SQL file is typed as SQL end-to-end on the backend upload path unless that has been fixed in `server/api/main.py`.
-- Do not demo LLM accuracy when `DEMO_MODE` / deterministic stubs are doing the work. Backend layer0 default DEMO_MODE=true; pipeline module default DEMO_MODE=true.
-<!-- AUTO-GENERATED:OVERCLAIMS:END -->
+- Do not say commit/PR lineage is live for every analyzed repo — that depth is in the seeded loan-engine demo, not generic `/api/analyze` output.
+- Do not say the client analyze step uses GPT-4o — mapping uses deterministic rules; Venice is for migrate/review/tests.
+- Do not say risk scores are compliance-grade — they are auditable triage signals.
+- Do not say ownership labels are authoritative — say "likely owner" or "approval function signal."
+- Do not say LegacyLift completes unattended end-to-end production migration.
+- Do not imply the backend Layer 0 path is what the Vercel deployment executes — the deployed demo is primarily the Next.js workbench.
+- Do not claim full tree-sitter parsing in the client analyze path — COBOL units are split with paragraph/section heuristics.
+- Do not claim persistence or enterprise auth unless shown separately.
 
 ## Speaker Notes
 
-Use this phrasing when challenged on scope:
+When challenged on scope:
 
-"LegacyLift is not claiming to migrate a bank in three minutes. The Conduct demo proves the safety layer: upload legacy COBOL and SQL, extract reviewable business rules, build a dependency graph, score risk, suggest likely approval owners, migrate chunk-by-chunk with AI assistance, and keep humans in the loop before anything ships."
+"LegacyLift is not claiming to migrate a bank in three minutes. The Conduct demo proves a governed workflow: map legacy COBOL into reviewable rules and dependencies, score risk with explicit rules, migrate chunk by chunk with AI assistance, and keep a human as the final gate on every merge. The live demo is at legacy-lift-six.vercel.app."
 
-Manual overclaims to avoid in narration:
+To refresh this doc after repo changes:
 
-- Do not collapse the client analyze path and Venice migration path into one undifferentiated "AI does everything" claim.
-- Do not demo GitHub repo ingestion unless network access to GitHub is confirmed.
-- Do not present seeded demo project IDs (`demo`, `local-*`) as persisted enterprise project records.
+```bash
+python legacylift/scripts/sync_conduct_demo_script.py
+```
+
+Automation options:
+
+- **Local:** run `legacylift/scripts/install_git_hooks.bat` (or `.sh`) once — `post-merge` and `post-checkout` hooks refresh the snapshot after pulls and branch switches.
+- **CI:** pushes to `main` run `.github/workflows/sync-conduct-demo-script.yml`, which updates the auto-generated **Repo Snapshot** section and commits if needed.
