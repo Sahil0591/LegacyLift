@@ -803,7 +803,13 @@ async def llm_review(body: ReviewUnitRequest, request: Request):
         source_code=body.source_code,
         migrated_code=body.migrated_code,
     )
-    content = await llm.complete(system=system, user=user, temperature=0.1, max_tokens=5000)
+    content = await llm.complete(
+        system=system,
+        user=user,
+        temperature=0.1,
+        max_tokens=5000,
+        json_response=True,
+    )
     content = _ensure_real_output(content)
 
     parsed = parse_json_loose(content)
@@ -854,7 +860,13 @@ async def llm_tests(body: TestsUnitRequest, request: Request):
         migrated_code=body.migrated_code,
         target_lang=body.target_lang,
     )
-    content = await llm.complete(system=system, user=user, temperature=0.2, max_tokens=6000)
+    content = await llm.complete(
+        system=system,
+        user=user,
+        temperature=0.2,
+        max_tokens=6000,
+        json_response=True,
+    )
     content = _ensure_real_output(content)
 
     parsed = parse_json_loose(content) or {}

@@ -168,7 +168,8 @@ class TestLlmMigrate:
 class TestLlmReview:
 
     def test_returns_review_result(self):
-        with patch.object(_main, "_get_llm", return_value=_make_llm(REVIEW_JSON)):
+        llm = _make_llm(REVIEW_JSON)
+        with patch.object(_main, "_get_llm", return_value=llm):
             client = TestClient(app, raise_server_exceptions=True)
             r = client.post("/llm/review", json=REVIEW_BODY)
         assert r.status_code == 200, r.text
@@ -180,6 +181,7 @@ class TestLlmReview:
         assert data["critical_issues"] == []
         assert data["warnings"] == []
         assert data["suggestions"] == []
+        assert llm.complete.await_args.kwargs["json_response"] is True
 
     def test_handles_unstructured_output_gracefully(self):
         with patch.object(_main, "_get_llm", return_value=_make_llm("Looks fine to me!")):
@@ -210,7 +212,8 @@ class TestLlmReview:
 class TestLlmTests:
 
     def test_returns_tests_and_code(self):
-        with patch.object(_main, "_get_llm", return_value=_make_llm(TESTS_JSON)):
+        llm = _make_llm(TESTS_JSON)
+        with patch.object(_main, "_get_llm", return_value=llm):
             client = TestClient(app, raise_server_exceptions=True)
             r = client.post("/llm/tests", json=TESTS_BODY)
         assert r.status_code == 200, r.text
@@ -218,6 +221,7 @@ class TestLlmTests:
         assert len(data["tests"]) == 1
         assert data["tests"][0]["name"] == "test_basic"
         assert data["code"] == "def test_basic(): assert True"
+        assert llm.complete.await_args.kwargs["json_response"] is True
 
     def test_empty_tests_on_bad_json(self):
         with patch.object(_main, "_get_llm", return_value=_make_llm("not json at all")):
@@ -348,3 +352,34 @@ class TestMigrationPrompts:
         finally:
             if original:
                 os.environ["VENICE_API_KEY"] = original
+
+    @pytest.mark.asyncio
+    async def test_llm_client_preserves_venice_request_options(self):
+        from utils.llm_client import LLMClient
+
+        client = LLMClient()
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            return_value=MagicMock(
+                choices=[MagicMock(message=MagicMock(content='{"ok": true}'))]
+            )
+        )
+        client.reasoning_effort = "low"
+
+        await client.complete(
+            system="system",
+            user="user",
+            temperature=0.1,
+            max_tokens=123,
+            json_response=True,
+        )
+
+        kwargs = client._client.chat.completions.create.await_args.kwargs
+        assert kwargs["response_format"] == {"type": "json_object"}
+        assert kwargs["max_tokens"] == 123
+        assert kwargs["extra_body"]["max_completion_tokens"] == 123
+        assert kwargs["extra_body"]["reasoning_effort"] == "low"
+        assert kwargs["extra_body"]["venice_parameters"] == {
+            "enable_web_search": "off",
+            "include_venice_system_prompt": False,
+        }

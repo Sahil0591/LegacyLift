@@ -73,6 +73,7 @@ class LLMClient:
         self.base_url: str = os.getenv(
             "VENICE_BASE_URL", "https://api.venice.ai/api/v1"
         )
+        self.reasoning_effort: str = os.getenv("VENICE_REASONING_EFFORT", "low")
         self.demo_mode: bool = os.getenv("DEMO_MODE", "true").lower() == "true"
         self.max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
         self.retry_delay: float = float(os.getenv("LLM_RETRY_DELAY", "2"))
@@ -109,6 +110,7 @@ class LLMClient:
         temperature: float = 0.2,
         model: Optional[str] = None,
         max_tokens: int = 4096,
+        json_response: bool = False,
     ) -> str:
         """
         Make a single (non-streaming) chat completion call.
@@ -142,6 +144,7 @@ class LLMClient:
                 model=resolved_model,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                json_response=json_response,
             )
             content = response.choices[0].message.content or ""
             self._log_response(content)
@@ -222,6 +225,7 @@ class LLMClient:
         model: str,
         temperature: float,
         max_tokens: int,
+        json_response: bool,
     ):
         """
         Wraps the OpenAI call with tenacity retry logic.
@@ -242,15 +246,28 @@ class LLMClient:
             reraise=True,
         )
         async def _call():
-            return await self._client.chat.completions.create(
-                model=model,
-                messages=[
+            body = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system},
                     {"role": "user",   "content": user},
                 ],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "extra_body": {
+                    "max_completion_tokens": max_tokens,
+                    "venice_parameters": {
+                        "enable_web_search": "off",
+                        "include_venice_system_prompt": False,
+                    },
+                },
+            }
+            if self.reasoning_effort:
+                body["extra_body"]["reasoning_effort"] = self.reasoning_effort
+            if json_response:
+                body["response_format"] = {"type": "json_object"}
+
+            return await self._client.chat.completions.create(**body)
 
         return await _call()
 
