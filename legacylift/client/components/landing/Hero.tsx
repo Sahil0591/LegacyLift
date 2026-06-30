@@ -77,11 +77,11 @@ export function Hero() {
           className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-1.5 font-mono text-[11px] text-sub"
         >
           <span>tree-sitter parsing</span>
-          <span className="text-[#d6d3d1]">·</span>
+          <span className="text-ink/30">·</span>
           <span>GPT-4o reasoning</span>
-          <span className="text-[#d6d3d1]">·</span>
+          <span className="text-ink/30">·</span>
           <span>pytest verification</span>
-          <span className="text-[#d6d3d1]">·</span>
+          <span className="text-ink/30">·</span>
           <span>human-gated merges</span>
         </motion.div>
       </div>

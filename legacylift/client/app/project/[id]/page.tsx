@@ -215,7 +215,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   };
 
   return (
-    <div className="dark flex h-screen flex-col bg-base text-ink">
+    <div className="flex h-screen flex-col bg-base text-ink">
       <WorkbenchHeader
         repo={repo}
         view={view}

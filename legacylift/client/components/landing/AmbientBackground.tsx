@@ -16,7 +16,7 @@ export function AmbientBackground() {
     <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
       <motion.div
         style={{ y: yA }}
-        className="absolute -right-40 -top-40 h-[760px] w-[760px] rounded-full opacity-50"
+        className="absolute -right-40 -top-40 h-[760px] w-[760px] rounded-full opacity-40 dark:opacity-50"
       >
         <div
           className="h-full w-full"
@@ -28,7 +28,7 @@ export function AmbientBackground() {
 
       <motion.div
         style={{ y: yB }}
-        className="absolute -left-40 top-[55%] h-[640px] w-[640px] rounded-full opacity-40"
+        className="absolute -left-40 top-[55%] h-[640px] w-[640px] rounded-full opacity-30 dark:opacity-40"
       >
         <div
           className="h-full w-full"

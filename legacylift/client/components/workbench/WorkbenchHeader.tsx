@@ -9,6 +9,8 @@ import {
   GitPullRequestArrow,
   Download,
 } from "lucide-react";
+import { UserButton } from "@clerk/nextjs";
+import { ThemeToggle } from "@/components/shared/ThemeToggle";
 
 export type WorkbenchView = "overview" | "review";
 
@@ -102,6 +104,9 @@ export function WorkbenchHeader({
           <span className="hidden sm:inline">Download</span>
         </button>
       )}
+
+      <ThemeToggle />
+      <UserButton />
     </header>
   );
 }

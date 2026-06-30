@@ -41,7 +41,7 @@ function renderLine(line: string, lang: Lang): ReactNode {
   while ((m = kw.exec(codePart)) !== null) {
     if (m.index > last) out.push(codePart.slice(last, m.index));
     out.push(
-      <span key={`${m.index}-k`} className="font-medium text-violet-300">
+      <span key={`${m.index}-k`} className="font-medium text-violet-600 dark:text-violet-300">
         {m[0]}
       </span>,
     );

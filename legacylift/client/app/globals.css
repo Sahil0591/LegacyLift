@@ -51,7 +51,7 @@
   }
 
   * {
-    @apply border-border;
+    border-color: rgb(var(--c-text) / 0.12);
   }
 
   body {
@@ -109,7 +109,7 @@
   }
 }
 
-/* ReactFlow — used in project workbench pages (dark) */
+/* ReactFlow — inherits the page theme */
 .react-flow__background {
-  background-color: #0a0a0a !important;
+  background-color: rgb(var(--c-bg)) !important;
 }
