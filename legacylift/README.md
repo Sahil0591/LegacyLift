@@ -104,6 +104,7 @@ curl -X POST http://localhost:8000/api/project/{project_id}/start
 | POST | `/api/project/{id}/start` | Start the migration pipeline |
 | POST | `/api/project/{id}/approve/{chunk_id}` | Approve a migration chunk |
 | POST | `/api/project/{id}/reject/{chunk_id}` | Reject and regenerate a chunk |
+| POST | `/github/webhook` | GitHub App webhook ingestion for installations, pushes, and PR changes |
 | GET  | `/api/project/{id}/status` | Get project status and chunk counts |
 | GET  | `/api/project/{id}/rules` | Get extracted business rules |
 | GET  | `/api/project/{id}/graph` | Get dependency graph and risk scores |
@@ -157,6 +158,11 @@ Copy `.env.example` to `.env` and configure:
 | `AUTO_APPROVE` | `false` | Skip human approval (demo only) |
 | `DATABASE_URL` | SQLite | Database connection string |
 | `LLM_MAX_RETRIES` | `3` | Max LLM retries per chunk |
+| `GITHUB_APP_ID` | *(empty)* | GitHub App ID used for installation-token flows |
+| `GITHUB_PRIVATE_KEY` | *(empty)* | GitHub App private key; keep real keys out of git |
+| `GITHUB_WEBHOOK_SECRET` | *(empty)* | Shared secret for `X-Hub-Signature-256` verification |
+| `GITHUB_CLIENT_ID` | *(empty)* | GitHub App OAuth client ID, reserved for later setup flows |
+| `GITHUB_CLIENT_SECRET` | *(empty)* | GitHub App OAuth client secret, reserved for later setup flows |
 
 ---
 

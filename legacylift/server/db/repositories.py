@@ -11,13 +11,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import (
+    BaselineIndexJob,
     ChangeGuidance,
     CodeChunk,
     Commit,
     DecisionCriterion,
+    GitHubWebhookDelivery,
     OwnershipClassification,
     OwnershipGroup,
     OwnershipReview,
+    PullRequestChangedFile,
+    PullRequestHunk,
+    PullRequestHunkMatch,
     PullRequest,
     Repository,
 )
@@ -161,8 +166,11 @@ async def upsert_repository(
     *,
     github_owner: str,
     github_name: str,
+    github_repository_id: str | None = None,
+    html_url: str | None = None,
     default_branch: str = "main",
     installation_id: str | None = None,
+    is_active: bool = True,
 ) -> Repository:
     result = await session.execute(
         select(Repository).where(
@@ -174,18 +182,99 @@ async def upsert_repository(
 
     if repository is None:
         repository = Repository(
+            github_repository_id=github_repository_id,
             github_owner=github_owner,
             github_name=github_name,
+            html_url=html_url,
             default_branch=default_branch,
             installation_id=installation_id,
+            is_active=is_active,
         )
         session.add(repository)
     else:
+        repository.github_repository_id = github_repository_id or repository.github_repository_id
+        repository.html_url = html_url or repository.html_url
         repository.default_branch = default_branch or repository.default_branch
         repository.installation_id = installation_id or repository.installation_id
+        repository.is_active = is_active
 
     await session.flush()
     return repository
+
+
+async def record_webhook_delivery(
+    session: AsyncSession,
+    *,
+    delivery_id: str,
+    event: str,
+    action: str | None,
+    payload_hash: str,
+) -> tuple[GitHubWebhookDelivery, bool]:
+    result = await session.execute(
+        select(GitHubWebhookDelivery).where(GitHubWebhookDelivery.delivery_id == delivery_id)
+    )
+    delivery = result.scalar_one_or_none()
+    if delivery is not None:
+        return delivery, False
+
+    delivery = GitHubWebhookDelivery(
+        delivery_id=delivery_id,
+        event=event,
+        action=action,
+        payload_hash=payload_hash,
+        status="processing",
+    )
+    session.add(delivery)
+    await session.flush()
+    return delivery, True
+
+
+async def mark_webhook_delivery_processed(
+    session: AsyncSession,
+    delivery: GitHubWebhookDelivery,
+    *,
+    status: str = "processed",
+    error: str | None = None,
+) -> GitHubWebhookDelivery:
+    delivery.status = status
+    delivery.error = error
+    delivery.processed_at = datetime.now(UTC)
+    await session.flush()
+    return delivery
+
+
+async def queue_baseline_index_job(
+    session: AsyncSession,
+    *,
+    repository_id: str,
+    ref: str,
+    commit_sha: str | None = None,
+    reason: str = "installation",
+) -> BaselineIndexJob:
+    result = await session.execute(
+        select(BaselineIndexJob).where(
+            BaselineIndexJob.repository_id == repository_id,
+            BaselineIndexJob.ref == ref,
+            BaselineIndexJob.status == "queued",
+            BaselineIndexJob.reason == reason,
+        )
+    )
+    job = result.scalar_one_or_none()
+    if job is None:
+        job = BaselineIndexJob(
+            repository_id=repository_id,
+            ref=ref,
+            commit_sha=commit_sha,
+            status="queued",
+            reason=reason,
+        )
+        session.add(job)
+    else:
+        job.commit_sha = commit_sha or job.commit_sha
+        job.last_error = None
+
+    await session.flush()
+    return job
 
 
 async def upsert_commit(
@@ -247,6 +336,168 @@ async def upsert_pull_request(
 
     await session.flush()
     return pull_request
+
+
+async def upsert_pull_request_changed_file(
+    session: AsyncSession,
+    *,
+    pull_request_id: str,
+    path: str,
+    status: str,
+    sha: str | None = None,
+    additions: int = 0,
+    deletions: int = 0,
+    changes: int = 0,
+    patch: str = "",
+    previous_filename: str | None = None,
+) -> PullRequestChangedFile:
+    result = await session.execute(
+        select(PullRequestChangedFile).where(
+            PullRequestChangedFile.pull_request_id == pull_request_id,
+            PullRequestChangedFile.path == path,
+        )
+    )
+    changed_file = result.scalar_one_or_none()
+    if changed_file is None:
+        changed_file = PullRequestChangedFile(
+            pull_request_id=pull_request_id,
+            path=path,
+            status=status,
+            sha=sha,
+            additions=additions,
+            deletions=deletions,
+            changes=changes,
+            patch=patch,
+            previous_filename=previous_filename,
+        )
+        session.add(changed_file)
+    else:
+        changed_file.status = status
+        changed_file.sha = sha
+        changed_file.additions = additions
+        changed_file.deletions = deletions
+        changed_file.changes = changes
+        changed_file.patch = patch
+        changed_file.previous_filename = previous_filename
+
+    await session.flush()
+    return changed_file
+
+
+async def upsert_pull_request_hunk(
+    session: AsyncSession,
+    *,
+    changed_file_id: str,
+    path: str,
+    hunk_index: int,
+    header: str,
+    old_start_line: int,
+    old_end_line: int,
+    new_start_line: int,
+    new_end_line: int,
+    patch: str,
+) -> PullRequestHunk:
+    result = await session.execute(
+        select(PullRequestHunk).where(
+            PullRequestHunk.changed_file_id == changed_file_id,
+            PullRequestHunk.hunk_index == hunk_index,
+        )
+    )
+    hunk = result.scalar_one_or_none()
+    if hunk is None:
+        hunk = PullRequestHunk(
+            changed_file_id=changed_file_id,
+            path=path,
+            hunk_index=hunk_index,
+            header=header,
+            old_start_line=old_start_line,
+            old_end_line=old_end_line,
+            new_start_line=new_start_line,
+            new_end_line=new_end_line,
+            patch=patch,
+        )
+        session.add(hunk)
+    else:
+        hunk.path = path
+        hunk.header = header
+        hunk.old_start_line = old_start_line
+        hunk.old_end_line = old_end_line
+        hunk.new_start_line = new_start_line
+        hunk.new_end_line = new_end_line
+        hunk.patch = patch
+
+    await session.flush()
+    return hunk
+
+
+async def upsert_pull_request_hunk_match(
+    session: AsyncSession,
+    *,
+    hunk_id: str,
+    code_chunk_id: str,
+    overlap_start_line: int,
+    overlap_end_line: int,
+) -> PullRequestHunkMatch:
+    result = await session.execute(
+        select(PullRequestHunkMatch).where(
+            PullRequestHunkMatch.hunk_id == hunk_id,
+            PullRequestHunkMatch.code_chunk_id == code_chunk_id,
+        )
+    )
+    match = result.scalar_one_or_none()
+    if match is None:
+        match = PullRequestHunkMatch(
+            hunk_id=hunk_id,
+            code_chunk_id=code_chunk_id,
+            overlap_start_line=overlap_start_line,
+            overlap_end_line=overlap_end_line,
+        )
+        session.add(match)
+    else:
+        match.overlap_start_line = overlap_start_line
+        match.overlap_end_line = overlap_end_line
+
+    await session.flush()
+    return match
+
+
+async def match_hunk_to_code_chunks(
+    session: AsyncSession,
+    *,
+    repository_id: str,
+    commit_sha: str,
+    path: str,
+    hunk_id: str,
+    start_line: int,
+    end_line: int,
+) -> list[PullRequestHunkMatch]:
+    result = await session.execute(
+        select(CodeChunk).where(
+            CodeChunk.repository_id == repository_id,
+            CodeChunk.commit_sha == commit_sha,
+            CodeChunk.path == path,
+            CodeChunk.start_line <= end_line,
+            CodeChunk.end_line >= start_line,
+        )
+    )
+    chunks = result.scalars().all()
+    matches: list[PullRequestHunkMatch] = []
+    for chunk in chunks:
+        overlap_start = max(start_line, chunk.start_line)
+        overlap_end = min(end_line, chunk.end_line)
+        if overlap_start <= overlap_end:
+            matches.append(
+                await upsert_pull_request_hunk_match(
+                    session,
+                    hunk_id=hunk_id,
+                    code_chunk_id=chunk.id,
+                    overlap_start_line=overlap_start,
+                    overlap_end_line=overlap_end,
+                )
+            )
+
+    await session.flush()
+    return matches
 
 
 async def seed_default_ownership_groups(

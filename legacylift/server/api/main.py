@@ -17,6 +17,7 @@ Routes:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -27,14 +28,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition
-from db.session import init_db
+from db.session import get_session, init_db
+from integrations.github_app import GitHubAppSettings, verify_webhook_signature
+from integrations.github_ingestion import process_github_webhook
 from models.project import Project, ProjectStatus, SourceLanguage, UploadedFile
 
 logger = logging.getLogger(__name__)
@@ -124,6 +127,39 @@ class RejectChunkRequest(BaseModel):
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "version": "0.1.0"}
+
+
+# ---------------------------------------------------------------------------
+# POST /github/webhook
+# ---------------------------------------------------------------------------
+
+@app.post("/github/webhook", status_code=202)
+async def github_webhook(
+    request: Request,
+    x_github_event: str = Header(..., alias="X-GitHub-Event"),
+    x_github_delivery: str = Header(..., alias="X-GitHub-Delivery"),
+    x_hub_signature_256: str | None = Header(None, alias="X-Hub-Signature-256"),
+):
+    settings = GitHubAppSettings.from_env()
+    body = await request.body()
+    if not verify_webhook_signature(body, x_hub_signature_256, settings.webhook_secret):
+        raise HTTPException(status_code=401, detail="Invalid GitHub webhook signature")
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid GitHub webhook JSON") from exc
+
+    async with get_session() as session:
+        result = await process_github_webhook(
+            session,
+            event=x_github_event,
+            delivery_id=x_github_delivery,
+            payload=payload,
+            raw_body=body,
+        )
+
+    return JSONResponse(status_code=202, content=result)
 
 
 # ---------------------------------------------------------------------------

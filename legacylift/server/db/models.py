@@ -44,18 +44,26 @@ class Repository(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("github_owner", "github_name", name="uq_repositories_github_identity"),
         Index("ix_repositories_github_identity", "github_owner", "github_name"),
+        Index("ix_repositories_github_repository_id", "github_repository_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    github_repository_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     github_owner: Mapped[str] = mapped_column(String(255), nullable=False)
     github_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    html_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     default_branch: Mapped[str] = mapped_column(String(255), default="main", nullable=False)
     installation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     commits: Mapped[list[Commit]] = relationship(back_populates="repository", cascade="all, delete-orphan")
     pull_requests: Mapped[list[PullRequest]] = relationship(back_populates="repository", cascade="all, delete-orphan")
     code_chunks: Mapped[list[CodeChunk]] = relationship(back_populates="repository", cascade="all, delete-orphan")
     ownership_groups: Mapped[list[OwnershipGroup]] = relationship(back_populates="repository")
+    baseline_index_jobs: Mapped[list[BaselineIndexJob]] = relationship(
+        back_populates="repository",
+        cascade="all, delete-orphan",
+    )
 
 
 class Commit(Base):
@@ -90,6 +98,10 @@ class PullRequest(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     repository: Mapped[Repository] = relationship(back_populates="pull_requests")
+    changed_files: Mapped[list[PullRequestChangedFile]] = relationship(
+        back_populates="pull_request",
+        cascade="all, delete-orphan",
+    )
 
 
 class CodeChunk(Base, TimestampMixin):
@@ -123,6 +135,114 @@ class CodeChunk(Base, TimestampMixin):
         back_populates="code_chunk",
         cascade="all, delete-orphan",
     )
+    hunk_matches: Mapped[list[PullRequestHunkMatch]] = relationship(
+        back_populates="code_chunk",
+        cascade="all, delete-orphan",
+    )
+
+
+class GitHubWebhookDelivery(Base, TimestampMixin):
+    __tablename__ = "github_webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint("delivery_id", name="uq_github_webhook_deliveries_delivery_id"),
+        Index("ix_github_webhook_deliveries_event", "event", "action"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    delivery_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    event: Mapped[str] = mapped_column(String(120), nullable=False)
+    action: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="processing", nullable=False)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class BaselineIndexJob(Base, TimestampMixin):
+    __tablename__ = "baseline_index_jobs"
+    __table_args__ = (
+        Index("ix_baseline_index_jobs_repo_status", "repository_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    repository_id: Mapped[str] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
+    ref: Mapped[str] = mapped_column(String(255), default="main", nullable=False)
+    commit_sha: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="queued", nullable=False)
+    reason: Mapped[str] = mapped_column(String(120), default="installation", nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    repository: Mapped[Repository] = relationship(back_populates="baseline_index_jobs")
+
+
+class PullRequestChangedFile(Base, TimestampMixin):
+    __tablename__ = "pull_request_changed_files"
+    __table_args__ = (
+        UniqueConstraint("pull_request_id", "path", name="uq_pr_changed_files_pr_path"),
+        Index("ix_pr_changed_files_path", "path"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    pull_request_id: Mapped[str] = mapped_column(ForeignKey("pull_requests.id", ondelete="CASCADE"), nullable=False)
+    path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(80), nullable=False)
+    sha: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    additions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    deletions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    changes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    patch: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    previous_filename: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    pull_request: Mapped[PullRequest] = relationship(back_populates="changed_files")
+    hunks: Mapped[list[PullRequestHunk]] = relationship(
+        back_populates="changed_file",
+        cascade="all, delete-orphan",
+    )
+
+
+class PullRequestHunk(Base, TimestampMixin):
+    __tablename__ = "pull_request_hunks"
+    __table_args__ = (
+        UniqueConstraint("changed_file_id", "hunk_index", name="uq_pr_hunks_file_index"),
+        Index("ix_pr_hunks_path_new_range", "path", "new_start_line", "new_end_line"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    changed_file_id: Mapped[str] = mapped_column(
+        ForeignKey("pull_request_changed_files.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    hunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    header: Mapped[str] = mapped_column(String(512), nullable=False)
+    old_start_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    old_end_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_start_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_end_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    patch: Mapped[str] = mapped_column(Text, nullable=False)
+
+    changed_file: Mapped[PullRequestChangedFile] = relationship(back_populates="hunks")
+    matches: Mapped[list[PullRequestHunkMatch]] = relationship(
+        back_populates="hunk",
+        cascade="all, delete-orphan",
+    )
+
+
+class PullRequestHunkMatch(Base, TimestampMixin):
+    __tablename__ = "pull_request_hunk_matches"
+    __table_args__ = (
+        UniqueConstraint("hunk_id", "code_chunk_id", name="uq_pr_hunk_matches_hunk_chunk"),
+        Index("ix_pr_hunk_matches_chunk", "code_chunk_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    hunk_id: Mapped[str] = mapped_column(ForeignKey("pull_request_hunks.id", ondelete="CASCADE"), nullable=False)
+    code_chunk_id: Mapped[str] = mapped_column(ForeignKey("code_chunks.id", ondelete="CASCADE"), nullable=False)
+    overlap_start_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    overlap_end_line: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    hunk: Mapped[PullRequestHunk] = relationship(back_populates="matches")
+    code_chunk: Mapped[CodeChunk] = relationship(back_populates="hunk_matches")
 
 
 class DecisionCriterion(Base, TimestampMixin):
