@@ -348,13 +348,58 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             retry_recommended=ai_result.retry_recommended,
         )
 
+        # ── Layer 3: Test generation & execution ────────────────────────────
+        from core.layer3.test_generator import (  # noqa: PLC0415
+            generate_and_run_tests,
+            TestGenerationInput as _TestGenInput,
+        )
+
+        _test_gen_input = _TestGenInput(
+            chunk=_code_chunk,
+            migrated_code=result.migrated_code,
+            business_rule=_business_rule,
+            ai_review=ai_result,
+        )
+
+        await ws_manager.emit(
+            project.id,
+            "tests_running",
+            chunk_id=chunk_id,
+            total="pending",
+        )
+
+        layer3_result = await generate_and_run_tests(_test_gen_input)
+
+        for tr in layer3_result.test_results:
+            await ws_manager.emit(
+                project.id,
+                "test_result",
+                chunk_id=chunk_id,
+                name=tr.test_name,
+                passed=tr.passed,
+                expected=tr.expected,
+                actual=tr.actual,
+            )
+
+        await ws_manager.emit(
+            project.id,
+            "tests_complete",
+            chunk_id=chunk_id,
+            total=layer3_result.total,
+            passed=layer3_result.passed,
+            failed=layer3_result.failed,
+            retry_recommended=layer3_result.retry_recommended,
+            summary=layer3_result.summary,
+        )
+
         logger.info(
-            "Migration + static analysis + AI review complete for chunk %s "
-            "(static_passed=%s, ai_issues=%d, ai_confidence=%s)",
+            "Migration + static analysis + AI review + tests complete for chunk %s "
+            "(static_passed=%s, ai_issues=%d, tests=%d/%d passed)",
             chunk_id,
             static_result.passed,
             ai_result.issues_found,
-            ai_result.reviewer_confidence,
+            layer3_result.passed,
+            layer3_result.total,
         )
 
     except Exception as exc:
