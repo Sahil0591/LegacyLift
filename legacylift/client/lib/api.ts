@@ -7,7 +7,10 @@ import type {
   RuleStatus,
 } from "@/types/legacylift";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_HOST
+    ? `https://${process.env.NEXT_PUBLIC_API_HOST}`
+    : process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 interface ApiErrorBody {
   detail?: string;

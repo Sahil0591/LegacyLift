@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: legacylift-api
+    runtime: docker
+    plan: free
+    dockerfilePath: legacylift/server/Dockerfile
+    dockerContext: legacylift/server
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: DEMO_MODE
+        value: "false"
+      - key: AUTO_APPROVE
+        value: "false"
+      - key: VENICE_BASE_URL
+        value: https://api.venice.ai/api/v1
+      - key: VENICE_MODEL
+        value: openai-gpt-52-codex
+      - key: VENICE_API_KEY
+        sync: false
+      - key: FRONTEND_HOST
+        fromService:
+          type: web
+          name: legacylift-client
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
+
+  - type: web
+    name: legacylift-client
+    runtime: node
+    plan: free
+    rootDir: legacylift/client
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -- -p $PORT
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NEXT_PUBLIC_API_HOST
+        fromService:
+          type: web
+          name: legacylift-api
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
+      - key: NEXT_PUBLIC_DEMO_MODE
+        value: "false"

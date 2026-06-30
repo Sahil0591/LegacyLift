@@ -85,6 +85,8 @@ _allow_origins = [
 ]
 if os.getenv("FRONTEND_URL"):
     _allow_origins.append(os.environ["FRONTEND_URL"])
+if os.getenv("FRONTEND_HOST"):
+    _allow_origins.append(f"https://{os.environ['FRONTEND_HOST']}")
 
 app.add_middleware(
     CORSMiddleware,
