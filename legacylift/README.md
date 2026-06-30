@@ -126,6 +126,7 @@ legacylift/
 ├── api/
 │   ├── main.py               ← FastAPI routes, WebSocket endpoint
 │   └── websocket_manager.py  ← WebSocket connection registry + event broadcast
+├── extension/                 ← Chromium MV3 GitHub ownership overlay
 ├── core/
 │   ├── layer0/               ← Archaeology (parse legacy, extract rules)
 │   ├── layer0_5/             ← Target profile (docs, deprecations, gotchas)
@@ -254,6 +255,20 @@ The orchestrator is complete as a skeleton. The main TODO is adding the actual L
 - Optional LLM fallback is conservative: malformed or unrecognized responses keep ownership as `Unknown`.
 - `ownership/guidance.py` generates owner-aware approval checklists, suggested reviewer messages, merge risk, and boundary tests for threshold changes.
 - The local frontend analyzer remains static/offline only and marks ownership as low-confidence inference.
+
+### GitHub Overlay Extension
+
+The Chromium extension in `extension/` renders persisted LegacyLift ownership annotations directly in GitHub PR file diffs and blob views. It calls the backend `GET /github/overlay` endpoint for visible file ranges, injects inline owner/confidence badges, opens a detail panel with change guidance, and sends review actions through `PATCH /github/overlay/annotation/{id}`.
+
+Local checks:
+
+```bat
+cd extension
+npm run type-check
+npm test
+```
+
+Then load `legacylift\extension` as an unpacked Chromium extension and configure the overlay API base URL, reviewer identity, and optional `OVERLAY_DEV_AUTH_TOKEN` in the extension settings.
 
 ---
 

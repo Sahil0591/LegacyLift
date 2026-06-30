@@ -1,0 +1,170 @@
+:root {
+  --ll-surface: #ffffff;
+  --ll-surface-strong: #f6f8fa;
+  --ll-text: #24292f;
+  --ll-muted: #57606a;
+  --ll-border: #d0d7de;
+  --ll-accent: #0969da;
+  --ll-danger: #cf222e;
+  --ll-success: #1a7f37;
+  --ll-shadow: 0 12px 32px rgba(31, 35, 40, 0.18);
+}
+
+.ll-overlay-badge {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  margin: 0 6px;
+  padding: 2px 8px;
+  border: 1px solid rgba(9, 105, 218, 0.35);
+  border-radius: 6px;
+  background: #ddf4ff;
+  color: #0550ae;
+  font: 600 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.ll-overlay-badge:hover {
+  background: #b6e3ff;
+  border-color: rgba(9, 105, 218, 0.6);
+}
+
+.ll-overlay-panel {
+  position: fixed;
+  top: 72px;
+  right: 24px;
+  z-index: 2147483646;
+  width: min(390px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  border: 1px solid var(--ll-border);
+  border-radius: 8px;
+  background: var(--ll-surface);
+  color: var(--ll-text);
+  box-shadow: var(--ll-shadow);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ll-overlay-panel-header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ll-border);
+  background: var(--ll-surface);
+}
+
+.ll-overlay-panel h2,
+.ll-overlay-panel h3,
+.ll-overlay-panel p {
+  margin: 0;
+}
+
+.ll-overlay-panel h2 {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ll-overlay-panel h3 {
+  margin-bottom: 6px;
+  color: var(--ll-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.ll-overlay-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ll-border);
+}
+
+.ll-overlay-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.ll-overlay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ll-overlay-actions h3 {
+  flex: 1 0 100%;
+}
+
+.ll-overlay-action,
+.ll-overlay-icon-button {
+  appearance: none;
+  border: 1px solid var(--ll-border);
+  border-radius: 6px;
+  background: var(--ll-surface-strong);
+  color: var(--ll-text);
+  font: 600 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.ll-overlay-action {
+  padding: 6px 9px;
+}
+
+.ll-overlay-icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+.ll-overlay-action:hover,
+.ll-overlay-icon-button:hover {
+  border-color: var(--ll-accent);
+  color: var(--ll-accent);
+}
+
+.ll-overlay-action[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ll-overlay-state {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 2147483646;
+  max-width: min(380px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--ll-border);
+  border-radius: 8px;
+  background: var(--ll-surface);
+  color: var(--ll-text);
+  box-shadow: var(--ll-shadow);
+  font: 600 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ll-overlay-state-ready {
+  border-color: rgba(26, 127, 55, 0.4);
+  color: var(--ll-success);
+}
+
+.ll-overlay-state-unauthorized,
+.ll-overlay-state-error,
+.ll-overlay-state-unavailable {
+  border-color: rgba(207, 34, 46, 0.4);
+  color: var(--ll-danger);
+}
+
+@media (max-width: 640px) {
+  .ll-overlay-panel {
+    inset: auto 12px 12px 12px;
+    width: auto;
+    max-height: 70vh;
+  }
+
+  .ll-overlay-state {
+    right: 12px;
+    bottom: 12px;
+  }
+}

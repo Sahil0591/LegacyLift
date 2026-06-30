@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LegacyLift Overlay Settings</title>
+    <link rel="stylesheet" href="src/options.css" />
+  </head>
+  <body>
+    <main class="settings-shell">
+      <header>
+        <p class="eyebrow">LegacyLift</p>
+        <h1>GitHub overlay settings</h1>
+      </header>
+
+      <form id="settings-form">
+        <label>
+          <span>Overlay API base URL</span>
+          <input id="apiBaseUrl" name="apiBaseUrl" type="url" required />
+        </label>
+
+        <label>
+          <span>LegacyLift app URL</span>
+          <input id="legacyLiftBaseUrl" name="legacyLiftBaseUrl" type="url" required />
+        </label>
+
+        <label>
+          <span>Reviewer identity</span>
+          <input id="reviewerIdentity" name="reviewerIdentity" type="text" required />
+        </label>
+
+        <label>
+          <span>Dev auth token</span>
+          <input id="devToken" name="devToken" type="password" autocomplete="off" />
+        </label>
+
+        <label class="checkbox-row">
+          <input id="enabled" name="enabled" type="checkbox" />
+          <span>Enable overlay on GitHub</span>
+        </label>
+
+        <button type="submit">Save settings</button>
+        <p id="settings-status" role="status"></p>
+      </form>
+    </main>
+    <script src="src/config.js"></script>
+    <script src="src/options.js"></script>
+  </body>
+</html>
