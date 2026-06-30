@@ -3,6 +3,8 @@ api/main.py — FastAPI application entry point and route definitions.
 
 Routes:
     GET    /health                        — health check
+    GET    /github/overlay                — GitHub code overlay annotations
+    PATCH  /github/overlay/annotation/{id} — mutate overlay review/approval state
     POST   /project                       — create a new project
     POST   /project/{id}/upload           — upload source files
     POST   /project/{id}/start            — kick off the pipeline
@@ -33,6 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from api.github_overlay import router as github_overlay_router
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition
 from db.session import get_session, init_db
@@ -99,6 +102,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(github_overlay_router)
 
 
 # ---------------------------------------------------------------------------

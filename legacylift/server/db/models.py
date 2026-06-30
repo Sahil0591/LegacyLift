@@ -330,8 +330,8 @@ class OwnershipClassification(Base):
 class OwnershipReview(Base, TimestampMixin):
     __tablename__ = "ownership_reviews"
     __table_args__ = (
-        UniqueConstraint("decision_criterion_id", name="uq_ownership_reviews_criterion"),
         Index("ix_ownership_reviews_state", "review_state", "approval_state"),
+        Index("ix_ownership_reviews_criterion_created", "decision_criterion_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -339,6 +339,7 @@ class OwnershipReview(Base, TimestampMixin):
         ForeignKey("decision_criteria.id", ondelete="CASCADE"),
         nullable=False,
     )
+    action: Mapped[str] = mapped_column(String(80), default="inferred", nullable=False)
     original_owner_name: Mapped[str] = mapped_column(String(120), nullable=False)
     current_owner_name: Mapped[str] = mapped_column(String(120), nullable=False)
     review_state: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)

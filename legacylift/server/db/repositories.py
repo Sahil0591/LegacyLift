@@ -728,6 +728,7 @@ async def upsert_ownership_review(
     decision_criterion_id: str,
     original_owner_name: str,
     current_owner_name: str,
+    action: str = "inferred",
     review_state: str = "pending",
     approval_state: str = "pending",
     reviewer_identity: str | None = None,
@@ -736,6 +737,7 @@ async def upsert_ownership_review(
     result = await session.execute(
         select(OwnershipReview).where(
             OwnershipReview.decision_criterion_id == decision_criterion_id,
+            OwnershipReview.action == action,
         )
     )
     review = result.scalar_one_or_none()
@@ -743,6 +745,7 @@ async def upsert_ownership_review(
     if review is None:
         review = OwnershipReview(
             decision_criterion_id=decision_criterion_id,
+            action=action,
             original_owner_name=original_owner_name,
             current_owner_name=current_owner_name,
             review_state=review_state,
@@ -758,6 +761,33 @@ async def upsert_ownership_review(
         review.reviewer_identity = reviewer_identity
         review.reason = reason
 
+    await session.flush()
+    return review
+
+
+async def record_ownership_review_action(
+    session: AsyncSession,
+    *,
+    decision_criterion_id: str,
+    action: str,
+    original_owner_name: str,
+    current_owner_name: str,
+    review_state: str,
+    approval_state: str,
+    reviewer_identity: str | None = None,
+    reason: str | None = None,
+) -> OwnershipReview:
+    review = OwnershipReview(
+        decision_criterion_id=decision_criterion_id,
+        action=action,
+        original_owner_name=original_owner_name,
+        current_owner_name=current_owner_name,
+        review_state=review_state,
+        approval_state=approval_state,
+        reviewer_identity=reviewer_identity,
+        reason=reason,
+    )
+    session.add(review)
     await session.flush()
     return review
 

@@ -105,6 +105,8 @@ curl -X POST http://localhost:8000/api/project/{project_id}/start
 | POST | `/api/project/{id}/approve/{chunk_id}` | Approve a migration chunk |
 | POST | `/api/project/{id}/reject/{chunk_id}` | Reject and regenerate a chunk |
 | POST | `/github/webhook` | GitHub App webhook ingestion for installations, pushes, and PR changes |
+| GET  | `/github/overlay` | Return GitHub code overlay annotations for a repo/ref/path or PR |
+| PATCH | `/github/overlay/annotation/{id}` | Confirm, reassign, flag, request, approve, or waive overlay approval state |
 | GET  | `/api/project/{id}/status` | Get project status and chunk counts |
 | GET  | `/api/project/{id}/rules` | Get extracted business rules |
 | GET  | `/api/project/{id}/graph` | Get dependency graph and risk scores |
@@ -112,6 +114,8 @@ curl -X POST http://localhost:8000/api/project/{project_id}/start
 | WS   | `/ws/{project_id}` | WebSocket event stream |
 
 Interactive API docs: `http://localhost:8000/docs`
+
+`GET /github/overlay` requires `owner`, `repo`, `path`, and either `ref` or `pull_number`; use `start`/`end` or `visible_lines` to limit annotations to the visible GitHub lines. `PATCH /github/overlay/annotation/{id}` requires `X-LegacyLift-User`; set `OVERLAY_DEV_AUTH_TOKEN` and send `Authorization: Bearer <token>` outside demo mode until full GitHub user auth is wired.
 
 ---
 
@@ -163,6 +167,7 @@ Copy `.env.example` to `.env` and configure:
 | `GITHUB_WEBHOOK_SECRET` | *(empty)* | Shared secret for `X-Hub-Signature-256` verification |
 | `GITHUB_CLIENT_ID` | *(empty)* | GitHub App OAuth client ID, reserved for later setup flows |
 | `GITHUB_CLIENT_SECRET` | *(empty)* | GitHub App OAuth client secret, reserved for later setup flows |
+| `OVERLAY_DEV_AUTH_TOKEN` | *(empty)* | Optional temporary bearer token for overlay mutations; `X-LegacyLift-User` is always required, and non-demo mode requires this token until full GitHub auth is wired |
 
 ---
 
