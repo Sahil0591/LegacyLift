@@ -71,6 +71,8 @@ function CompleteState({ approved, total }: { approved: number; total: number })
 export default function ProjectPage({ params }: ProjectPageProps) {
   const projectId = params.id;
   const demo = isDemoProject(projectId);
+  const local = projectId.startsWith("local");
+  const offline = demo || local;
 
   const {
     state,
@@ -101,7 +103,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
   const handleApprove = async (id: string) => {
     markChunkApproved(id);
-    if (demo) {
+    if (offline) {
       advanceDemoChunk();
       setSelectedId(null);
       return;
@@ -111,7 +113,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
   const handleReject = async (id: string, reason: string) => {
     markChunkRejected(id);
-    if (demo) {
+    if (offline) {
       advanceDemoChunk();
       setSelectedId(null);
       return;
