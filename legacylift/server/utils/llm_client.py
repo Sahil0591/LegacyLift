@@ -74,9 +74,14 @@ class LLMClient:
         self.max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
         self.retry_delay: float = float(os.getenv("LLM_RETRY_DELAY", "2"))
 
+        self.base_url: Optional[str] = os.getenv("OPENAI_BASE_URL") or None
+
         # Instantiate client only if key is available
         if OPENAI_AVAILABLE and self.api_key and self.api_key != "sk-your-openai-api-key-here":
-            self._client = AsyncOpenAI(api_key=self.api_key)
+            self._client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,  # None → default OpenAI URL
+            )
         else:
             self._client = None
             if self.demo_mode:

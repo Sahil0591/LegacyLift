@@ -30,6 +30,7 @@ Usage (from api/main.py):
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
 import time
@@ -122,6 +123,9 @@ async def run_pipeline(project: Project) -> None:
         await ws_manager.emit(project.id, "archaeology_started")
         layer0_result = await layer0.run(project)
 
+        # Store serialised chunks so select-chunk can look them up by ID
+        project.layer0_chunks = [dataclasses.asdict(c) for c in layer0_result.chunks]
+
         # Cache summary stats on the project for GET /status
         project.chunk_count = len(layer0_result.chunks)
         project.needs_review_count = sum(
@@ -192,6 +196,134 @@ async def run_pipeline(project: Project) -> None:
             project.id,
             "pipeline_failed",
             error=str(e),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step 5+6: background task triggered by POST /select-chunk
+# ---------------------------------------------------------------------------
+
+async def run_migration_generation(project: Project, chunk_id: str) -> None:
+    """
+    Background task: generate a Python migration for the selected chunk,
+    then automatically run Layer 1 static analysis.
+
+    Called via asyncio.create_task() from the select-chunk endpoint.
+    Broadcasts WebSocket events in order:
+      chunk_started → migration_generated → static_analysis_complete
+    Never raises — errors are caught and broadcast as error events.
+    """
+    try:
+        # ── locate chunk + rule from stored Layer 0 data ───────────────────
+        chunk_dict = next(
+            (c for c in project.layer0_chunks if c["id"] == chunk_id), None
+        )
+        if chunk_dict is None:
+            await ws_manager.emit_error(
+                project.id,
+                "migration",
+                f"Chunk '{chunk_id}' not found in Layer 0 output",
+                recoverable=False,
+            )
+            return
+
+        rule_dict = next(
+            (r for r in project.layer0_rules if r.get("chunk_id") == chunk_id), None
+        )
+
+        # ── gather related chunks from dependency graph ─────────────────────
+        related_ids: set[str] = set()
+        for edge in project.layer0_graph.get("edges", []):
+            if edge.get("source") == chunk_id:
+                related_ids.add(edge["target"])
+            elif edge.get("target") == chunk_id:
+                related_ids.add(edge["source"])
+
+        related_chunks: list[dict] = []
+        rule_by_chunk: dict[str, dict] = {r["chunk_id"]: r for r in project.layer0_rules}
+        for rc in project.layer0_chunks:
+            if rc["id"] in related_ids:
+                rc_rule = rule_by_chunk.get(rc["id"])
+                related_chunks.append({
+                    "name": rc.get("name", ""),
+                    "source": rc.get("source", ""),
+                    "rule": rc_rule["rule"] if rc_rule else "",
+                })
+
+        await ws_manager.emit(
+            project.id,
+            "chunk_started",
+            chunk_id=chunk_id,
+            name=chunk_dict.get("name", chunk_id),
+        )
+
+        # ── generate migration ──────────────────────────────────────────────
+        from core.migration.generator import MigrationInput, generate_migration  # noqa: PLC0415
+
+        migration_input = MigrationInput(
+            chunk_id=chunk_id,
+            chunk_name=chunk_dict.get("name", chunk_id),
+            chunk_source=chunk_dict.get("source", ""),
+            chunk_language=chunk_dict.get("language", "cobol"),
+            business_rule=(
+                rule_dict["rule"] if rule_dict else "No business rule available"
+            ),
+            rule_confidence=float(rule_dict.get("confidence", 0.5)) if rule_dict else 0.5,
+            source_language=str(project.source_language),
+            related_chunks=related_chunks,
+        )
+
+        result = await generate_migration(migration_input)
+
+        # Persist on project
+        project.current_migration = dataclasses.asdict(result)
+
+        await ws_manager.emit(
+            project.id,
+            "migration_generated",
+            chunk_id=chunk_id,
+            migrated_code=result.migrated_code,
+            explanation=result.explanation,
+            confidence=result.confidence,
+        )
+
+        # ── Layer 1: static analysis ────────────────────────────────────────
+        pydantic_chunk = MigrationChunk(
+            id=chunk_id,
+            name=chunk_dict.get("name", chunk_id),
+            source_code=chunk_dict.get("source", ""),
+            migrated_code=result.migrated_code,
+        )
+
+        static_analyser = StaticAnalyser()
+        static_result = await static_analyser.analyse(pydantic_chunk)
+
+        await ws_manager.emit(
+            project.id,
+            "static_analysis_complete",
+            passed=static_result.passed,
+            issues=static_result.issues,
+            chunk_id=chunk_id,
+        )
+
+        logger.info(
+            "Migration + static analysis complete for chunk %s (passed=%s)",
+            chunk_id,
+            static_result.passed,
+        )
+
+    except Exception as exc:
+        logger.error(
+            "run_migration_generation failed for chunk %s: %s",
+            chunk_id,
+            exc,
+            exc_info=True,
+        )
+        await ws_manager.emit_error(
+            project.id,
+            "migration",
+            str(exc),
+            recoverable=True,
         )
 
 
