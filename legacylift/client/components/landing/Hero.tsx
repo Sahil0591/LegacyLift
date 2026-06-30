@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { Github, ArrowRight } from "lucide-react";
+import { DEMO_PROJECT_ID } from "@/lib/demoData";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -61,7 +62,7 @@ export function Hero() {
             />
           </div>
           <Link
-            href="/demo"
+            href={`/project/${DEMO_PROJECT_ID}`}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#7C3AED] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-[#6D28D9]"
           >
             Map my codebase

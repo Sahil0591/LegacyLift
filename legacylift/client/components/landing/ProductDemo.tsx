@@ -87,7 +87,7 @@ function RiskTag({ level }: { level: RiskLevel }) {
 
 function ConnectStage() {
   return (
-    <div className="flex h-full flex-col justify-center gap-6 px-2">
+    <div className="flex h-full flex-col justify-center gap-5 px-0 sm:gap-6 sm:px-2">
       <motion.div {...fade(0)}>
         <div className="mb-2 text-xs font-medium text-sub">
           Repository
@@ -97,7 +97,7 @@ function ConnectStage() {
           <span className="flex-1 truncate font-mono text-sm text-ink">
             github.com/acme-bank/loan-engine
           </span>
-          <span className="rounded-lg bg-[#7C3AED] px-3 py-1 text-xs font-semibold text-white">
+          <span className="shrink-0 rounded-lg bg-[#7C3AED] px-2.5 py-1 text-xs font-semibold text-white sm:px-3">
             Analyze
           </span>
         </div>
@@ -121,7 +121,7 @@ function ConnectStage() {
             transition={{ duration: 1.6, delay: 0.9, ease: "easeInOut" }}
           />
         </div>
-        <div className="mt-2.5 flex gap-4 font-mono text-[11px] text-sub">
+        <div className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-sub sm:gap-4">
           <span>1,284 files</span>
           <span>·</span>
           <span>6 modules</span>
@@ -152,31 +152,33 @@ const FOUND = [
 
 function MapStage() {
   return (
-    <div className="grid h-full grid-cols-5 gap-4">
+    <div className="grid h-full grid-cols-5 gap-4 max-sm:flex max-sm:flex-col max-sm:gap-3">
       {/* File tree */}
       <motion.div
         {...fade(0)}
-        className="col-span-2 rounded-xl border border-ink/8 bg-ink/[0.02] p-3"
+        className="col-span-2 rounded-xl border border-ink/8 bg-ink/[0.02] p-3 max-sm:p-2.5"
       >
         <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-sub">
           <FolderGit2 className="h-3.5 w-3.5" />
           src/
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1 max-sm:grid max-sm:grid-cols-2 max-sm:gap-1 max-sm:space-y-0">
           {FILES.map((f, i) => (
             <motion.div
               key={f.name}
               {...fade(0.15 + i * 0.1)}
-              className={`flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[11px] ${
+              className={`flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[11px] max-sm:min-w-0 max-sm:px-1.5 max-sm:text-[10px] ${
                 f.active
                   ? "bg-[#7C3AED]/10 text-[#7C3AED]"
                   : "text-ink/55"
               }`}
             >
               <FileCode2 className="h-3 w-3 shrink-0" />
-              {f.name}
+              <span className="max-sm:min-w-0 max-sm:truncate">{f.name}</span>
               {f.active && (
-                <span className="ml-auto text-[9px] font-semibold">migrate</span>
+                <span className="ml-auto text-[9px] font-semibold max-sm:hidden">
+                  migrate
+                </span>
               )}
             </motion.div>
           ))}
@@ -184,8 +186,8 @@ function MapStage() {
       </motion.div>
 
       {/* Found functions */}
-      <div className="col-span-3 flex flex-col">
-        <motion.div {...fade(0.2)} className="mb-2.5 flex gap-2">
+      <div className="col-span-3 flex flex-col max-sm:min-h-0 max-sm:flex-1">
+        <motion.div {...fade(0.2)} className="mb-2.5 flex gap-2 max-sm:gap-1.5">
           {[
             { v: "412", l: "functions" },
             { v: "38", l: "rules" },
@@ -193,20 +195,26 @@ function MapStage() {
           ].map((s) => (
             <div
               key={s.l}
-              className={`flex-1 rounded-lg border px-2.5 py-2 ${
+              className={`flex-1 rounded-lg border px-2.5 py-2 max-sm:min-w-0 max-sm:px-2 ${
                 s.accent
-                  ? "border-[#7C3AED]/25 bg-[#7C3AED]/[0.06]"
+                  ? "border-[#7C3AED]/35 bg-[#7C3AED]/10"
                   : "border-ink/8 bg-surface"
               }`}
             >
               <div
                 className={`text-base font-bold ${
-                  s.accent ? "text-[#7C3AED]" : "text-ink"
+                  s.accent ? "text-[#6D28D9] dark:text-[#E9D5FF]" : "text-ink"
                 }`}
               >
                 {s.v}
               </div>
-              <div className="text-[10px] text-sub">{s.l}</div>
+              <div
+                className={`text-[10px] max-sm:truncate ${
+                  s.accent ? "text-[#6D28D9]/80 dark:text-[#C4B5FD]" : "text-sub"
+                }`}
+              >
+                {s.l}
+              </div>
             </div>
           ))}
         </motion.div>
@@ -216,15 +224,15 @@ function MapStage() {
             <motion.div
               key={row.fn}
               {...fade(0.45 + i * 0.12)}
-              className="flex items-center gap-2 rounded-lg border border-ink/8 bg-surface px-3 py-2"
+              className="flex items-center gap-2 rounded-lg border border-ink/8 bg-surface px-3 py-2 max-sm:min-w-0 max-sm:gap-1.5 max-sm:px-2"
             >
-              <span className="font-mono text-xs font-medium text-ink">
+              <span className="font-mono text-xs font-medium text-ink max-sm:min-w-0 max-sm:truncate max-sm:text-[11px]">
                 {row.fn}
               </span>
-              <span className="font-mono text-[10px] text-sub">
+              <span className="font-mono text-[10px] text-sub max-[419px]:hidden">
                 {row.file}
               </span>
-              <span className="ml-auto rounded-full bg-ink/[0.05] px-2 py-0.5 text-[10px] text-sub">
+              <span className="ml-auto rounded-full bg-ink/[0.05] px-2 py-0.5 text-[10px] text-sub max-sm:shrink-0 max-sm:px-1.5 max-sm:text-[9px]">
                 {row.tag}
               </span>
             </motion.div>
@@ -348,10 +356,10 @@ function DepsStage() {
       </div>
       <motion.div
         {...fade(1)}
-        className="mt-2 flex items-center justify-center gap-1.5 rounded-lg border border-[#7C3AED]/20 bg-[#7C3AED]/[0.06] px-2.5 py-1.5"
+        className="mt-2 flex items-center justify-center gap-1.5 rounded-lg border border-[#7C3AED]/20 bg-[#7C3AED]/[0.06] px-2.5 py-1.5 text-center"
       >
         <Network className="h-3 w-3 text-[#7C3AED]" />
-        <span className="text-[11px] text-ink">
+        <span className="text-[10px] leading-snug text-ink sm:text-[11px]">
           <span className="font-semibold">POST-LEDGER</span> · 14 callers ·
           highest fan-in · migrate last
         </span>
@@ -386,16 +394,16 @@ function RiskStage() {
           <motion.div
             key={row.fn}
             {...fade(0.15 + i * 0.12)}
-            className="flex items-center gap-3 rounded-xl border border-ink/8 bg-surface px-3.5 py-2.5"
+            className="flex min-w-0 items-center gap-2 rounded-xl border border-ink/8 bg-surface px-3 py-2.5 sm:gap-3 sm:px-3.5"
             style={{ borderLeft: `3px solid ${RISK[row.level].color}` }}
           >
-            <span className="font-mono text-xs font-medium text-ink">
+            <span className="min-w-0 truncate font-mono text-[11px] font-medium text-ink sm:text-xs">
               {row.fn}
             </span>
-            <span className="font-mono text-[11px] text-sub">
+            <span className="hidden min-w-0 truncate font-mono text-[11px] text-sub min-[420px]:inline">
               {row.reason}
             </span>
-            <span className="ml-auto">
+            <span className="ml-auto shrink-0">
               <RiskTag level={row.level} />
             </span>
           </motion.div>
@@ -425,14 +433,14 @@ const PYTHON = [
 
 function DiffView({ generating }: { generating: boolean }) {
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
       {/* Legacy */}
-      <div className="rounded-xl border border-ink/8 bg-ink/[0.03] p-3">
+      <div className="rounded-xl border border-ink/8 bg-ink/[0.03] p-2.5 sm:p-3">
         <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium text-sub">
           <span className="h-1.5 w-1.5 rounded-full bg-sub" />
           COBOL · legacy
         </div>
-        <pre className="space-y-0.5 font-mono text-[10.5px] leading-relaxed text-ink/55">
+        <pre className="space-y-0.5 overflow-hidden font-mono text-[10px] leading-snug text-ink/55 sm:text-[10.5px] sm:leading-relaxed">
           {COBOL.map((l, i) => (
             <div key={i} className="whitespace-pre">
               {l}
@@ -442,12 +450,12 @@ function DiffView({ generating }: { generating: boolean }) {
       </div>
 
       {/* Modern */}
-      <div className="rounded-xl border border-[#7C3AED]/20 bg-[#7C3AED]/[0.04] p-3">
+      <div className="rounded-xl border border-[#7C3AED]/20 bg-[#7C3AED]/[0.04] p-2.5 sm:p-3">
         <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium text-[#7C3AED]">
           <Sparkles className="h-3 w-3" />
           Python 3.12
         </div>
-        <pre className="space-y-0.5 font-mono text-[10.5px] leading-relaxed text-ink">
+        <pre className="space-y-0.5 overflow-hidden font-mono text-[10px] leading-snug text-ink sm:text-[10.5px] sm:leading-relaxed">
           {PYTHON.map((l, i) => (
             <motion.div
               key={i}
@@ -474,15 +482,15 @@ function DiffView({ generating }: { generating: boolean }) {
 
 function MigrateStage() {
   return (
-    <div className="flex h-full flex-col justify-center gap-3">
+    <div className="flex h-full flex-col justify-center gap-2.5 sm:gap-3">
       <motion.div
         {...fade(0)}
-        className="flex items-center justify-between"
+        className="flex min-w-0 items-center justify-between gap-2"
       >
-        <span className="text-xs font-medium text-ink">
+        <span className="min-w-0 truncate text-xs font-medium text-ink">
           Migrating <span className="font-mono">INTEREST-CALC</span>
         </span>
-        <span className="rounded-full bg-ink/[0.05] px-2 py-0.5 font-mono text-[10px] text-sub">
+        <span className="shrink-0 rounded-full bg-ink/[0.05] px-2 py-0.5 font-mono text-[10px] text-sub">
           chunk 1 of 12
         </span>
       </motion.div>
@@ -493,7 +501,7 @@ function MigrateStage() {
 
       <motion.div
         {...fade(1.4)}
-        className="flex items-center gap-2 font-mono text-[11px] text-sub"
+        className="flex items-center gap-2 font-mono text-[10px] leading-snug text-sub sm:text-[11px]"
       >
         <span className="flex items-center gap-1 text-[#10B981]">
           <Check className="h-3 w-3" /> 3 tests generated from confirmed rule
@@ -511,14 +519,14 @@ function ApproveStage() {
   }, []);
 
   return (
-    <div className="flex h-full flex-col justify-center gap-3">
+    <div className="flex h-full flex-col justify-center gap-2.5 sm:gap-3">
       <motion.div {...fade(0)}>
         <DiffView generating={false} />
       </motion.div>
 
-      <motion.div {...fade(0.3)} className="flex items-center gap-2">
+      <motion.div {...fade(0.3)} className="grid grid-cols-3 gap-1.5 sm:flex sm:items-center sm:gap-2">
         <motion.button
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-semibold text-white"
+          className="flex min-w-0 flex-1 items-center justify-center gap-1 rounded-xl py-2.5 text-[11px] font-semibold text-white sm:gap-1.5 sm:text-xs"
           animate={{
             background: approved ? "#10B981" : "#7C3AED",
             boxShadow: approved
@@ -537,10 +545,10 @@ function ApproveStage() {
             </>
           )}
         </motion.button>
-        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-ink/12 bg-surface py-2.5 text-xs font-semibold text-sub">
+        <button className="flex min-w-0 flex-1 items-center justify-center gap-1 rounded-xl border border-ink/12 bg-surface py-2.5 text-[11px] font-semibold text-sub sm:gap-1.5 sm:text-xs">
           <Pencil className="h-3.5 w-3.5" /> Edit
         </button>
-        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-ink/12 bg-surface py-2.5 text-xs font-semibold text-sub">
+        <button className="flex min-w-0 flex-1 items-center justify-center gap-1 rounded-xl border border-ink/12 bg-surface py-2.5 text-[11px] font-semibold text-sub sm:gap-1.5 sm:text-xs">
           <X className="h-3.5 w-3.5" /> Reject
         </button>
       </motion.div>
@@ -551,7 +559,7 @@ function ApproveStage() {
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="flex items-center justify-center gap-1.5 font-mono text-[11px] text-[#10B981]"
+            className="flex items-center justify-center gap-1.5 text-center font-mono text-[10px] leading-snug text-[#10B981] sm:text-[11px]"
           >
             <CheckCircle2 className="h-3.5 w-3.5" />
             Chunk 1/12 merged · next: APPLY-LATE-FEE
@@ -615,7 +623,7 @@ export function ProductDemo() {
   };
 
   return (
-    <section className="px-6 py-12 sm:py-20">
+    <section className="px-4 py-12 sm:px-6 sm:py-20">
       <div className="mx-auto max-w-5xl">
         <motion.div
           initial={{ opacity: 0, y: 28 }}
@@ -625,19 +633,19 @@ export function ProductDemo() {
           className="glass-strong overflow-hidden rounded-2xl"
         >
           {/* Window chrome */}
-          <div className="flex items-center gap-3 border-b border-ink/8 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2 border-b border-ink/8 px-3 py-3 sm:gap-3 sm:px-4">
             <div className="flex gap-1.5">
               <span className="h-3 w-3 rounded-full bg-[#FF5F57]" />
               <span className="h-3 w-3 rounded-full bg-[#FEBC2E]" />
               <span className="h-3 w-3 rounded-full bg-[#28C840]" />
             </div>
-            <div className="mx-auto flex items-center gap-1.5 rounded-md bg-ink/[0.04] px-3 py-1">
+            <div className="mx-auto hidden min-w-0 items-center gap-1.5 rounded-md bg-ink/[0.04] px-3 py-1 sm:flex">
               <Lock className="h-3 w-3 text-sub" />
-              <span className="font-mono text-[11px] text-sub">
+              <span className="truncate font-mono text-[11px] text-sub">
                 app.legacylift.dev/acme-bank/loan-engine
               </span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               <button
                 onClick={() => setPaused((p) => !p)}
                 aria-label={paused ? "Play demo" : "Pause demo"}
@@ -664,8 +672,8 @@ export function ProductDemo() {
 
           <div className="flex flex-col md:flex-row">
             {/* Stepper rail */}
-            <div className="shrink-0 border-b border-ink/8 px-3 py-3 md:w-52 md:border-b-0 md:border-r md:py-5">
-              <div className="flex gap-2 overflow-x-auto md:flex-col md:gap-1 md:overflow-visible">
+            <div className="min-w-0 shrink-0 border-b border-ink/8 px-2 py-3 sm:px-3 md:w-52 md:border-b-0 md:border-r md:py-5">
+              <div className="grid grid-cols-6 gap-1 sm:flex sm:gap-2 sm:overflow-x-auto md:flex-col md:gap-1 md:overflow-visible">
                 {STAGES.map((s, i) => {
                   const isActive = i === active;
                   const isDone = i < active;
@@ -674,7 +682,7 @@ export function ProductDemo() {
                       key={s.id}
                       onClick={() => goTo(i)}
                       aria-label={`Go to ${s.label}`}
-                      className={`flex shrink-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors md:w-full ${
+                      className={`flex min-w-0 shrink-0 items-center justify-center gap-2 rounded-lg px-1.5 py-2 text-left transition-colors sm:justify-start sm:gap-2.5 sm:px-2.5 md:w-full ${
                         isActive
                           ? "bg-[#7C3AED]/[0.08]"
                           : "hover:bg-ink/[0.05]"
@@ -702,7 +710,7 @@ export function ProductDemo() {
                         <div className="text-[10px] text-sub">{s.hint}</div>
                       </div>
                       <span
-                        className={`text-xs font-medium md:hidden ${
+                        className={`hidden truncate text-xs font-medium sm:inline md:hidden ${
                           isActive ? "text-[#7C3AED]" : "text-sub"
                         }`}
                       >
@@ -715,8 +723,8 @@ export function ProductDemo() {
             </div>
 
             {/* Main panel */}
-            <div className="relative flex-1">
-              <div className="h-[340px] p-5 sm:h-[360px] sm:p-6">
+            <div className="relative min-w-0 flex-1">
+              <div className="h-[380px] overflow-hidden p-4 sm:h-[360px] sm:p-6">
                 <AnimatePresence mode="wait">
                   <motion.div
                     key={stage.id}

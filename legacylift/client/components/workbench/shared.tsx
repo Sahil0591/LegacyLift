@@ -19,6 +19,14 @@ export function scoreToLevel(score: number): RiskLevel {
   return "Low";
 }
 
+// Higher = more attention needed. Used to sort the migration queue.
+export const RISK_RANK: Record<RiskLevel, number> = {
+  Critical: 3,
+  High: 2,
+  Medium: 1,
+  Low: 0,
+};
+
 export function RiskBadge({ level }: { level: RiskLevel }) {
   const r = RISK_META[level];
   return (

@@ -57,6 +57,7 @@ test-results/
 dmypy.json
 .pytype/
 .pyre/
+*.tsbuildinfo
 
 # --- Database ---
 *.db
