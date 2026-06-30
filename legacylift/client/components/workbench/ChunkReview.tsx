@@ -11,6 +11,7 @@ import {
   FlaskConical,
   AlertTriangle,
   CornerDownRight,
+  Loader2,
 } from "lucide-react";
 import type { MigrationChunk } from "@/types/legacylift";
 import { CodeCompare } from "@/components/workbench/CodeCompare";
@@ -20,6 +21,12 @@ interface ChunkReviewProps {
   chunk: MigrationChunk;
   onApprove: (id: string) => void;
   onReject: (id: string, reason: string) => void;
+  /** Re-generate + re-review with Venice; optional reviewer guidance. */
+  onRegenerate?: (instructions?: string) => void;
+  regenerating?: boolean;
+  regenError?: string | null;
+  /** Regenerations left for this chunk (limit). */
+  regenRemaining?: number;
 }
 
 function CheckRow({
@@ -124,11 +131,20 @@ function Checks({ chunk }: { chunk: MigrationChunk }) {
   );
 }
 
-export function ChunkReview({ chunk, onApprove, onReject }: ChunkReviewProps) {
+export function ChunkReview({
+  chunk,
+  onApprove,
+  onReject,
+  onRegenerate,
+  regenerating = false,
+  regenError = null,
+  regenRemaining = Infinity,
+}: ChunkReviewProps) {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const inReview = chunk.status === "Review";
   const statusMeta = STATUS_META[chunk.status];
+  const canRegen = regenRemaining > 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -147,8 +163,35 @@ export function ChunkReview({ chunk, onApprove, onReject }: ChunkReviewProps) {
         >
           {statusMeta.label}
         </span>
-        <span className="ml-auto font-mono text-xs text-sub">{chunk.id}</span>
+        <div className="ml-auto flex items-center gap-3">
+          {onRegenerate && (
+            <button
+              onClick={() => onRegenerate()}
+              disabled={regenerating || !canRegen}
+              title={canRegen ? undefined : "Regeneration limit reached"}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#7C3AED]/30 px-3 py-1.5 text-xs font-semibold text-[#7C3AED] transition-colors hover:bg-[#7C3AED]/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {regenerating ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              {regenerating
+                ? "Generating…"
+                : !canRegen
+                  ? "Limit reached"
+                  : "Regenerate with Venice"}
+            </button>
+          )}
+          <span className="font-mono text-xs text-sub">{chunk.id}</span>
+        </div>
       </div>
+
+      {regenError && (
+        <div className="border-b border-[#DC2626]/30 bg-[#DC2626]/10 px-6 py-2.5 text-xs text-[#DC2626]">
+          {regenError}
+        </div>
+      )}
 
       {/* Scroll body */}
       <div className="flex-1 space-y-5 overflow-y-auto p-6">
@@ -168,18 +211,26 @@ export function ChunkReview({ chunk, onApprove, onReject }: ChunkReviewProps) {
           </div>
         ) : rejecting ? (
           <div className="space-y-3">
-            <label className="text-xs font-medium text-sub">
-              What needs to change? (required)
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-sub">
+                What should change?
+              </label>
+              {Number.isFinite(regenRemaining) && (
+                <span className="text-[11px] text-sub">
+                  {regenRemaining} regeneration{regenRemaining === 1 ? "" : "s"}{" "}
+                  left
+                </span>
+              )}
+            </div>
             <textarea
               autoFocus
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               rows={2}
-              placeholder="e.g. rounding mode doesn't match the legacy ROUNDED behaviour…"
-              className="w-full resize-none rounded-lg border border-ink/15 bg-base px-3 py-2 text-sm text-ink outline-none placeholder:text-sub/50 focus:border-[#DC2626]"
+              placeholder="e.g. use banker's rounding; keep the WS-MAX-INT cap; rename vars to snake_case…"
+              className="w-full resize-none rounded-lg border border-ink/15 bg-base px-3 py-2 text-sm text-ink outline-none placeholder:text-sub/50 focus:border-[#7C3AED]"
             />
-            <div className="flex justify-end gap-2">
+            <div className="flex items-center justify-end gap-2">
               <button
                 onClick={() => {
                   setRejecting(false);
@@ -191,12 +242,30 @@ export function ChunkReview({ chunk, onApprove, onReject }: ChunkReviewProps) {
               </button>
               <button
                 disabled={reason.trim().length < 8}
-                onClick={() => onReject(chunk.id, reason)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-[#DC2626] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#B91C1C] disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => {
+                  onReject(chunk.id, reason);
+                  setRejecting(false);
+                  setReason("");
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#DC2626]/40 px-4 py-2 text-sm font-semibold text-[#DC2626] transition-colors hover:bg-[#DC2626]/10 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <X className="h-4 w-4" />
-                Request changes
+                Reject
               </button>
+              {onRegenerate && (
+                <button
+                  disabled={reason.trim().length < 8 || regenerating || !canRegen}
+                  onClick={() => {
+                    onRegenerate(reason);
+                    setRejecting(false);
+                    setReason("");
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#7C3AED] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#6D28D9] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  Regenerate with changes
+                </button>
+              )}
             </div>
           </div>
         ) : (

@@ -1,63 +1,67 @@
 "use client";
-// app/demo/page.tsx — Start a migration. Two ways in: paste a GitHub repo, or
-// upload legacy source files. Both open the workbench at /project/[id].
+// app/demo/page.tsx — Start a migration. Two ways in: a public GitHub repo, or
+// uploaded source files. Both POST to /api/analyze (rule-based identification +
+// risk), stash the result, and open the workbench.
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { Github, ArrowRight, FolderUp, Lock } from "lucide-react";
 import { Navbar } from "@/components/shared/Navbar";
 import { Footer } from "@/components/shared/Footer";
 import { AmbientBackground } from "@/components/landing/AmbientBackground";
 import { FileUpload } from "@/components/pipeline/FileUpload";
-import { createProject, uploadFiles, startPipeline } from "@/lib/api";
-import { DEMO_PROJECT_ID, DEMO_REPO } from "@/lib/demoData";
+import { storeAnalysis } from "@/lib/projectStore";
+import { DEMO_PROJECT_ID } from "@/lib/demoData";
+import type { AnalyzeResult } from "@/lib/analyze";
 import type { ProjectLanguage } from "@/types/legacylift";
 
-const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 const LANGUAGES: ProjectLanguage[] = ["COBOL", "Java", "VB6"];
+const SAMPLE_REPO = "github.com/aws-samples/aws-mainframe-modernization-carddemo";
 
 type Tab = "repo" | "files";
 
 export default function DemoPage() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("repo");
-  const [repoUrl, setRepoUrl] = useState(DEMO_REPO);
+  const [repoUrl, setRepoUrl] = useState(SAMPLE_REPO);
   const [repoLang, setRepoLang] = useState<ProjectLanguage>("COBOL");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const goToDemo = () => router.push(`/project/${DEMO_PROJECT_ID}`);
-
-  // No public backend yet — a pasted repo runs the seeded sample workbench.
-  const handleRepoSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    goToDemo();
-  };
-
-  const handleFileSubmit = async (
-    files: File[],
-    schema: File | null,
-    language: ProjectLanguage,
-  ) => {
+  const analyzeAndGo = async (payload: {
+    files?: { filename: string; content: string }[];
+    repoUrl?: string;
+  }) => {
     setLoading(true);
     setError(null);
-
-    if (DEMO_MODE) {
-      goToDemo();
-      return;
-    }
-
     try {
-      const { project_id } = await createProject({ name: "Migration", language });
-      await uploadFiles(project_id, files, schema ?? undefined);
-      await startPipeline(project_id);
-      router.push(`/project/${project_id}`);
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Analysis failed");
+      const id = storeAnalysis(data as AnalyzeResult);
+      router.push(`/project/${id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      setError(err instanceof Error ? err.message : "Analysis failed");
       setLoading(false);
     }
+  };
+
+  const handleRepoSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    analyzeAndGo({ repoUrl });
+  };
+
+  const handleFileSubmit = async (files: File[]) => {
+    const contents = await Promise.all(
+      files.map(async (f) => ({ filename: f.name, content: await f.text() })),
+    );
+    await analyzeAndGo({ files: contents });
   };
 
   return (
@@ -76,9 +80,9 @@ export default function DemoPage() {
               Start a migration
             </h1>
             <p className="mt-2 text-sm text-sub">
-              Point LegacyLift at a legacy codebase. It maps every business rule
-              and dependency, scores the risk, and migrates chunk by chunk — with
-              you approving each step.
+              Point LegacyLift at a legacy codebase. It identifies every unit,
+              scores the risk from explicit rules, and migrates chunk by chunk —
+              with you approving each step.
             </p>
           </motion.div>
 
@@ -108,11 +112,6 @@ export default function DemoPage() {
           {error && (
             <div className="mb-5 rounded-xl border border-[#EF4444]/30 bg-[#EF4444]/10 px-4 py-3 text-sm text-[#EF4444]">
               {error}
-              {" — "}
-              <span className="text-sub">
-                Is the backend running at{" "}
-                <code className="text-xs">{process.env.NEXT_PUBLIC_API_URL}</code>?
-              </span>
             </div>
           )}
 
@@ -133,7 +132,7 @@ export default function DemoPage() {
                       htmlFor="repo-url"
                       className="mb-2 block text-sm font-medium text-sub"
                     >
-                      Repository URL
+                      Public repository URL
                     </label>
                     <div className="flex items-center gap-2.5 rounded-xl border border-ink/10 bg-surface/70 px-3.5 py-3 backdrop-blur transition-colors focus-within:border-[#7C3AED]">
                       <Github className="h-4 w-4 shrink-0 text-sub" />
@@ -148,7 +147,8 @@ export default function DemoPage() {
                     </div>
                     <p className="mt-2 flex items-center gap-1.5 text-xs text-sub">
                       <Lock className="h-3 w-3" />
-                      Cloned read-only — LegacyLift never writes back to your repo.
+                      Read-only — we pull up to 25 COBOL files
+                      (.cbl/.cob/.cpy/.jcl) and never write back.
                     </p>
                   </div>
 
@@ -182,13 +182,13 @@ export default function DemoPage() {
                     disabled={loading || repoUrl.trim().length === 0}
                     className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#7C3AED] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-[#6D28D9] disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    {loading ? "Cloning…" : "Analyze repository"}
-                    <ArrowRight className="h-4 w-4" />
+                    {loading ? "Analyzing…" : "Analyze repository"}
+                    {!loading && <ArrowRight className="h-4 w-4" />}
                   </button>
 
                   <p className="text-center text-xs text-sub/70">
-                    Prefilled with a sample COBOL loan engine — hit Analyze to see
-                    the full pipeline on demo data.
+                    Prefilled with a real public COBOL repo — hit Analyze to map it
+                    live.
                   </p>
                 </motion.form>
               ) : (
@@ -206,8 +206,14 @@ export default function DemoPage() {
           </div>
 
           <p className="mt-6 text-center text-xs text-sub/70">
-            Nothing leaves your machine until you start the analysis · tree-sitter
-            parsing · human-gated merges
+            Files are analysed in your browser session · risk is rule-based ·
+            humans approve every merge ·{" "}
+            <Link
+              href={`/project/${DEMO_PROJECT_ID}`}
+              className="text-[#7C3AED] underline-offset-2 hover:underline"
+            >
+              explore the sample workbench
+            </Link>
           </p>
         </main>
         <Footer />
