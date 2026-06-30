@@ -64,6 +64,18 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
+/**
+ * POST a JSON body to the backend API and return the parsed JSON response.
+ * Goes through the same base-URL + Clerk-auth + error-normalisation path as
+ * every other backend call. Used by lib/migration.ts for the LLM endpoints.
+ */
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  return await request<T>(path, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 function toSourceLanguage(language: ProjectLanguage): string {
   return language;
 }

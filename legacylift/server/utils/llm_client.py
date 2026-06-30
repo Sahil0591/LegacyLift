@@ -94,6 +94,14 @@ class LLMClient:
     # Public API
     # -----------------------------------------------------------------------
 
+    def is_configured(self) -> bool:
+        """True when a real Venice client is available (key set, not DEMO).
+
+        Lets route handlers return a clear "not configured" response instead of
+        silently emitting the DEMO_RESPONSE placeholder.
+        """
+        return self._client is not None
+
     async def complete(
         self,
         system: str,

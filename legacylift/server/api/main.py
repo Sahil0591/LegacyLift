@@ -27,16 +27,24 @@ from dotenv import find_dotenv, load_dotenv
 
 load_dotenv(find_dotenv(usecwd=True))
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from api.auth import get_current_user_id
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition
 from core.storage import storage
 from models.project import Project, SourceLanguage, UploadedFile
+from utils.llm_client import DEMO_RESPONSE, LLMClient
+from utils.migration_prompts import (
+    build_migration_prompt,
+    build_review_prompt,
+    build_test_prompt,
+    parse_json_loose,
+    strip_code_fence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -645,6 +653,216 @@ async def get_user_limits(user_id: str = Depends(get_current_user_id)):
         "migrations_today":        lim.migrations_today,
         "migrations_remaining":    lim.migrations_remaining_today,
     }
+
+
+# ===========================================================================
+# On-demand LLM endpoints — the "Regenerate" workflow.
+#
+# These proxy a single Venice call (generate / review / generate-tests) for one
+# code unit. The frontend used to host its own Venice client; it now calls these
+# so the Venice key lives only on the backend. Responses are sanitized: the
+# client never sees a raw Venice error, status code, or stack trace.
+# ===========================================================================
+
+class _BusinessRuleIn(BaseModel):
+    title: str = ""
+    description: str = ""
+    hardcoded_values: list[str] = Field(default_factory=list)
+
+
+class _TargetProfileIn(BaseModel):
+    language: str = "Python"
+    version: str = ""
+    test_framework: str = ""
+    notes: str = ""
+
+
+class MigrateUnitRequest(BaseModel):
+    name: str
+    source_code: str
+    source_lang: str = "COBOL"
+    target_lang: str = "Python"
+    business_rules: list[_BusinessRuleIn] = Field(default_factory=list)
+    target_profile: Optional[_TargetProfileIn] = None
+    instructions: Optional[str] = None
+
+
+class ReviewUnitRequest(BaseModel):
+    name: str
+    source_code: str
+    migrated_code: str
+    source_lang: str = "COBOL"
+    target_lang: str = "Python"
+
+
+class TestsUnitRequest(BaseModel):
+    name: str
+    migrated_code: str
+    target_lang: str = "Python"
+
+
+# --- Lazy LLM client singleton (re-uses one AsyncOpenAI connection pool) -----
+
+_llm_client: Optional[LLMClient] = None
+
+
+def _get_llm() -> LLMClient:
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = LLMClient()
+    return _llm_client
+
+
+# --- Minimal in-memory rate limiter (per client IP, sliding window) ----------
+# Mirrors the 20-req/60s cap the old Next.js routes enforced. Single-instance
+# only; for multi-instance deploys move this to Redis.
+
+_rl_hits: dict[str, list[float]] = {}
+_RL_LIMIT = int(os.getenv("LLM_ROUTE_RATE_LIMIT", "20"))
+_RL_WINDOW = 60.0
+
+
+def _rate_limit(request: Request, bucket: str) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"{bucket}:{client_ip}"
+    now = asyncio.get_event_loop().time()
+    hits = [t for t in _rl_hits.get(key, []) if now - t < _RL_WINDOW]
+    if len(hits) >= _RL_LIMIT:
+        retry_after = int(_RL_WINDOW - (now - hits[0])) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many requests — try again in {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    hits.append(now)
+    _rl_hits[key] = hits
+
+
+def _require_configured(llm: LLMClient) -> None:
+    if not llm.is_configured():
+        raise HTTPException(
+            status_code=501,
+            detail="AI code generation is not configured on the server.",
+        )
+
+
+def _ensure_real_output(content: str) -> str:
+    """Reject the DEMO/error sentinel so we never return placeholder junk.
+
+    LLMClient.complete() swallows Venice errors and returns DEMO_RESPONSE; treat
+    that (and empty output) as a sanitized upstream failure.
+    """
+    if not content or not content.strip() or content.strip() == DEMO_RESPONSE.strip():
+        raise HTTPException(
+            status_code=502,
+            detail="The AI service is temporarily unavailable. Please try again.",
+        )
+    return content
+
+
+# ---------------------------------------------------------------------------
+# POST /llm/migrate
+# ---------------------------------------------------------------------------
+
+@app.post("/llm/migrate")
+async def llm_migrate(body: MigrateUnitRequest, request: Request):
+    """Generate a migrated unit from legacy source. Returns {migrated_code, model}."""
+    _rate_limit(request, "migrate")
+    llm = _get_llm()
+    _require_configured(llm)
+
+    system, user = build_migration_prompt(
+        name=body.name,
+        source_code=body.source_code,
+        source_lang=body.source_lang,
+        target_lang=body.target_lang,
+        business_rules=[r.model_dump() for r in body.business_rules],
+        target_profile=body.target_profile.model_dump() if body.target_profile else None,
+        instructions=body.instructions,
+    )
+    content = await llm.complete(system=system, user=user, temperature=0.1, max_tokens=8000)
+    content = _ensure_real_output(content)
+    return {"migrated_code": strip_code_fence(content), "model": llm.model}
+
+
+# ---------------------------------------------------------------------------
+# POST /llm/review
+# ---------------------------------------------------------------------------
+
+@app.post("/llm/review")
+async def llm_review(body: ReviewUnitRequest, request: Request):
+    """AI semantic-equivalence review of a migrated unit. Returns an AIReviewResult."""
+    _rate_limit(request, "review")
+    llm = _get_llm()
+    _require_configured(llm)
+
+    system, user = build_review_prompt(
+        name=body.name,
+        source_lang=body.source_lang,
+        target_lang=body.target_lang,
+        source_code=body.source_code,
+        migrated_code=body.migrated_code,
+    )
+    content = await llm.complete(system=system, user=user, temperature=0.1, max_tokens=5000)
+    content = _ensure_real_output(content)
+
+    parsed = parse_json_loose(content)
+    if not parsed:
+        return {
+            "equivalent": False,
+            "confidence": "Low",
+            "ai_confidence": "Low",
+            "issues_found": 1,
+            "critical_issues": [],
+            "warnings": ["Review model returned unstructured output."],
+            "suggestions": [],
+            "raw_response": content[:1000],
+        }
+
+    critical = parsed.get("critical_issues") or []
+    warnings = parsed.get("warnings") or []
+    issues = parsed.get("issues_found")
+    if not isinstance(issues, int):
+        issues = len(critical) + len(warnings)
+    confidence = parsed.get("confidence") or "Medium"
+
+    return {
+        "equivalent": bool(parsed.get("equivalent")),
+        "confidence": confidence,
+        "ai_confidence": confidence,
+        "issues_found": issues,
+        "critical_issues": critical,
+        "warnings": warnings,
+        "suggestions": parsed.get("suggestions") or [],
+        "raw_response": "",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /llm/tests
+# ---------------------------------------------------------------------------
+
+@app.post("/llm/tests")
+async def llm_tests(body: TestsUnitRequest, request: Request):
+    """Generate pytest tests for a migrated unit. Returns {tests, code}."""
+    _rate_limit(request, "tests")
+    llm = _get_llm()
+    _require_configured(llm)
+
+    system, user = build_test_prompt(
+        name=body.name,
+        migrated_code=body.migrated_code,
+        target_lang=body.target_lang,
+    )
+    content = await llm.complete(system=system, user=user, temperature=0.2, max_tokens=6000)
+    content = _ensure_real_output(content)
+
+    parsed = parse_json_loose(content) or {}
+    tests = [
+        t for t in (parsed.get("tests") or [])
+        if isinstance(t, dict) and isinstance(t.get("name"), str)
+    ][:8]
+    return {"tests": tests, "code": parsed.get("code") or ""}
 
 
 # ---------------------------------------------------------------------------

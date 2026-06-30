@@ -1,6 +1,9 @@
-// lib/migration.ts — Client-side helpers that call the Venice-backed API routes
-// (/api/migrate, /api/review). Safe to import from client components.
+// lib/migration.ts — Client-side helpers for the on-demand "Regenerate" flow.
+// These call the BACKEND's LLM endpoints (/llm/migrate, /llm/review, /llm/tests)
+// over the same authenticated channel as the rest of the API. The frontend holds
+// no Venice key, prompts, or SDK — all of that lives in the Python backend.
 
+import { apiPost } from "@/lib/api";
 import type {
   AIReviewResult,
   BusinessRule,
@@ -32,25 +35,18 @@ export interface ReviewInput {
   targetLang?: string;
 }
 
-async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(
-      (data as { error?: string }).error ?? `Request failed (${res.status})`,
-    );
-  }
-  return data as T;
-}
-
 export function generateMigration(
   input: GenerateInput,
 ): Promise<{ migrated_code: string; model: string }> {
-  return postJson("/api/migrate", input);
+  return apiPost("/llm/migrate", {
+    name: input.name,
+    source_code: input.sourceCode,
+    source_lang: input.sourceLang ?? "COBOL",
+    target_lang: input.targetLang ?? "Python",
+    business_rules: input.businessRules ?? [],
+    target_profile: input.targetProfile ?? null,
+    instructions: input.instructions ?? null,
+  });
 }
 
 export interface GeneratedTests {
@@ -63,15 +59,25 @@ export function generateTests(input: {
   migratedCode: string;
   targetLang?: string;
 }): Promise<GeneratedTests> {
-  return postJson("/api/tests", input);
+  return apiPost("/llm/tests", {
+    name: input.name,
+    migrated_code: input.migratedCode,
+    target_lang: input.targetLang ?? "Python",
+  });
 }
 
 export async function reviewMigration(
   input: ReviewInput,
 ): Promise<AIReviewResult> {
-  const data = await postJson<Partial<AIReviewResult> & { confidence?: string }>(
-    "/api/review",
-    input,
+  const data = await apiPost<Partial<AIReviewResult> & { confidence?: string }>(
+    "/llm/review",
+    {
+      name: input.name,
+      source_code: input.sourceCode,
+      migrated_code: input.migratedCode,
+      source_lang: input.sourceLang ?? "COBOL",
+      target_lang: input.targetLang ?? "Python",
+    },
   );
   return {
     issues_found: data.issues_found ?? 0,
