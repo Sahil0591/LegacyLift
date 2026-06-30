@@ -75,10 +75,10 @@ class OwnershipResult(BaseModel):
     Stored back onto the BusinessRule after classification.
     """
 
-    primary_owner: OwnershipCategory = OwnershipCategory.UNKNOWN
+    primary_owner: str = OwnershipCategory.UNKNOWN.value
     """Main functional group responsible for this rule."""
 
-    secondary_owners: list[OwnershipCategory] = Field(default_factory=list)
+    secondary_owners: list[str] = Field(default_factory=list)
     """Other groups that have a stake (e.g. Finance rule also touches Risk)."""
 
     confidence: OwnershipConfidence = OwnershipConfidence.LOW
@@ -86,6 +86,12 @@ class OwnershipResult(BaseModel):
 
     evidence: str = ""
     """Human-readable reasoning, e.g. 'Rule involves monetary thresholds'."""
+
+    matched_signals: list[str] = Field(default_factory=list)
+    """Keywords, aliases, or contextual terms that drove the assignment."""
+
+    review_status: str = "Inferred"
+    """Review lifecycle marker for overlay clients."""
 
     actual_person: Optional[str] = None
     """
@@ -95,6 +101,18 @@ class OwnershipResult(BaseModel):
 
     class Config:
         use_enum_values = True
+
+
+class ChangeGuidanceResult(BaseModel):
+    """Owner-aware guidance for developers changing a decision criterion."""
+
+    risk_summary: str = ""
+    primary_approval_group: str = OwnershipCategory.UNKNOWN.value
+    secondary_groups: list[str] = Field(default_factory=list)
+    approval_checklist: list[str] = Field(default_factory=list)
+    suggested_tests: list[str] = Field(default_factory=list)
+    suggested_message: str = ""
+    merge_risk: str = "Unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +179,7 @@ class BusinessRule(BaseModel):
     """Current human-review lifecycle state."""
 
     # --- Ownership fields (populated by ownership/classifier.py) ---
-    ownership_category: OwnershipCategory = OwnershipCategory.UNKNOWN
+    ownership_category: str = OwnershipCategory.UNKNOWN.value
     """Primary owning functional group — set after classify_rule_ownership()."""
 
     ownership_evidence: str = ""

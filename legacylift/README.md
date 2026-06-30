@@ -190,12 +190,14 @@ Every file has a status and a clear owner. The skeleton runs end-to-end with stu
 | `core/layer2/ai_reviewer.py` | LLM semantic equivalence reviewer | 🔧 Stub | Wire `self.gotchas` from Layer 0.5; harden JSON parsing |
 | `core/layer3/test_generator.py` | LLM test generation + in-process runner | 🔧 Stub | Replace `exec()` runner with `subprocess` + JUnit XML parsing |
 | `core/layer4/schema_validator.py` | Schema table coverage checker | 🔧 Stub | Replace text search with SQLAlchemy model reflection |
-| `ownership/classifier.py` | **Simonra's ownership classifier** | 🔧 Stub | **Simonra: implement `_llm_classify()`, git blame parsing, docs search** |
+| `ownership/classifier.py` | **Simonra's ownership classifier** | ✅ Done | Deterministic keyword/alias scoring with custom groups; deepen optional git/docs evidence as real inputs arrive |
+| `ownership/guidance.py` | Owner-aware change guidance | ✅ Done | Tune risk summaries and suggested tests with production review data |
 | `demo/sample_cobol/interest_calc.cbl` | Tiered interest rate COBOL (BR-001–003, COMP-3) | ✅ Done | Demo data |
 | `demo/sample_cobol/account_master.cbl` | Account lookup/update COBOL (reads 2 tables, writes 2) | ✅ Done | Demo data |
 | `demo/sample_cobol/end_of_day_batch.cbl` | EOD batch orchestrator COBOL (most complex, 170 lines) | ✅ Done | Demo data |
 | `demo/sample_schema/legacy_bank.sql` | 8-table legacy schema matching the COBOL files | ✅ Done | Demo data |
-| `tests/test_pipeline.py` | 37 smoke tests — all passing | ✅ Done | Replace stub assertions with semantic ones as layers are implemented |
+| `tests/test_pipeline.py` | Pipeline smoke tests — all passing | ✅ Done | Replace remaining stub assertions with semantic ones as layers are implemented |
+| `tests/test_ownership_plan02.py` | Classifier, custom group, guidance, and persistence tests | ✅ Done | Add overlay API tests when Plan 04 exposes guidance |
 | `Dockerfile` | Multi-stage production build, Azure-compatible PORT env var | ✅ Done | Bump VM size for prod load |
 | `deploy.sh` | Azure Container Registry build + deploy script | ✅ Done | Set ACR name before running |
 | `azure-deploy.md` | Step-by-step Azure App Service deployment guide | ✅ Done | — |
@@ -236,9 +238,11 @@ The orchestrator is complete as a skeleton. The main TODO is adding the actual L
 - Replace text-search with SQLAlchemy model reflection for stronger coverage checking.
 
 ### Ownership Classifier (`ownership/classifier.py`) — **Simonra**
-- Implement `_llm_classify()` with a full classification prompt.
-- Implement git blame parsing in `_extract_person_from_git_log()`.
-- Wire docs search.
+- Backend ownership is now canonical for persisted overlay records.
+- The classifier scores default and custom groups by keywords and aliases, records matched signals, and falls back to `Unknown` with low confidence when evidence is weak.
+- Optional LLM fallback is conservative: malformed or unrecognized responses keep ownership as `Unknown`.
+- `ownership/guidance.py` generates owner-aware approval checklists, suggested reviewer messages, merge risk, and boundary tests for threshold changes.
+- The local frontend analyzer remains static/offline only and marks ownership as low-confidence inference.
 
 ---
 
@@ -251,7 +255,7 @@ REM For async tests (all pipeline tests are async):
 .venv\Scripts\pytest legacylift/tests/ -v --asyncio-mode=auto
 ```
 
-All tests pass in DEMO_MODE without an OpenAI key. The full test suite runs in under 10 seconds.
+All tests pass in DEMO_MODE without an OpenAI key. The server suite is currently 57 tests and runs in under 10 seconds.
 
 ---
 

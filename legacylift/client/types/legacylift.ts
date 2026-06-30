@@ -17,7 +17,8 @@ export type OwnershipCategory =
   | "Risk"
   | "Ops"
   | "Engineering"
-  | "Unknown";
+  | "Unknown"
+  | (string & {});
 
 export type OwnershipConfidence = "High" | "Medium" | "Low";
 
@@ -38,7 +39,19 @@ export interface OwnershipResult {
   secondary_owners: OwnershipCategory[];
   confidence: OwnershipConfidence;
   evidence: string;
+  matched_signals: string[];
+  review_status: string;
   actual_person: string | null;
+}
+
+export interface ChangeGuidanceResult {
+  risk_summary: string;
+  primary_approval_group: OwnershipCategory;
+  secondary_groups: OwnershipCategory[];
+  approval_checklist: string[];
+  suggested_tests: string[];
+  suggested_message: string;
+  merge_risk: "Low" | "Medium" | "High" | "Unknown" | (string & {});
 }
 
 // ---------------------------------------------------------------------------

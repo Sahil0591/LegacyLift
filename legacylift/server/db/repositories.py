@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import select
@@ -76,6 +77,7 @@ class PersistedLayer0Summary:
     criterion_count: int
     classification_count: int
     review_count: int
+    guidance_count: int = 0
 
 
 def source_hash(source: str) -> str:
@@ -92,6 +94,66 @@ def _get_first(obj: Any, names: tuple[str, ...], default: Any = None) -> Any:
         if value not in (None, ""):
             return value
     return default
+
+
+def _confidence_value(value: Any) -> float:
+    raw = getattr(value, "value", value)
+    if isinstance(raw, (int, float)):
+        return max(0.0, min(1.0, float(raw)))
+
+    normalized = str(raw or "").lower()
+    if normalized == "high":
+        return 0.9
+    if normalized == "medium":
+        return 0.6
+    if normalized == "low":
+        return 0.25
+    return 0.0
+
+
+def _project_custom_ownership_groups(project: Any) -> list[dict[str, Any]]:
+    raw_groups = _get_first(
+        project,
+        ("custom_ownership_groups", "ownership_groups", "owner_groups"),
+        [],
+    )
+    if not isinstance(raw_groups, list):
+        return []
+
+    groups: list[dict[str, Any]] = []
+    for raw in raw_groups:
+        if isinstance(raw, dict):
+            name = raw.get("name")
+            description = raw.get("description", "")
+            aliases = raw.get("aliases", [])
+            color = raw.get("color", "#64748b")
+            is_default = raw.get("is_default", False)
+        else:
+            name = getattr(raw, "name", None)
+            description = getattr(raw, "description", "")
+            aliases = getattr(raw, "aliases", [])
+            color = getattr(raw, "color", "#64748b")
+            is_default = getattr(raw, "is_default", False)
+
+        if isinstance(aliases, str):
+            try:
+                parsed_aliases = json.loads(aliases)
+                aliases = parsed_aliases if isinstance(parsed_aliases, list) else [aliases]
+            except json.JSONDecodeError:
+                aliases = [aliases]
+
+        if name:
+            groups.append(
+                {
+                    "name": str(name),
+                    "description": str(description or ""),
+                    "aliases": [str(alias) for alias in aliases or []],
+                    "color": str(color or "#64748b"),
+                    "is_default": bool(is_default),
+                }
+            )
+
+    return groups
 
 
 async def upsert_repository(
@@ -225,6 +287,46 @@ async def seed_default_ownership_groups(
 
     await session.flush()
     return groups
+
+
+async def upsert_ownership_group(
+    session: AsyncSession,
+    *,
+    name: str,
+    repository_id: str | None = None,
+    description: str = "",
+    aliases: list[str] | None = None,
+    color: str = "#64748b",
+    is_default: bool = False,
+) -> OwnershipGroup:
+    result = await session.execute(
+        select(OwnershipGroup).where(
+            OwnershipGroup.repository_id.is_(None)
+            if repository_id is None
+            else OwnershipGroup.repository_id == repository_id,
+            OwnershipGroup.name == name,
+        )
+    )
+    group = result.scalar_one_or_none()
+
+    if group is None:
+        group = OwnershipGroup(
+            repository_id=repository_id,
+            name=name,
+            description=description,
+            aliases_json=_json(aliases or []),
+            color=color,
+            is_default=is_default,
+        )
+        session.add(group)
+    else:
+        group.description = description
+        group.aliases_json = _json(aliases or [])
+        group.color = color
+        group.is_default = is_default
+
+    await session.flush()
+    return group
 
 
 async def upsert_code_chunk(
@@ -464,6 +566,19 @@ async def persist_layer0_analysis(
     )
     await upsert_commit(session, repository_id=repository.id, sha=commit_sha, ref=ref)
     groups = await seed_default_ownership_groups(session, repository_id=repository.id)
+    custom_group_defs = _project_custom_ownership_groups(project)
+    for group_def in custom_group_defs:
+        groups.append(
+            await upsert_ownership_group(
+                session,
+                repository_id=repository.id,
+                name=group_def["name"],
+                description=group_def["description"],
+                aliases=group_def["aliases"],
+                color=group_def["color"],
+                is_default=group_def["is_default"],
+            )
+        )
     group_by_name = {group.name: group for group in groups}
 
     rule_by_chunk_id = {str(getattr(rule, "chunk_id", "")): rule for rule in business_rules}
@@ -471,18 +586,26 @@ async def persist_layer0_analysis(
     criterion_ids: set[str] = set()
     classification_ids: set[str] = set()
     review_ids: set[str] = set()
+    guidance_ids: set[str] = set()
+
+    from ownership.classifier import classify_rule_ownership  # noqa: PLC0415
+    from ownership.guidance import generate_change_guidance  # noqa: PLC0415
 
     for chunk in chunks:
+        path = str(_get_first(chunk, ("path", "filename"), "unknown"))
+        source = str(_get_first(chunk, ("source", "source_code"), ""))
+        start_line = int(getattr(chunk, "start_line", 0) or 0)
+        end_line = int(getattr(chunk, "end_line", 0) or 0)
         persisted_chunk = await upsert_code_chunk(
             session,
             repository_id=repository.id,
             commit_sha=commit_sha,
-            path=str(_get_first(chunk, ("path", "filename"), "unknown")),
+            path=path,
             name=str(getattr(chunk, "name", "unknown")),
             language=str(getattr(chunk, "language", "unknown")),
-            start_line=int(getattr(chunk, "start_line", 0) or 0),
-            end_line=int(getattr(chunk, "end_line", 0) or 0),
-            source=str(_get_first(chunk, ("source", "source_code"), "")),
+            start_line=start_line,
+            end_line=end_line,
+            source=source,
         )
         chunk_ids.add(persisted_chunk.id)
 
@@ -490,24 +613,55 @@ async def persist_layer0_analysis(
         if rule is None:
             continue
 
-        owner_name = str(getattr(rule, "owner", "Unknown") or "Unknown")
-        evidence = str(getattr(rule, "owner_reasoning", "") or "")
+        summary = str(getattr(rule, "rule", "") or "Business rule requires review.")
+        title = summary.split(".", 1)[0][:120] or "Business rule"
+        original_owner_name = str(getattr(rule, "owner", "Unknown") or "Unknown")
+        original_evidence = str(getattr(rule, "owner_reasoning", "") or "")
         hardcoded_values = list(getattr(rule, "key_variables", []) or [])
-        confidence = float(getattr(rule, "confidence", 0.0) or 0.0)
+        extraction_confidence = float(getattr(rule, "confidence", 0.0) or 0.0)
+        classification_input = SimpleNamespace(
+            id=getattr(rule, "id", None),
+            title=title,
+            description=summary,
+            rule=summary,
+            source_file=path,
+            filename=path,
+            source_lines=(start_line, end_line),
+            hardcoded_values=hardcoded_values,
+            key_variables=hardcoded_values,
+            owner_reasoning=original_evidence,
+        )
+        ownership = await classify_rule_ownership(
+            classification_input,
+            groups=custom_group_defs,
+        )
+        owner_name = ownership.primary_owner
+        owner_confidence = _confidence_value(ownership.confidence)
+
+        guidance = generate_change_guidance(
+            rule=classification_input,
+            ownership=ownership,
+            change_text=source,
+            hardcoded_values=hardcoded_values,
+        )
+
         criterion = await upsert_decision_criterion(
             session,
             code_chunk_id=persisted_chunk.id,
-            summary=str(getattr(rule, "rule", "") or "Business rule requires review."),
+            summary=summary,
             hardcoded_values=hardcoded_values,
             evidence={
                 "layer0_rule_id": getattr(rule, "id", None),
                 "chunk_id": getattr(rule, "chunk_id", None),
+                "layer0_owner": original_owner_name,
+                "layer0_owner_reasoning": original_evidence,
                 "owner": owner_name,
-                "owner_reasoning": evidence,
+                "owner_reasoning": ownership.evidence,
+                "matched_signals": ownership.matched_signals,
                 "needs_review": bool(getattr(rule, "needs_review", False)),
                 "extraction_error": getattr(rule, "extraction_error", None),
             },
-            confidence=confidence,
+            confidence=extraction_confidence,
         )
         criterion_ids.add(criterion.id)
 
@@ -517,22 +671,35 @@ async def persist_layer0_analysis(
             decision_criterion_id=criterion.id,
             owner_group_id=owner_group.id if owner_group else None,
             owner_name=owner_name,
-            confidence=confidence,
-            evidence=evidence,
-            matched_signals=hardcoded_values,
-            inferred_by="layer0",
+            confidence=owner_confidence,
+            evidence=ownership.evidence,
+            matched_signals=ownership.matched_signals,
+            inferred_by="classifier",
         )
         classification_ids.add(classification.id)
 
         review = await upsert_ownership_review(
             session,
             decision_criterion_id=criterion.id,
-            original_owner_name=owner_name,
+            original_owner_name=original_owner_name,
             current_owner_name=owner_name,
             review_state="pending",
             approval_state="pending",
         )
         review_ids.add(review.id)
+
+        guidance_row = await upsert_change_guidance(
+            session,
+            decision_criterion_id=criterion.id,
+            risk_summary=guidance.risk_summary,
+            primary_approval_group=guidance.primary_approval_group,
+            secondary_groups=guidance.secondary_groups,
+            approval_checklist=guidance.approval_checklist,
+            suggested_tests=guidance.suggested_tests,
+            suggested_message=guidance.suggested_message,
+            merge_risk=guidance.merge_risk,
+        )
+        guidance_ids.add(guidance_row.id)
 
     await session.flush()
     return PersistedLayer0Summary(
@@ -542,4 +709,5 @@ async def persist_layer0_analysis(
         criterion_count=len(criterion_ids),
         classification_count=len(classification_ids),
         review_count=len(review_ids),
+        guidance_count=len(guidance_ids),
     )
