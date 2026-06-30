@@ -60,6 +60,7 @@ dmypy.json
 *.tsbuildinfo
 
 # --- Database ---
+server/.data/
 *.db
 *.sqlite
 *.sqlite3

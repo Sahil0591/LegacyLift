@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition
+from db.session import init_db
 from models.project import Project, ProjectStatus, SourceLanguage, UploadedFile
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI):
     print(f"  LLM MODEL:    {os.getenv('VENICE_MODEL', 'openai-gpt-52-codex')}")
     print(f"  AUTO_APPROVE: {os.getenv('AUTO_APPROVE', 'false')}")
     print("=" * 60)
+    await init_db()
     yield
     print("LegacyLift API shutting down...")
 
