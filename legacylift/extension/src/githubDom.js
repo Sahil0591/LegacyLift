@@ -2,7 +2,7 @@
 (function attachGitHubDom(global) {
   const namespace = /** @type {any} */ (global.LegacyLiftOverlay = global.LegacyLiftOverlay || {});
 
-  const FILE_SELECTORS = ".js-file, [data-file-path], [data-path], [data-file-name], .file";
+  const FILE_SELECTORS = "copilot-diff-entry, .js-file, [data-file-path], [data-tagsearch-path], [data-path], [data-file-name], .file";
   const LINE_SELECTORS = "[data-line-number], [data-line], .blob-num, [id^=\"L\"], [id^=\"LC\"]";
 
   function toArray(value) {
@@ -16,14 +16,24 @@
   function extractFilePath(fileElement) {
     const direct =
       getAttribute(fileElement, "data-file-path") ||
+      getAttribute(fileElement, "data-tagsearch-path") ||
       getAttribute(fileElement, "data-path") ||
       getAttribute(fileElement, "data-file-name");
     if (direct) return direct;
 
     const titled = fileElement.querySelector
-      ? fileElement.querySelector(".file-info a[title], [data-testid=\"diff-file-header\"] [title], a[title], [title]")
+      ? fileElement.querySelector(
+          "[data-file-path], [data-tagsearch-path], [data-path], [data-file-name], .file-info a[title], [data-testid=\"diff-file-header\"] [title], a[title], [title]",
+        )
       : null;
-    return titled ? getAttribute(titled, "title") : null;
+    if (!titled) return null;
+    return (
+      getAttribute(titled, "data-file-path") ||
+      getAttribute(titled, "data-tagsearch-path") ||
+      getAttribute(titled, "data-path") ||
+      getAttribute(titled, "data-file-name") ||
+      getAttribute(titled, "title")
+    );
   }
 
   function lineNumberFromElement(element) {
@@ -48,6 +58,22 @@
     return [...new Set(lines)].sort((a, b) => a - b);
   }
 
+  function extractPageFilePath(root) {
+    if (!root.querySelector) return null;
+    const candidate = root.querySelector(
+      "[data-file-path], [data-tagsearch-path], [data-path], [data-file-name], a[href^=\"#diff-\"][title], a[href^=\"#diff-\"], .file-info a[title], .Truncate-text[title], .file-header [title]",
+    );
+    if (!candidate) return null;
+    const path =
+      getAttribute(candidate, "data-file-path") ||
+      getAttribute(candidate, "data-tagsearch-path") ||
+      getAttribute(candidate, "data-path") ||
+      getAttribute(candidate, "data-file-name") ||
+      getAttribute(candidate, "title") ||
+      (candidate.textContent ? String(candidate.textContent).trim() : null);
+    return path && !path.includes("\n") ? path : null;
+  }
+
   function extractVisibleFiles(root, context) {
     const files = toArray(root.querySelectorAll ? root.querySelectorAll(FILE_SELECTORS) : [])
       .map((fileElement) => {
@@ -61,7 +87,19 @@
       })
       .filter(Boolean);
 
-    if (files.length === 0 && context && context.kind === "blob" && context.path) {
+    const deduped = [];
+    files.forEach((file) => {
+      const existingIndex = deduped.findIndex((candidate) => candidate.path === file.path);
+      if (existingIndex === -1) {
+        deduped.push(file);
+        return;
+      }
+      if (file.visibleLines.length > deduped[existingIndex].visibleLines.length) {
+        deduped[existingIndex] = file;
+      }
+    });
+
+    if (deduped.length === 0 && context && context.kind === "blob" && context.path) {
       return [
         {
           path: context.path,
@@ -71,7 +109,13 @@
       ];
     }
 
-    return files;
+    if (deduped.length === 0 && context && context.kind === "pull") {
+      const visibleLines = extractVisibleLines(root);
+      const path = extractPageFilePath(root) || "README";
+      return [{ path, root, visibleLines }];
+    }
+
+    return deduped;
   }
 
   function formatVisibleLines(lines) {

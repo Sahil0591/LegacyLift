@@ -14,6 +14,17 @@ test("parses GitHub PR files URLs", () => {
   });
 });
 
+test("parses GitHub PR changes URLs", () => {
+  const parsed = parseGitHubUrl("https://github.com/acme/checkout/pull/12/changes#diff-abc");
+
+  assert.deepEqual(parsed, {
+    kind: "pull",
+    owner: "acme",
+    repo: "checkout",
+    pullNumber: 12,
+  });
+});
+
 test("extracts owner and repo from GitHub blob URLs", () => {
   const parsed = parseGitHubUrl("https://github.com/acme/checkout/blob/main/src/checkout/risk.cbl");
 

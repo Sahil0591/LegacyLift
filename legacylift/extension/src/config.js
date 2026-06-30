@@ -3,8 +3,8 @@
   const namespace = /** @type {any} */ (global.LegacyLiftOverlay = global.LegacyLiftOverlay || {});
 
   const DEFAULT_SETTINGS = {
-    apiBaseUrl: "http://localhost:8000",
-    legacyLiftBaseUrl: "http://localhost:3000",
+    apiBaseUrl: "http://127.0.0.1:8000",
+    legacyLiftBaseUrl: "http://127.0.0.1:3000",
     reviewerIdentity: "github-browser-extension",
     devToken: "",
     enabled: true,

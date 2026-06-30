@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 
 from db.models import (
     Base,
@@ -66,6 +67,104 @@ async def test_default_sqlite_url_creates_data_directory(tmp_path: Path, monkeyp
 
     assert (server_dir / ".data").is_dir()
     assert (server_dir / ".data" / "legacylift.db").exists()
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_init_db_repairs_existing_sqlite_schema(tmp_path: Path):
+    db_file = tmp_path / "legacylift-drifted.db"
+    engine = create_engine(f"sqlite+aiosqlite:///{db_file}")
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE repositories (
+                    id VARCHAR(36) NOT NULL PRIMARY KEY,
+                    github_owner VARCHAR(255) NOT NULL,
+                    github_name VARCHAR(255) NOT NULL,
+                    default_branch VARCHAR(255) NOT NULL,
+                    installation_id VARCHAR(255),
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """,
+            ),
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO repositories (
+                    id, github_owner, github_name, default_branch, installation_id, created_at, updated_at
+                ) VALUES (
+                    'repo-1', 'aws-samples', 'aws-mainframe-modernization-carddemo', 'main', NULL,
+                    '2026-06-30 21:00:00', '2026-06-30 21:00:00'
+                )
+                """,
+            ),
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE ownership_reviews (
+                    id VARCHAR(36) NOT NULL PRIMARY KEY,
+                    decision_criterion_id VARCHAR(36) NOT NULL,
+                    original_owner_name VARCHAR(120) NOT NULL,
+                    current_owner_name VARCHAR(120) NOT NULL,
+                    review_state VARCHAR(50) NOT NULL,
+                    approval_state VARCHAR(50) NOT NULL,
+                    reviewer_identity VARCHAR(255),
+                    reason TEXT,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """,
+            ),
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO ownership_reviews (
+                    id, decision_criterion_id, original_owner_name, current_owner_name,
+                    review_state, approval_state, reviewer_identity, reason, created_at, updated_at
+                ) VALUES (
+                    'review-1', 'criterion-1', 'Risk', 'Risk', 'pending', 'pending', NULL, NULL,
+                    '2026-06-30 21:00:00', '2026-06-30 21:00:00'
+                )
+                """,
+            ),
+        )
+
+    await init_db(engine)
+    async_session = session_factory(engine)
+
+    async with async_session() as session:
+        repository_row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT github_repository_id, html_url, is_active
+                    FROM repositories
+                    WHERE id = 'repo-1'
+                    """,
+                ),
+            )
+        ).one()
+        review_row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT action, review_timestamp, approval_timestamp, source_surface
+                    FROM ownership_reviews
+                    WHERE id = 'review-1'
+                    """,
+                ),
+            )
+        ).one()
+
+    assert repository_row == (None, None, 1)
+    assert review_row == ("inferred", None, None, "LegacyLift workbench")
 
     await engine.dispose()
 

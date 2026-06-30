@@ -79,7 +79,7 @@ test("maps unauthorized responses", async () => {
 
 test("maps backend unavailable responses", async () => {
   const client = createOverlayApiClient(
-    { apiBaseUrl: "http://localhost:8000", reviewerIdentity: "sam" },
+    { apiBaseUrl: "http://127.0.0.1:8000", reviewerIdentity: "sam" },
     async () => {
       throw new TypeError("fetch failed");
     },
@@ -89,6 +89,36 @@ test("maps backend unavailable responses", async () => {
     () => client.fetchOverlay({ owner: "acme", repo: "checkout", ref: "main", path: "x.cbl" }),
     (error) => error instanceof OverlayApiError && error.state === "unavailable",
   );
+});
+
+test("retries localhost overlay requests against 127.0.0.1 when localhost fetch fails", async () => {
+  const calls = [];
+  const client = createOverlayApiClient(
+    { apiBaseUrl: "http://localhost:8000", reviewerIdentity: "sam", devToken: "dev-secret" },
+    async (url, init) => {
+      calls.push({ url: String(url), init });
+      if (String(url).startsWith("http://localhost:8000/")) {
+        throw new TypeError("Failed to fetch");
+      }
+      return response(200, { annotations: [{ id: "ann_1" }] });
+    },
+  );
+
+  const payload = await client.fetchOverlay({
+    owner: "aws-samples",
+    repo: "aws-mainframe-modernization-carddemo",
+    pullNumber: 1,
+    path: "app/cobol/carddemo.cbl",
+    visibleLines: "1-20",
+  });
+
+  assert.equal(payload.annotations.length, 1);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].url, /^http:\/\/localhost:8000\/github\/overlay/);
+  assert.match(calls[1].url, /^http:\/\/127\.0\.0\.1:8000\/github\/overlay/);
+  assert.match(calls[1].url, /path=app%2Fcobol%2Fcarddemo.cbl/);
+  assert.equal(calls[1].init.headers["X-LegacyLift-User"], "sam");
+  assert.equal(calls[1].init.headers.Authorization, "Bearer dev-secret");
 });
 
 test("preserves backend overlay states for empty successful responses", async () => {

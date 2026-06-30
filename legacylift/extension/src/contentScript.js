@@ -1,6 +1,25 @@
 // @ts-check
 (function attachContentScript(global) {
   const namespace = /** @type {any} */ (global.LegacyLiftOverlay = global.LegacyLiftOverlay || {});
+  const DIFF_RETRY_DELAYS_MS = [250, 750, 1500, 3000];
+
+  function retryAttemptForUrl(url, explicitAttempt) {
+    if (Number.isInteger(explicitAttempt)) return explicitAttempt;
+    const state = namespace.diffRetryState || {};
+    if (state.url !== url) {
+      namespace.diffRetryState = { url, attempt: 0 };
+      return 0;
+    }
+    return state.attempt || 0;
+  }
+
+  function rememberNextRetry(url, attempt) {
+    namespace.diffRetryState = { url, attempt: attempt + 1 };
+  }
+
+  function clearRetry(url) {
+    namespace.diffRetryState = { url, attempt: 0 };
+  }
 
   function createNavigationWatcher(windowLike, onNavigate) {
     let timer = 0;
@@ -123,10 +142,13 @@
   async function runOverlay(dependencies) {
     const document = (dependencies && dependencies.document) || global.document;
     const location = (dependencies && dependencies.location) || global.location;
+    const windowLike = (dependencies && dependencies.window) || global;
     if (!document || !location) return;
 
-    const context = namespace.parseGitHubUrl(String(location.href));
+    const href = String(location.href);
+    const context = namespace.parseGitHubUrl(href);
     if (!context) return;
+    const attempt = retryAttemptForUrl(href, dependencies && dependencies.attempt);
 
     namespace.clearOverlay(document);
 
@@ -138,9 +160,17 @@
 
     const files = namespace.extractVisibleFiles(document, context);
     if (files.length === 0) {
-      namespace.renderOverlayState(document, "not_indexed", "No visible GitHub file lines found for LegacyLift overlay.");
+      const retryDelay = DIFF_RETRY_DELAYS_MS[attempt];
+      if (retryDelay !== undefined && windowLike && typeof windowLike.setTimeout === "function") {
+        rememberNextRetry(href, attempt);
+        namespace.renderOverlayState(document, "not_indexed", "Waiting for GitHub diff lines to load for LegacyLift overlay.");
+        windowLike.setTimeout(() => runOverlay({ document, location, window: windowLike, attempt: attempt + 1 }), retryDelay);
+        return;
+      }
+      namespace.renderOverlayState(document, "not_indexed", "LegacyLift could not map this GitHub diff layout to exact lines.");
       return;
     }
+    clearRetry(href);
 
     const client = namespace.createOverlayApiClient(settings, global.fetch.bind(global));
     const badgeItems = [];

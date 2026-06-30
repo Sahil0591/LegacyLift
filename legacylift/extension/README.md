@@ -16,9 +16,12 @@ The detail panel shows the current owner, original inferred owner, review state,
    - Dev auth token: the server `OVERLAY_DEV_AUTH_TOKEN` value, if configured
 5. Open a supported GitHub page:
    - `https://github.com/*/*/pull/*/files*`
+   - `https://github.com/*/*/pull/*/changes*`
    - `https://github.com/*/*/blob/*`
 
 The extension sends `X-LegacyLift-User` on overlay reads and mutations. When the server has `OVERLAY_DEV_AUTH_TOKEN` configured, the same value must be saved in extension settings so reads and review actions include `Authorization: Bearer <token>`.
+
+If Chrome reports a fetch failure against `localhost`, use `http://127.0.0.1:8000` for the API URL and `http://127.0.0.1:3000` for the app URL.
 
 ## Failure States
 

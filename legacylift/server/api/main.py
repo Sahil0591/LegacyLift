@@ -101,6 +101,8 @@ app = FastAPI(
 # CORS — specific origins for production safety
 _allow_origins = [
     "http://localhost:3000",          # Next.js dev
+    "http://127.0.0.1:3000",          # Next.js dev via IPv4 loopback
+    "https://github.com",             # Chromium extension content script origin
     "https://legacylift.vercel.app",  # production
 ]
 if os.getenv("FRONTEND_URL"):

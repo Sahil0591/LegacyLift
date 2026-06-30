@@ -12,7 +12,23 @@
   }
 
   function normalizeBaseUrl(value) {
-    return String(value || "http://localhost:8000").replace(/\/+$/, "");
+    return String(value || "http://127.0.0.1:8000").replace(/\/+$/, "");
+  }
+
+  function localLoopbackFallbackUrl(url) {
+    let fallbackUrl;
+    try {
+      fallbackUrl = new URL(String(url));
+    } catch (_error) {
+      return null;
+    }
+
+    if (fallbackUrl.protocol !== "http:" || fallbackUrl.hostname !== "localhost") {
+      return null;
+    }
+
+    fallbackUrl.hostname = "127.0.0.1";
+    return fallbackUrl;
   }
 
   async function readJson(response) {
@@ -40,7 +56,25 @@
       try {
         response = await fetcher(url, init);
       } catch (error) {
-        throw new OverlayApiError("unavailable", error && error.message ? error.message : "LegacyLift backend is unavailable.");
+        const fallbackUrl = localLoopbackFallbackUrl(url);
+        if (fallbackUrl) {
+          try {
+            response = await fetcher(fallbackUrl, init);
+          } catch (fallbackError) {
+            const message =
+              fallbackError && fallbackError.message
+                ? fallbackError.message
+                : error && error.message
+                  ? error.message
+                  : "LegacyLift backend is unavailable.";
+            throw new OverlayApiError("unavailable", message);
+          }
+        } else {
+          throw new OverlayApiError(
+            "unavailable",
+            error && error.message ? error.message : "LegacyLift backend is unavailable.",
+          );
+        }
       }
 
       const payload = await readJson(response);

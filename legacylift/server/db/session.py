@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -59,6 +61,56 @@ def create_engine(database_url: str | None = None) -> AsyncEngine:
     return create_async_engine(url, future=True, connect_args=connect_args)
 
 
+def _literal_sql(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, str):
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+    return None
+
+
+def _column_default_sql(column) -> str | None:
+    default = column.default
+    if default is None or default.is_callable or default.is_sequence:
+        return None
+    return _literal_sql(default.arg)
+
+
+def _sqlite_repair_schema(connection: Connection) -> None:
+    if connection.dialect.name != "sqlite":
+        return
+
+    inspector = inspect(connection)
+    preparer = connection.dialect.identifier_preparer
+
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+
+        existing_columns = {column["name"] for column in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in existing_columns or column.primary_key:
+                continue
+
+            column_type = column.type.compile(dialect=connection.dialect)
+            default_sql = _column_default_sql(column)
+            default_clause = f" DEFAULT {default_sql}" if default_sql is not None else ""
+            nullable_clause = "" if column.nullable else " NOT NULL"
+            if not column.nullable and default_sql is None:
+                nullable_clause = ""
+
+            table_name = preparer.quote(table.name)
+            column_name = preparer.quote(column.name)
+            connection.execute(
+                text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}{default_clause}{nullable_clause}"),
+            )
+
+
 def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
@@ -92,3 +144,4 @@ async def init_db(engine: AsyncEngine | None = None) -> None:
     target_engine = engine or get_engine()
     async with target_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_sqlite_repair_schema)
