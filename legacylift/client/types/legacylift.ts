@@ -10,6 +10,10 @@ export type RuleConfidence = "High" | "Medium" | "Low";
 
 export type RuleStatus = "Pending" | "Confirmed" | "Edited" | "Flagged";
 
+export type OwnershipReviewState = "Inferred" | "Confirmed" | "Reassigned" | "Flagged";
+
+export type ApprovalState = "Approval needed" | "Approval requested" | "Approved" | "Waived";
+
 export type OwnershipCategory =
   | "Finance"
   | "Compliance"
@@ -54,6 +58,19 @@ export interface ChangeGuidanceResult {
   merge_risk: "Low" | "Medium" | "High" | "Unknown" | (string & {});
 }
 
+export interface OwnershipAuditEntry {
+  action: string;
+  original_owner: OwnershipCategory;
+  current_owner: OwnershipCategory;
+  review_state: OwnershipReviewState;
+  approval_state: ApprovalState;
+  reviewer_identity: string | null;
+  reviewed_at: string | null;
+  approval_timestamp: string | null;
+  reason: string | null;
+  source_surface: "GitHub overlay" | "LegacyLift workbench" | (string & {});
+}
+
 // ---------------------------------------------------------------------------
 // BusinessRule — mirrors models/business_rule.py BusinessRule
 // ---------------------------------------------------------------------------
@@ -73,6 +90,12 @@ export interface BusinessRule {
   ownership_evidence: string;
   ownership_confidence: OwnershipConfidence;
   ownership_detail: OwnershipResult | null;
+  original_inferred_owner?: OwnershipCategory;
+  current_owner?: OwnershipCategory;
+  review_state?: OwnershipReviewState;
+  approval_state?: ApprovalState;
+  change_guidance?: ChangeGuidanceResult | null;
+  audit_trail?: OwnershipAuditEntry[];
 }
 
 // ---------------------------------------------------------------------------

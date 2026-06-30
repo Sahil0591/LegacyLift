@@ -42,6 +42,17 @@ from db.session import get_session, init_db
 from integrations.github_app import GitHubAppSettings, verify_webhook_signature
 from integrations.github_ingestion import process_github_webhook
 from models.project import Project, ProjectStatus, SourceLanguage, UploadedFile
+from ownership.review_workflow import (
+    REVIEW_CONFIRMED,
+    REVIEW_FLAGGED,
+    ReviewWorkflowError,
+    ReviewWorkflowState,
+    WORKBENCH_SURFACE,
+    apply_review_transition,
+    approval_state_label,
+    review_state_label,
+    transition_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +134,15 @@ class ApproveChunkRequest(BaseModel):
 class RejectChunkRequest(BaseModel):
     comment: str
     feedback: Optional[str] = None
+
+
+class RuleReviewRequest(BaseModel):
+    action: str = "confirm_owner"
+    owner: Optional[str] = None
+    reason: Optional[str] = None
+    reviewer_identity: Optional[str] = None
+    allow_unknown_owner: bool = False
+    source_surface: str = WORKBENCH_SURFACE
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +369,11 @@ async def reject_chunk(
 # ---------------------------------------------------------------------------
 
 @app.post("/project/{project_id}/confirm-rule/{chunk_id}", status_code=200)
-async def confirm_rule(project_id: str, chunk_id: str):
+async def confirm_rule(
+    project_id: str,
+    chunk_id: str,
+    body: RuleReviewRequest | None = None,
+):
     """
     Mark the business rule for a chunk as Confirmed by a domain expert.
 
@@ -357,6 +381,7 @@ async def confirm_rule(project_id: str, chunk_id: str):
     requests where the rule has not been confirmed.
     """
     project = _get_project(project_id)
+    request_body = body or RuleReviewRequest()
 
     chunk_dict = next(
         (c for c in project.layer0_chunks if c["id"] == chunk_id), None
@@ -364,12 +389,61 @@ async def confirm_rule(project_id: str, chunk_id: str):
     if chunk_dict is None:
         raise HTTPException(status_code=404, detail=f"Chunk '{chunk_id}' not found")
 
-    project.chunk_rule_statuses[chunk_id] = "Confirmed"
+    rule_dict = _rule_for_chunk(project, chunk_id)
+    existing = project.chunk_rule_reviews.get(chunk_id)
+    inferred_owner = _inferred_rule_owner(rule_dict)
+    state = ReviewWorkflowState(
+        original_owner_name=str(existing.get("original_owner", inferred_owner)) if existing else inferred_owner,
+        current_owner_name=str(existing.get("current_owner", inferred_owner)) if existing else inferred_owner,
+        review_state=str(existing.get("review_state", "inferred")) if existing else "inferred",
+        approval_state=str(existing.get("approval_state", "needed")) if existing else "needed",
+    )
+
+    try:
+        transition = apply_review_transition(
+            state,
+            action=request_body.action,
+            owner=request_body.owner,
+            reason=request_body.reason,
+            reviewer_identity=request_body.reviewer_identity,
+            source_surface=request_body.source_surface or WORKBENCH_SURFACE,
+            allow_unknown_owner=request_body.allow_unknown_owner,
+        )
+    except ReviewWorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    audit_trail = list(existing.get("audit_trail", [])) if existing else []
+    audit_trail.append(transition_payload(transition))
+    project.chunk_rule_reviews[chunk_id] = {
+        "original_owner": transition.original_owner_name,
+        "current_owner": transition.current_owner_name,
+        "review_state": transition.review_state,
+        "approval_state": transition.approval_state,
+        "reviewed_at": transition.reviewed_at.isoformat(),
+        "approval_timestamp": transition.approval_timestamp.isoformat()
+        if transition.approval_timestamp is not None
+        else (existing or {}).get("approval_timestamp"),
+        "audit_trail": audit_trail,
+    }
+
+    project.chunk_rule_statuses[chunk_id] = review_state_label(transition.review_state)
 
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
-        "rule_status": "Confirmed",
+        "rule_status": review_state_label(transition.review_state),
+        "review_state": review_state_label(transition.review_state),
+        "approval_state": approval_state_label(transition.approval_state),
+        "original_owner": transition.original_owner_name,
+        "current_owner": transition.current_owner_name,
+        "reviewer_identity": transition.reviewer_identity,
+        "reviewed_at": transition.reviewed_at.isoformat(),
+        "approval_timestamp": transition.approval_timestamp.isoformat()
+        if transition.approval_timestamp is not None
+        else None,
+        "reason": transition.reason,
+        "source_surface": transition.source_surface,
+        "audit_trail": audit_trail,
     }
 
 
@@ -414,8 +488,15 @@ async def select_chunk(project_id: str, chunk_id: str):
             status_code=409, detail=f"Chunk '{chunk_id}' is already approved"
         )
 
+    review = project.chunk_rule_reviews.get(chunk_id, {})
+    if review.get("review_state") == REVIEW_FLAGGED or project.chunk_rule_statuses.get(chunk_id) == "Flagged":
+        raise HTTPException(
+            status_code=400,
+            detail="Business rule is flagged and must be resolved before migration can begin",
+        )
+
     rule_status = project.chunk_rule_statuses.get(chunk_id, "Pending")
-    if rule_status != "Confirmed":
+    if rule_status not in ("Confirmed", "Reassigned"):
         raise HTTPException(
             status_code=400,
             detail="Business rule must be confirmed before migration can begin",
@@ -524,6 +605,25 @@ def _get_project(project_id: str) -> Project:
     if not project:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
     return project
+
+
+def _rule_for_chunk(project: Project, chunk_id: str) -> dict | None:
+    return next((r for r in project.layer0_rules if r.get("chunk_id") == chunk_id), None)
+
+
+def _inferred_rule_owner(rule: dict | None) -> str:
+    if not rule:
+        return "Unknown"
+    for key in ("ownership_category", "owner", "current_owner"):
+        value = rule.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    detail = rule.get("ownership_detail")
+    if isinstance(detail, dict):
+        owner = detail.get("primary_owner")
+        if isinstance(owner, str) and owner.strip():
+            return owner.strip()
+    return "Unknown"
 
 
 def _status_str(project: Project) -> str:

@@ -732,7 +732,10 @@ async def upsert_ownership_review(
     review_state: str = "pending",
     approval_state: str = "pending",
     reviewer_identity: str | None = None,
+    review_timestamp: datetime | None = None,
+    approval_timestamp: datetime | None = None,
     reason: str | None = None,
+    source_surface: str = "LegacyLift workbench",
 ) -> OwnershipReview:
     result = await session.execute(
         select(OwnershipReview).where(
@@ -751,7 +754,10 @@ async def upsert_ownership_review(
             review_state=review_state,
             approval_state=approval_state,
             reviewer_identity=reviewer_identity,
+            review_timestamp=review_timestamp,
+            approval_timestamp=approval_timestamp,
             reason=reason,
+            source_surface=source_surface,
         )
         session.add(review)
     else:
@@ -759,7 +765,10 @@ async def upsert_ownership_review(
         review.review_state = review_state
         review.approval_state = approval_state
         review.reviewer_identity = reviewer_identity
+        review.review_timestamp = review_timestamp
+        review.approval_timestamp = approval_timestamp
         review.reason = reason
+        review.source_surface = source_surface
 
     await session.flush()
     return review
@@ -775,7 +784,10 @@ async def record_ownership_review_action(
     review_state: str,
     approval_state: str,
     reviewer_identity: str | None = None,
+    review_timestamp: datetime | None = None,
+    approval_timestamp: datetime | None = None,
     reason: str | None = None,
+    source_surface: str = "LegacyLift workbench",
 ) -> OwnershipReview:
     review = OwnershipReview(
         decision_criterion_id=decision_criterion_id,
@@ -785,7 +797,10 @@ async def record_ownership_review_action(
         review_state=review_state,
         approval_state=approval_state,
         reviewer_identity=reviewer_identity,
+        review_timestamp=review_timestamp,
+        approval_timestamp=approval_timestamp,
         reason=reason,
+        source_surface=source_surface,
     )
     session.add(review)
     await session.flush()
@@ -962,10 +977,10 @@ async def persist_layer0_analysis(
         review = await upsert_ownership_review(
             session,
             decision_criterion_id=criterion.id,
-            original_owner_name=original_owner_name,
+            original_owner_name=owner_name,
             current_owner_name=owner_name,
-            review_state="pending",
-            approval_state="pending",
+            review_state="inferred",
+            approval_state="needed",
         )
         review_ids.add(review.id)
 

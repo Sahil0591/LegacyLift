@@ -2,6 +2,8 @@
 
 Chromium MV3 extension for rendering LegacyLift ownership and approval guidance inside GitHub PR diffs and blob views.
 
+The detail panel shows the current owner, original inferred owner, review state, approval state, recommended approval path, suggested tests, stakeholder message, and recent audit trail entries returned by the shared LegacyLift overlay API.
+
 ## Local Loading
 
 1. Start the LegacyLift backend on `http://localhost:8000`.

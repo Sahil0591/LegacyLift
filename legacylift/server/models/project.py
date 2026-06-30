@@ -185,6 +185,9 @@ class Project(BaseModel):
     chunk_rule_statuses: dict[str, str] = Field(default_factory=dict)
     """chunk_id → 'Pending' | 'Confirmed' — tracks human rule confirmation."""
 
+    chunk_rule_reviews: dict[str, dict] = Field(default_factory=dict)
+    """chunk_id → current ownership review state plus audit trail."""
+
     # --- Error tracking ---
     error: Optional[str] = None
     """Most recent unrecoverable pipeline error message."""

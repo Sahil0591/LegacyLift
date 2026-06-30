@@ -12,13 +12,48 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { OwnershipBadge } from "@/components/ownership/OwnershipBadge";
 import type { BusinessRule, RuleStatus } from "@/types/legacylift";
 
+type RuleReviewAction =
+  | "confirm_owner"
+  | "reassign_owner"
+  | "flag"
+  | "request_approval"
+  | "mark_approved"
+  | "waive_approval";
+
 interface BusinessRuleCardProps {
   rule: BusinessRule;
   onStatusChange: (ruleId: string, newStatus: RuleStatus) => void;
+  onReviewAction?: (
+    ruleId: string,
+    action: RuleReviewAction,
+    payload?: { owner?: string; reason?: string },
+  ) => void;
 }
 
-export function BusinessRuleCard({ rule, onStatusChange }: BusinessRuleCardProps) {
+export function BusinessRuleCard({ rule, onStatusChange, onReviewAction }: BusinessRuleCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const currentOwner = rule.current_owner ?? rule.ownership_category;
+  const originalOwner = rule.original_inferred_owner ?? rule.ownership_category;
+  const reviewState = rule.review_state ?? (rule.status === "Pending" ? "Inferred" : rule.status === "Flagged" ? "Flagged" : "Confirmed");
+  const approvalState = rule.approval_state ?? "Approval needed";
+  const guidance = rule.change_guidance;
+
+  const performAction = (action: RuleReviewAction) => {
+    if (action === "reassign_owner") {
+      const owner = window.prompt("New owner", currentOwner);
+      if (!owner) return;
+      const reason = window.prompt("Reason for reassignment", "") ?? "";
+      onReviewAction?.(rule.id, action, { owner, reason });
+      return;
+    }
+    if (action === "waive_approval") {
+      const reason = window.prompt("Reason for waiving approval", "") ?? "";
+      if (!reason.trim()) return;
+      onReviewAction?.(rule.id, action, { reason });
+      return;
+    }
+    onReviewAction?.(rule.id, action);
+  };
 
   const confidenceColour: Record<string, string> = {
     High: "text-[#00C48C]",
@@ -43,6 +78,8 @@ export function BusinessRuleCard({ rule, onStatusChange }: BusinessRuleCardProps
             <span className="text-xs font-mono text-[#444444]">{rule.id}</span>
             <StatusBadge value={rule.status} />
             <StatusBadge value={rule.confidence} />
+            <StatusBadge value={reviewState} />
+            <StatusBadge value={approvalState} />
           </div>
           <h3 className="mt-1 text-sm font-semibold text-white">{rule.title}</h3>
         </div>
@@ -97,35 +134,101 @@ export function BusinessRuleCard({ rule, onStatusChange }: BusinessRuleCardProps
 
           {/* Ownership */}
           <OwnershipBadge
-            category={rule.ownership_category}
+            category={currentOwner}
             confidence={rule.ownership_confidence}
             evidence={rule.ownership_evidence}
             actualPerson={rule.ownership_detail?.actual_person ?? null}
           />
 
+          <div className="grid gap-2 rounded-lg border border-[#222222] bg-[#0B0B0B] p-3 text-xs text-[#888888] sm:grid-cols-2">
+            <div>
+              <span className="block text-[#444444]">Current owner</span>
+              <span className="font-semibold text-white">{currentOwner}</span>
+            </div>
+            <div>
+              <span className="block text-[#444444]">Original inferred owner</span>
+              <span className="font-semibold text-white">{originalOwner}</span>
+            </div>
+            <div>
+              <span className="block text-[#444444]">Review state</span>
+              <span className="font-semibold text-white">{reviewState}</span>
+            </div>
+            <div>
+              <span className="block text-[#444444]">Approval state</span>
+              <span className="font-semibold text-white">{approvalState}</span>
+            </div>
+          </div>
+
+          {guidance && (
+            <div className="space-y-2 rounded-lg border border-[#222222] bg-[#0B0B0B] p-3 text-xs text-[#888888]">
+              {guidance.risk_summary && <p>{guidance.risk_summary}</p>}
+              {guidance.approval_checklist.length > 0 && (
+                <ul className="list-disc space-y-1 pl-4">
+                  {guidance.approval_checklist.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           {/* Review actions */}
-          {rule.status === "Pending" && (
-            <div className="flex gap-2 pt-1">
+          <div className="flex flex-wrap gap-2 pt-1">
+            {rule.status === "Pending" && (
               <button
-                onClick={() => onStatusChange(rule.id, "Confirmed")}
+                onClick={() => {
+                  onStatusChange(rule.id, "Confirmed");
+                  performAction("confirm_owner");
+                }}
                 className="rounded bg-[#00C48C]/10 px-3 py-1.5 text-xs font-semibold text-[#00C48C] border border-[#00C48C]/20 hover:bg-[#00C48C]/20 transition-colors"
               >
                 Confirm
               </button>
+            )}
+            {rule.status === "Pending" && (
               <button
                 onClick={() => onStatusChange(rule.id, "Edited")}
                 className="rounded bg-[#F59E0B]/10 px-3 py-1.5 text-xs font-semibold text-[#F59E0B] border border-[#F59E0B]/20 hover:bg-[#F59E0B]/20 transition-colors"
               >
                 Edit
               </button>
+            )}
+            {rule.status === "Pending" && (
               <button
-                onClick={() => onStatusChange(rule.id, "Flagged")}
+                onClick={() => {
+                  onStatusChange(rule.id, "Flagged");
+                  performAction("flag");
+                }}
                 className="rounded bg-[#EF4444]/10 px-3 py-1.5 text-xs font-semibold text-[#EF4444] border border-[#EF4444]/20 hover:bg-[#EF4444]/20 transition-colors"
               >
                 Flag
               </button>
-            </div>
-          )}
+            )}
+            <button
+              onClick={() => performAction("reassign_owner")}
+              className="rounded bg-[#2563EB]/10 px-3 py-1.5 text-xs font-semibold text-[#2563EB] border border-[#2563EB]/20 hover:bg-[#2563EB]/20 transition-colors"
+            >
+              Reassign
+            </button>
+            <button
+              onClick={() => performAction("request_approval")}
+              className="rounded bg-[#F59E0B]/10 px-3 py-1.5 text-xs font-semibold text-[#F59E0B] border border-[#F59E0B]/20 hover:bg-[#F59E0B]/20 transition-colors"
+            >
+              Request approval
+            </button>
+            <button
+              onClick={() => performAction("mark_approved")}
+              className="rounded bg-[#00C48C]/10 px-3 py-1.5 text-xs font-semibold text-[#00C48C] border border-[#00C48C]/20 hover:bg-[#00C48C]/20 transition-colors"
+            >
+              Mark approved
+            </button>
+            <button
+              onClick={() => performAction("waive_approval")}
+              className="rounded bg-[#888888]/10 px-3 py-1.5 text-xs font-semibold text-[#888888] border border-[#888888]/20 hover:bg-[#888888]/20 transition-colors"
+            >
+              Waive
+            </button>
+          </div>
         </div>
       )}
     </div>

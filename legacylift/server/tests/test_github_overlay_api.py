@@ -324,7 +324,7 @@ async def test_pull_request_lookup_uses_changed_hunk_matches(overlay_client):
         ("flag", {"reason": "Needs domain review"}, "Flagged", "Approval needed"),
         ("request_approval", {}, "Inferred", "Approval requested"),
         ("mark_approved", {}, "Inferred", "Approved"),
-        ("waive_approval", {"reason": "Approved in CAB-42"}, "Inferred", "Approval waived"),
+        ("waive_approval", {"reason": "Approved in CAB-42"}, "Inferred", "Waived"),
     ],
 )
 @pytest.mark.asyncio
@@ -348,6 +348,8 @@ async def test_annotation_mutations_persist_review_and_approval_state(
     annotation = response.json()["annotation"]
     assert annotation["review_status"] == review_status
     assert annotation["approval_status"] == approval_status
+    assert annotation["review_state"] == review_status
+    assert annotation["approval_state"] == approval_status
     assert annotation["original_owner"] == "Finance / Pricing"
 
 
@@ -389,6 +391,38 @@ async def test_bdd_reassign_owner_changes_future_overlay_and_preserves_original_
     assert any(review.original_owner_name == "Finance / Pricing" for review in reviews)
     assert any(review.current_owner_name == "Risk" for review in reviews)
     assert len(reviews) >= 2
+
+
+@pytest.mark.asyncio
+async def test_audit_trail_records_overlay_reviewer_surface_and_order(
+    overlay_client,
+    overlay_store,
+):
+    _, seed = overlay_store
+
+    first = await overlay_client.patch(
+        f"/github/overlay/annotation/{seed.annotation_id}",
+        json={"action": "confirm_owner", "reason": "Matched Finance runbook."},
+        headers={"X-LegacyLift-User": "reviewer@example.com"},
+    )
+    second = await overlay_client.patch(
+        f"/github/overlay/annotation/{seed.annotation_id}",
+        json={"action": "request_approval", "reason": "Threshold change needs sign-off."},
+        headers={"X-LegacyLift-User": "reviewer@example.com"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    audit_trail = second.json()["annotation"]["audit_trail"]
+    assert [entry["action"] for entry in audit_trail][-2:] == [
+        "confirm_owner",
+        "request_approval",
+    ]
+    assert audit_trail[-1]["reviewer_identity"] == "reviewer@example.com"
+    assert audit_trail[-1]["source_surface"] == "GitHub overlay"
+    assert audit_trail[-1]["reviewed_at"] is not None
+    assert audit_trail[-1]["approval_state"] == "Approval requested"
+    assert audit_trail[-1]["approval_timestamp"] is not None
 
 
 @pytest.mark.asyncio

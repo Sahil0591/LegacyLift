@@ -21,6 +21,14 @@ from db.models import (
     Repository,
 )
 from db.repositories import record_ownership_review_action
+from ownership.review_workflow import (
+    GITHUB_OVERLAY_SURFACE,
+    ReviewWorkflowError,
+    ReviewWorkflowState,
+    apply_review_transition,
+    approval_state_label,
+    review_state_label,
+)
 
 
 class OverlayError(Exception):
@@ -115,68 +123,50 @@ async def mutate_overlay_annotation(
     if chunk is None:
         raise OverlayNotFoundError("Overlay annotation chunk not found")
 
-    normalized_action = normalize_action(action)
     classification = await _classification(session, criterion.id)
     latest_review = await _latest_review(session, criterion.id)
     inferred_owner = classification.owner_name if classification is not None else "Unknown"
     original_owner = latest_review.original_owner_name if latest_review is not None else inferred_owner
     current_owner = latest_review.current_owner_name if latest_review is not None else inferred_owner
-    review_state = latest_review.review_state if latest_review is not None else "pending"
-    approval_state = latest_review.approval_state if latest_review is not None else "pending"
+    review_state = latest_review.review_state if latest_review is not None else "inferred"
+    approval_state = latest_review.approval_state if latest_review is not None else "needed"
 
-    if normalized_action == "confirm_owner":
-        review_state = "confirmed"
-    elif normalized_action == "reassign_owner":
-        if not owner:
-            raise OverlayValidationError("reassign_owner requires owner")
-        current_owner = owner
-        review_state = "reassigned"
-    elif normalized_action == "flag":
-        review_state = "flagged"
-    elif normalized_action == "request_approval":
-        approval_state = "requested"
-    elif normalized_action == "mark_approved":
-        approval_state = "approved"
-    elif normalized_action == "waive_approval":
-        if not reason:
-            raise OverlayValidationError("waive_approval requires a reason")
-        approval_state = "waived"
-    else:
-        raise OverlayValidationError(f"Unsupported overlay action: {action}")
+    try:
+        transition = apply_review_transition(
+            ReviewWorkflowState(
+                original_owner_name=original_owner,
+                current_owner_name=current_owner,
+                review_state=review_state,
+                approval_state=approval_state,
+            ),
+            action=action,
+            owner=owner,
+            reason=reason,
+            reviewer_identity=reviewer_identity,
+            source_surface=GITHUB_OVERLAY_SURFACE,
+            allow_unknown_owner=True,
+        )
+    except ReviewWorkflowError as exc:
+        raise OverlayValidationError(str(exc)) from exc
 
     await record_ownership_review_action(
         session,
         decision_criterion_id=criterion.id,
-        action=normalized_action,
-        original_owner_name=original_owner,
-        current_owner_name=current_owner,
-        review_state=review_state,
-        approval_state=approval_state,
-        reviewer_identity=reviewer_identity,
-        reason=reason,
+        action=transition.action,
+        original_owner_name=transition.original_owner_name,
+        current_owner_name=transition.current_owner_name,
+        review_state=transition.review_state,
+        approval_state=transition.approval_state,
+        reviewer_identity=transition.reviewer_identity,
+        review_timestamp=transition.reviewed_at,
+        approval_timestamp=transition.approval_timestamp,
+        reason=transition.reason,
+        source_surface=transition.source_surface,
     )
     await session.flush()
 
     annotation = await _annotation_for_criterion(session, chunk=chunk, criterion=criterion)
     return {"annotation": annotation}
-
-
-def normalize_action(action: str) -> str:
-    normalized = action.strip().lower().replace("-", "_").replace(" ", "_")
-    aliases = {
-        "confirm": "confirm_owner",
-        "confirm_owner": "confirm_owner",
-        "reassign": "reassign_owner",
-        "reassign_owner": "reassign_owner",
-        "flag": "flag",
-        "request_approval": "request_approval",
-        "mark_approved": "mark_approved",
-        "approve": "mark_approved",
-        "waive": "waive_approval",
-        "waive_approval": "waive_approval",
-        "waive_approval_with_reason": "waive_approval",
-    }
-    return aliases.get(normalized, normalized)
 
 
 def parse_line_ranges(
@@ -316,10 +306,13 @@ async def _annotation_for_criterion(
 ) -> dict[str, Any]:
     classification = await _classification(session, criterion.id)
     review = await _latest_review(session, criterion.id)
+    reviews = await _reviews(session, criterion.id)
     guidance = await _guidance(session, criterion.id)
     inferred_owner = classification.owner_name if classification is not None else "Unknown"
     owner = review.current_owner_name if review is not None else inferred_owner
     original_owner = review.original_owner_name if review is not None else inferred_owner
+    review_label = review_state_label(review.review_state if review is not None else "inferred")
+    approval_label = approval_state_label(review.approval_state if review is not None else "needed")
 
     return {
         "id": f"ann_{criterion.id}",
@@ -330,8 +323,11 @@ async def _annotation_for_criterion(
         "original_owner": original_owner,
         "confidence": _confidence_label(classification.confidence if classification is not None else 0.0),
         "evidence": classification.evidence if classification is not None else _criterion_evidence(criterion),
-        "review_status": _review_status(review.review_state if review is not None else "pending"),
-        "approval_status": _approval_status(review.approval_state if review is not None else "pending"),
+        "review_state": review_label,
+        "approval_state": approval_label,
+        "review_status": review_label,
+        "approval_status": approval_label,
+        "audit_trail": [_audit_entry(review) for review in reviews],
         "change_guidance": _guidance_payload(guidance),
         "actions": {
             "can_confirm": True,
@@ -383,6 +379,15 @@ async def _latest_review(session: AsyncSession, decision_criterion_id: str) -> O
         .order_by(desc(OwnershipReview.updated_at), desc(OwnershipReview.created_at), desc(OwnershipReview.id))
     )
     return result.scalars().first()
+
+
+async def _reviews(session: AsyncSession, decision_criterion_id: str) -> list[OwnershipReview]:
+    result = await session.execute(
+        select(OwnershipReview)
+        .where(OwnershipReview.decision_criterion_id == decision_criterion_id)
+        .order_by(OwnershipReview.created_at, OwnershipReview.id)
+    )
+    return list(result.scalars().all())
 
 
 async def _guidance(session: AsyncSession, decision_criterion_id: str) -> ChangeGuidance | None:
@@ -463,23 +468,21 @@ def _guidance_payload(guidance: ChangeGuidance | None) -> dict[str, Any]:
     }
 
 
-def _review_status(state: str) -> str:
+def _audit_entry(review: OwnershipReview) -> dict[str, Any]:
     return {
-        "pending": "Inferred",
-        "inferred": "Inferred",
-        "confirmed": "Confirmed",
-        "reassigned": "Reassigned",
-        "flagged": "Flagged",
-    }.get(state, state.replace("_", " ").title())
-
-
-def _approval_status(state: str) -> str:
-    return {
-        "pending": "Approval needed",
-        "requested": "Approval requested",
-        "approved": "Approved",
-        "waived": "Approval waived",
-    }.get(state, state.replace("_", " ").title())
+        "action": review.action,
+        "original_owner": review.original_owner_name,
+        "current_owner": review.current_owner_name,
+        "review_state": review_state_label(review.review_state),
+        "approval_state": approval_state_label(review.approval_state),
+        "reviewer_identity": review.reviewer_identity,
+        "reviewed_at": (review.review_timestamp or review.created_at).isoformat(),
+        "approval_timestamp": review.approval_timestamp.isoformat()
+        if review.approval_timestamp is not None
+        else None,
+        "reason": review.reason,
+        "source_surface": review.source_surface,
+    }
 
 
 def _loads(raw: str, fallback: Any) -> Any:

@@ -104,6 +104,7 @@ curl -X POST http://localhost:8000/api/project/{project_id}/start
 | POST | `/api/project/{id}/start` | Start the migration pipeline |
 | POST | `/api/project/{id}/approve/{chunk_id}` | Approve a migration chunk |
 | POST | `/api/project/{id}/reject/{chunk_id}` | Reject and regenerate a chunk |
+| POST | `/api/project/{id}/confirm-rule/{chunk_id}` | Confirm, reassign, flag, request, approve, or waive workbench ownership review state |
 | POST | `/github/webhook` | GitHub App webhook ingestion for installations, pushes, and PR changes |
 | GET  | `/github/overlay` | Return GitHub code overlay annotations for a repo/ref/path or PR |
 | PATCH | `/github/overlay/annotation/{id}` | Confirm, reassign, flag, request, approve, or waive overlay approval state |
@@ -115,7 +116,9 @@ curl -X POST http://localhost:8000/api/project/{project_id}/start
 
 Interactive API docs: `http://localhost:8000/docs`
 
-`GET /github/overlay` requires `owner`, `repo`, `path`, and either `ref` or `pull_number`; use `start`/`end` or `visible_lines` to limit annotations to the visible GitHub lines. `PATCH /github/overlay/annotation/{id}` requires `X-LegacyLift-User`; set `OVERLAY_DEV_AUTH_TOKEN` and send `Authorization: Bearer <token>` outside demo mode until full GitHub user auth is wired.
+`GET /github/overlay` requires `owner`, `repo`, `path`, and either `ref` or `pull_number`; use `start`/`end` or `visible_lines` to limit annotations to the visible GitHub lines. `PATCH /github/overlay/annotation/{id}` requires `X-LegacyLift-User`; set `OVERLAY_DEV_AUTH_TOKEN` and send `Authorization: Bearer <token>` outside demo mode until full GitHub user auth is wired. Overlay annotations and workbench rule reviews share the same review states (`Inferred`, `Confirmed`, `Reassigned`, `Flagged`), approval states (`Approval needed`, `Approval requested`, `Approved`, `Waived`), original/current owner fields, and ordered audit trail entries with reviewer, timestamp, reason, and source surface.
+
+`POST /project/{id}/confirm-rule/{chunk_id}` still works with an empty body as a legacy confirm action. It also accepts `{ "action": "confirm_owner" | "reassign_owner" | "flag" | "request_approval" | "mark_approved" | "waive_approval", "owner": "...", "reason": "...", "reviewer_identity": "...", "allow_unknown_owner": false }`. Flagged rules block chunk migration until resolved, and confirming `Unknown` ownership requires `allow_unknown_owner: true`.
 
 ---
 
@@ -258,7 +261,7 @@ The orchestrator is complete as a skeleton. The main TODO is adding the actual L
 
 ### GitHub Overlay Extension
 
-The Chromium extension in `extension/` renders persisted LegacyLift ownership annotations directly in GitHub PR file diffs and blob views. It calls the backend `GET /github/overlay` endpoint for visible file ranges, injects inline owner/confidence badges, opens a detail panel with change guidance, and sends review actions through `PATCH /github/overlay/annotation/{id}`.
+The Chromium extension in `extension/` renders persisted LegacyLift ownership annotations directly in GitHub PR file diffs and blob views. It calls the backend `GET /github/overlay` endpoint for visible file ranges, injects inline owner/confidence badges, opens a detail panel with change guidance, current/original owner, review/approval state, recent audit trail entries, and sends review actions through `PATCH /github/overlay/annotation/{id}`.
 
 Local checks:
 

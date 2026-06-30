@@ -345,7 +345,10 @@ class OwnershipReview(Base, TimestampMixin):
     review_state: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
     approval_state: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
     reviewer_identity: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    review_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approval_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_surface: Mapped[str] = mapped_column(String(120), default="LegacyLift workbench", nullable=False)
 
     decision_criterion: Mapped[DecisionCriterion] = relationship(back_populates="ownership_reviews")
 

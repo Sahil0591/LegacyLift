@@ -16,9 +16,10 @@ const STATUS_FILTERS: Array<RuleStatus | "All"> = [
 interface BusinessRuleListProps {
   rules: BusinessRule[];
   onStatusChange: (ruleId: string, newStatus: RuleStatus) => void;
+  onReviewAction?: Parameters<typeof BusinessRuleCard>[0]["onReviewAction"];
 }
 
-export function BusinessRuleList({ rules, onStatusChange }: BusinessRuleListProps) {
+export function BusinessRuleList({ rules, onStatusChange, onReviewAction }: BusinessRuleListProps) {
   const [statusFilter, setStatusFilter] = useState<RuleStatus | "All">("All");
   const [ownerFilter, setOwnerFilter] = useState<OwnershipCategory | "All">("All");
 
@@ -93,6 +94,7 @@ export function BusinessRuleList({ rules, onStatusChange }: BusinessRuleListProp
               key={rule.id}
               rule={rule}
               onStatusChange={onStatusChange}
+              onReviewAction={onReviewAction}
             />
           ))}
         </div>

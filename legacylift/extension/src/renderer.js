@@ -83,7 +83,7 @@
       document,
       panel,
       "Owner",
-      `${annotation.owner} - ${annotation.confidence}. ${annotation.review_status}; ${annotation.approval_status}.`,
+      `${annotation.owner} - ${annotation.confidence}. Original: ${annotation.original_owner || annotation.owner}. ${annotation.review_state || annotation.review_status}; ${annotation.approval_state || annotation.approval_status}.`,
     );
     appendSection(document, panel, "Evidence", annotation.evidence);
     appendSection(document, panel, "Changing this?", guidance.risk_summary);
@@ -96,6 +96,14 @@
     appendSection(document, panel, "Recommended approval path", approvalPath);
     appendSection(document, panel, "Tests to add", guidance.suggested_tests || []);
     appendSection(document, panel, "Suggested message", guidance.suggested_message);
+
+    const auditTrail = (annotation.audit_trail || []).slice(-4).map((entry) => {
+      const actor = entry.reviewer_identity || "Unknown reviewer";
+      const surface = entry.source_surface || "Unknown surface";
+      const reason = entry.reason ? ` - ${entry.reason}` : "";
+      return `${entry.review_state}; ${entry.approval_state} by ${actor} via ${surface}${reason}`;
+    });
+    appendSection(document, panel, "Audit trail", auditTrail);
 
     const actions = createElement(document, "section", "ll-overlay-section ll-overlay-actions");
     actions.appendChild(createElement(document, "h3", "", "Actions"));
