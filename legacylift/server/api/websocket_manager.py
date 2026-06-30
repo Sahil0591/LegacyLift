@@ -42,6 +42,13 @@ Event catalogue — Migration (Layers 1-3):
   chunk_approved             — chunk_id: str
   migration_complete         — report: dict
 
+Event catalogue — Layer 4 (Schema Validation):
+  schema_validation_started  — chunks_checked: int
+  schema_validation_complete — passed: bool, tables_checked: int,
+                               tables_missing: list[str], column_warnings: list[str],
+                               coverage_percentage: float, issues: list[str],
+                               summary: str
+
 Error events:
   error                      — layer: str, message: str, recoverable: bool
 

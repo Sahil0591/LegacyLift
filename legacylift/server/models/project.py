@@ -165,6 +165,9 @@ class Project(BaseModel):
     chunk_approvals: dict = Field(default_factory=dict)
     """chunk_id → 'approved' | 'rejected', set by the approval endpoints."""
 
+    chunk_migrations: dict[str, str] = Field(default_factory=dict)
+    """chunk_id → migrated Python code, snapshotted by approve_chunk at approval time."""
+
     # --- Chunk selection (Step 5 — populated by POST /select-chunk) ---
     selected_chunk_id: Optional[str] = None
     """ID of the Layer 0 chunk the human chose to migrate first."""
