@@ -4,6 +4,7 @@ const { createDocument, createLine } = require("./fakeDom.js");
 
 const { extractVisibleFiles } = require("../src/githubDom.js");
 const {
+  renderAnnotationRail,
   renderBadges,
   renderDetailPanel,
   renderOverlayState,
@@ -56,10 +57,30 @@ test("renders inline owner badges beside matching lines", () => {
   renderBadges(document, [{ file: visibleFile, annotation }], { onSelect() {} });
 
   const badge = document.querySelector(".ll-overlay-badge");
-  assert.equal(badge.textContent, "Decision owner:Finance / Pricing");
+  assert.equal(badge.textContent, "LLDecision owner: Finance / Pricing");
   assert.equal(badge.getAttribute("data-annotation-id"), "ann_123");
   assert.equal(badge.parentElement, codeCell);
   assert.match(badge.getAttribute("aria-label"), /High confidence/);
+});
+
+test("renders a right-side annotation rail with a clear owner label", () => {
+  const document = createDocument();
+  const selected = [];
+
+  renderAnnotationRail(document, [{ annotation }], {
+    onSelect(next) {
+      selected.push(next.id);
+    },
+  });
+
+  const rail = document.querySelector(".ll-overlay-rail");
+  const item = document.querySelector(".ll-overlay-rail-item");
+  assert.match(rail.textContent, /LegacyLift annotations/);
+  assert.match(item.textContent, /Decision owner: Finance \/ Pricing/);
+  assert.match(item.textContent, /Lines 249-256 - High confidence/);
+
+  item.click();
+  assert.deepEqual(selected, ["ann_123"]);
 });
 
 test("renders detail panel sections and approval actions", () => {
@@ -107,6 +128,16 @@ test("copies suggested stakeholder message", () => {
 
 test("renders backend unavailable, repo not indexed, PR not synced, unsupported, empty, and unauthorized states", () => {
   const document = createDocument();
+  let activated = 0;
+
+  const ready = renderOverlayState(document, "ready", "1 LegacyLift annotation loaded. Click to view.", {
+    onActivate() {
+      activated += 1;
+    },
+  });
+  assert.equal(ready.tagName, "BUTTON");
+  ready.click();
+  assert.equal(activated, 1);
 
   renderOverlayState(document, "unavailable", "LegacyLift backend is unavailable.");
   assert.match(document.body.textContent, /backend is unavailable/);

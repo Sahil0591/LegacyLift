@@ -80,6 +80,12 @@
     row.appendChild(button);
   }
 
+  function annotationLineLabel(annotation) {
+    const range = annotation.line_range || [];
+    if (!range.length) return "Line unknown";
+    return range[0] === range[1] ? `Line ${range[0]}` : `Lines ${range[0]}-${range[1]}`;
+  }
+
   function placeBadge(file, anchor, badge) {
     if (anchor && typeof anchor.prepend === "function" && anchor !== file.root) {
       anchor.prepend(badge);
@@ -106,8 +112,8 @@
         `LegacyLift decision owner: ${annotation.owner}. ${confidenceLabel(annotation.confidence)}.`,
       );
       badge.setAttribute("title", `LegacyLift decision owner: ${annotation.owner}. ${confidenceLabel(annotation.confidence)}.`);
-      badge.appendChild(createElement(document, "span", "ll-overlay-badge-prefix", "Decision owner:"));
-      badge.appendChild(createElement(document, "span", "ll-overlay-badge-owner", annotation.owner));
+      badge.appendChild(createElement(document, "span", "ll-overlay-badge-prefix", "LL"));
+      badge.appendChild(createElement(document, "span", "ll-overlay-sr-only", `Decision owner: ${annotation.owner}`));
       badge.addEventListener("click", (event) => {
         event.preventDefault();
         handlers.onSelect(annotation);
@@ -115,6 +121,36 @@
 
       placeBadge(file, anchor, badge);
     });
+  }
+
+  function renderAnnotationRail(document, items, handlers) {
+    removeAll(document, ".ll-overlay-rail");
+    const rail = createElement(document, "aside", "ll-overlay-rail");
+    rail.setAttribute("aria-label", "LegacyLift annotations");
+    rail.appendChild(createElement(document, "h2", "", "LegacyLift annotations"));
+
+    items.forEach(({ annotation }) => {
+      const button = createElement(document, "button", "ll-overlay-rail-item");
+      button.setAttribute("type", "button");
+      button.setAttribute("data-annotation-id", annotation.id);
+
+      const owner = createElement(document, "span", "ll-overlay-rail-owner", `Decision owner: ${annotation.owner}`);
+      const meta = createElement(
+        document,
+        "span",
+        "ll-overlay-rail-meta",
+        `${annotationLineLabel(annotation)} - ${confidenceLabel(annotation.confidence)}`,
+      );
+      button.append(owner, meta);
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        handlers.onSelect(annotation);
+      });
+      rail.appendChild(button);
+    });
+
+    document.body.appendChild(rail);
+    return rail;
   }
 
   function renderDetailPanel(document, annotation, handlers) {
@@ -198,9 +234,14 @@
     return panel;
   }
 
-  function renderOverlayState(document, state, message) {
+  function renderOverlayState(document, state, message, handlers) {
     removeAll(document, ".ll-overlay-state");
-    const banner = createElement(document, "div", `ll-overlay-state ll-overlay-state-${state}`, message);
+    const clickable = handlers && typeof handlers.onActivate === "function";
+    const banner = createElement(document, clickable ? "button" : "div", `ll-overlay-state ll-overlay-state-${state}`, message);
+    if (clickable) {
+      banner.setAttribute("type", "button");
+      banner.addEventListener("click", handlers.onActivate);
+    }
     banner.setAttribute("role", state === "ready" ? "status" : "alert");
     document.body.appendChild(banner);
     return banner;
@@ -209,15 +250,17 @@
   function clearOverlay(document) {
     removeAll(document, ".ll-overlay-badge");
     removeAll(document, ".ll-overlay-panel");
+    removeAll(document, ".ll-overlay-rail");
     removeAll(document, ".ll-overlay-state");
   }
 
   namespace.renderBadges = renderBadges;
+  namespace.renderAnnotationRail = renderAnnotationRail;
   namespace.renderDetailPanel = renderDetailPanel;
   namespace.renderOverlayState = renderOverlayState;
   namespace.clearOverlay = clearOverlay;
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { clearOverlay, renderBadges, renderDetailPanel, renderOverlayState };
+    module.exports = { clearOverlay, renderAnnotationRail, renderBadges, renderDetailPanel, renderOverlayState };
   }
 })(typeof globalThis !== "undefined" ? globalThis : window);

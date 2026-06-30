@@ -84,8 +84,15 @@
       });
       const next = payload.annotation || annotation;
       namespace.renderDetailPanel(document, next, panelHandlers(client, settings, context, document));
-      Array.from(document.querySelectorAll(`[data-annotation-id="${annotation.id}"]`)).forEach((badge) => {
-        badge.textContent = `${next.owner} - ${next.confidence}`;
+      annotationElements(document, annotation.id).forEach((element) => {
+        const owner = element.querySelector ? element.querySelector(".ll-overlay-rail-owner") : null;
+        const meta = element.querySelector ? element.querySelector(".ll-overlay-rail-meta") : null;
+        if (owner) owner.textContent = `Decision owner: ${next.owner}`;
+        if (meta) {
+          const range = next.line_range || [];
+          const lineLabel = range.length ? `Lines ${range[0]}-${range[1]}` : "Line unknown";
+          meta.textContent = `${lineLabel} - ${next.confidence} confidence`;
+        }
       });
       namespace.renderOverlayState(document, "ready", "LegacyLift review state updated.");
     } catch (error) {
@@ -137,6 +144,30 @@
         }
       },
     };
+  }
+
+  function annotationElements(document, annotationId) {
+    return Array.from(document.querySelectorAll ? document.querySelectorAll("[data-annotation-id]") : []).filter(
+      (element) => element.getAttribute("data-annotation-id") === annotationId,
+    );
+  }
+
+  function focusAnnotation(document, annotation) {
+    Array.from(document.querySelectorAll ? document.querySelectorAll(".ll-overlay-focused") : []).forEach((element) => {
+      element.classList.remove("ll-overlay-focused");
+    });
+
+    const elements = annotationElements(document, annotation.id);
+    const lineBadge = elements.find((element) => element.classList.contains("ll-overlay-badge")) || elements[0];
+    if (lineBadge && typeof lineBadge.scrollIntoView === "function") {
+      lineBadge.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+    }
+    elements.forEach((element) => element.classList.add("ll-overlay-focused"));
+  }
+
+  function selectAnnotation(document, annotation, handlers) {
+    focusAnnotation(document, annotation);
+    namespace.renderDetailPanel(document, annotation, handlers);
   }
 
   async function runOverlay(dependencies) {
@@ -205,10 +236,24 @@
 
     namespace.renderBadges(document, badgeItems, {
       onSelect(annotation) {
-        namespace.renderDetailPanel(document, annotation, panelHandlers(client, settings, context, document));
+        selectAnnotation(document, annotation, panelHandlers(client, settings, context, document));
       },
     });
-    namespace.renderOverlayState(document, "ready", `${badgeItems.length} LegacyLift annotation${badgeItems.length === 1 ? "" : "s"} loaded.`);
+    namespace.renderAnnotationRail(document, badgeItems, {
+      onSelect(annotation) {
+        selectAnnotation(document, annotation, panelHandlers(client, settings, context, document));
+      },
+    });
+    namespace.renderOverlayState(
+      document,
+      "ready",
+      `${badgeItems.length} LegacyLift annotation${badgeItems.length === 1 ? "" : "s"} loaded. Click to view.`,
+      {
+        onActivate() {
+          selectAnnotation(document, badgeItems[0].annotation, panelHandlers(client, settings, context, document));
+        },
+      },
+    );
   }
 
   namespace.createNavigationWatcher = createNavigationWatcher;
