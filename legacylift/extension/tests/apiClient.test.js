@@ -16,7 +16,7 @@ function response(status, body) {
 test("fetches overlay annotations with PR parameters and visible lines", async () => {
   const calls = [];
   const client = createOverlayApiClient(
-    { apiBaseUrl: "http://localhost:8000", reviewerIdentity: "sam" },
+    { apiBaseUrl: "http://localhost:8000", reviewerIdentity: "sam", devToken: "dev-secret" },
     async (url, init) => {
       calls.push({ url: String(url), init });
       return response(200, { annotations: [{ id: "ann_1" }] });
@@ -35,6 +35,8 @@ test("fetches overlay annotations with PR parameters and visible lines", async (
   assert.match(calls[0].url, /pull_number=12/);
   assert.match(calls[0].url, /visible_lines=249-256/);
   assert.match(calls[0].url, /path=src%2Fcheckout%2Frisk.cbl/);
+  assert.equal(calls[0].init.headers["X-LegacyLift-User"], "sam");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer dev-secret");
 });
 
 test("sends overlay mutation auth headers", async () => {
@@ -89,7 +91,18 @@ test("maps backend unavailable responses", async () => {
   );
 });
 
-test("marks empty overlay payloads as repo not indexed", async () => {
+test("preserves backend overlay states for empty successful responses", async () => {
+  const client = createOverlayApiClient(
+    { apiBaseUrl: "http://localhost:8000", reviewerIdentity: "sam" },
+    async () => response(200, { annotations: [], state: "pr_not_synced" }),
+  );
+
+  const payload = await client.fetchOverlay({ owner: "acme", repo: "checkout", ref: "main", path: "x.cbl" });
+
+  assert.equal(payload.state, "pr_not_synced");
+});
+
+test("falls back to empty state when backend omits a state", async () => {
   const client = createOverlayApiClient(
     { apiBaseUrl: "http://localhost:8000", reviewerIdentity: "sam" },
     async () => response(200, { annotations: [] }),
@@ -97,5 +110,5 @@ test("marks empty overlay payloads as repo not indexed", async () => {
 
   const payload = await client.fetchOverlay({ owner: "acme", repo: "checkout", ref: "main", path: "x.cbl" });
 
-  assert.equal(payload.state, "not_indexed");
+  assert.equal(payload.state, "empty");
 });

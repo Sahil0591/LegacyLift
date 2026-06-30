@@ -1,337 +1,188 @@
-# LegacyLift — AI-Assisted Legacy Code Migration Workbench
+# LegacyLift
 
-LegacyLift is an AI-powered pipeline that migrates legacy COBOL, Java, and VB6 codebases to modern Python with human-in-the-loop review at every step.
+LegacyLift is an AI-assisted migration workbench for legacy COBOL, Java, and VB6 systems. The GitHub Decision Overlay MVP adds persisted ownership annotations, review and approval state, and a Chromium extension that renders those decisions in GitHub PR diffs and blob views.
 
----
+## Current Layout
 
-## Pipeline Overview
-
-```
-Upload Files
-     │
-     ▼
-Layer 0 — Archaeology
-  ├── Archaeologist      → structural scan, chunk creation
-  ├── BusinessExtractor  → LLM extracts business rules
-  ├── DependencyMapper   → builds module call graph
-  └── RiskScorer         → assigns 0–1 risk score per file
-     │
-     ▼
-Layer 0.5 — Target Profile
-  ├── DocFetcher         → fetches Python/Java stdlib docs
-  ├── DeprecationMapper  → maps deprecated COBOL patterns to Python equivalents
-  └── GotchaRegistry     → known migration pitfalls (COMP-3, date arithmetic, etc.)
-     │
-     ▼
-Per-Chunk Migration (repeated for each chunk)
-  ├── Layer 1 — StaticAnalyser    → syntax, types, float-in-finance detection
-  ├── Layer 2 — AIReviewer        → semantic equivalence check
-  ├── Layer 3 — TestGenerator     → LLM writes + runs pytest cases
-  └── Human Approval Gate         → POST /approve or /reject
-     │
-     ▼
-Layer 4 — SchemaValidator
-  └── Verifies all legacy DB tables are handled in migrated code
-     │
-     ▼
-Migration Complete → JSON report
-```
-
-Real-time progress is streamed to connected clients via WebSocket at `/ws/{project_id}`.
-
----
-
-## Quick Start (Windows)
-
-```bat
-REM 1. Clone the repo and open the legacylift directory
-cd legacylift
-
-REM 2. Create the virtual environment (once)
-python -m venv .venv
-
-REM 3. Run setup (installs all dependencies)
-setup.bat
-
-REM 4. Copy and configure environment variables
-copy .env.example .env
-REM Edit .env: add your OPENAI_API_KEY
-
-REM 5. Start the API server
-.venv\Scripts\python -m uvicorn legacylift.api.main:app --reload
-
-REM 6. Run the tests (in a second terminal)
-.venv\Scripts\pytest legacylift/tests/ -v
-```
-
-The server starts at `http://localhost:8000`. Hit `/health` to confirm.
-
----
-
-## Running a Demo (no OpenAI key needed)
-
-With `DEMO_MODE=true` (the default), the pipeline uses stub data at every layer and prints all LLM prompts to the console. You can run a complete end-to-end demo without an API key.
-
-```bat
-REM Start the server with demo mode
-set DEMO_MODE=true
-set AUTO_APPROVE=true
-.venv\Scripts\python -m uvicorn legacylift.api.main:app --reload
-
-REM In another terminal, create a project and upload demo files
-curl -X POST http://localhost:8000/api/project ^
-  -H "Content-Type: application/json" ^
-  -d "{\"name\": \"Bank Demo\", \"source_language\": \"COBOL\"}"
-
-REM Note the project_id returned, then upload the demo COBOL files:
-curl -X POST http://localhost:8000/api/project/{project_id}/upload ^
-  -F "files=@demo/sample_cobol/interest_calc.cbl" ^
-  -F "files=@demo/sample_cobol/account_master.cbl" ^
-  -F "files=@demo/sample_cobol/end_of_day_batch.cbl"
-
-REM Start the pipeline (connect to WS first to see events):
-curl -X POST http://localhost:8000/api/project/{project_id}/start
-```
-
----
-
-## API Reference
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/project` | Create a new project |
-| POST | `/api/project/{id}/upload` | Upload legacy source files |
-| POST | `/api/project/{id}/start` | Start the migration pipeline |
-| POST | `/api/project/{id}/approve/{chunk_id}` | Approve a migration chunk |
-| POST | `/api/project/{id}/reject/{chunk_id}` | Reject and regenerate a chunk |
-| POST | `/api/project/{id}/confirm-rule/{chunk_id}` | Confirm, reassign, flag, request, approve, or waive workbench ownership review state |
-| POST | `/github/webhook` | GitHub App webhook ingestion for installations, pushes, and PR changes |
-| GET  | `/github/overlay` | Return GitHub code overlay annotations for a repo/ref/path or PR |
-| PATCH | `/github/overlay/annotation/{id}` | Confirm, reassign, flag, request, approve, or waive overlay approval state |
-| GET  | `/api/project/{id}/status` | Get project status and chunk counts |
-| GET  | `/api/project/{id}/rules` | Get extracted business rules |
-| GET  | `/api/project/{id}/graph` | Get dependency graph and risk scores |
-| GET  | `/health` | Health check (used by Azure App Service) |
-| WS   | `/ws/{project_id}` | WebSocket event stream |
-
-Interactive API docs: `http://localhost:8000/docs`
-
-`GET /github/overlay` requires `owner`, `repo`, `path`, and either `ref` or `pull_number`; use `start`/`end` or `visible_lines` to limit annotations to the visible GitHub lines. `PATCH /github/overlay/annotation/{id}` requires `X-LegacyLift-User`; set `OVERLAY_DEV_AUTH_TOKEN` and send `Authorization: Bearer <token>` outside demo mode until full GitHub user auth is wired. Overlay annotations and workbench rule reviews share the same review states (`Inferred`, `Confirmed`, `Reassigned`, `Flagged`), approval states (`Approval needed`, `Approval requested`, `Approved`, `Waived`), original/current owner fields, and ordered audit trail entries with reviewer, timestamp, reason, and source surface.
-
-`POST /project/{id}/confirm-rule/{chunk_id}` still works with an empty body as a legacy confirm action. It also accepts `{ "action": "confirm_owner" | "reassign_owner" | "flag" | "request_approval" | "mark_approved" | "waive_approval", "owner": "...", "reason": "...", "reviewer_identity": "...", "allow_unknown_owner": false }`. Flagged rules block chunk migration until resolved, and confirming `Unknown` ownership requires `allow_unknown_owner: true`.
-
----
-
-## Project Structure
-
-```
+```text
 legacylift/
-├── api/
-│   ├── main.py               ← FastAPI routes, WebSocket endpoint
-│   └── websocket_manager.py  ← WebSocket connection registry + event broadcast
-├── extension/                 ← Chromium MV3 GitHub ownership overlay
-├── core/
-│   ├── layer0/               ← Archaeology (parse legacy, extract rules)
-│   ├── layer0_5/             ← Target profile (docs, deprecations, gotchas)
-│   ├── layer1/               ← Static analysis (syntax, types, complexity)
-│   ├── layer2/               ← AI semantic review
-│   ├── layer3/               ← Test generation + execution
-│   ├── layer4/               ← Schema coverage validation
-│   └── pipeline.py           ← Main orchestrator
-├── models/                   ← Pydantic data models
-├── ownership/
-│   └── classifier.py         ← Simonra's ownership classifier
-├── utils/
-│   ├── llm_client.py         ← OpenAI wrapper with retry + DEMO_MODE logging
-│   ├── code_parser.py        ← tree-sitter facade
-│   └── schema_parser.py      ← SQL DDL parser
-├── demo/
-│   ├── sample_cobol/         ← Three realistic COBOL files
-│   └── sample_schema/        ← Legacy bank SQL schema (8 tables)
-└── tests/
-    └── test_pipeline.py      ← End-to-end smoke tests
+├── client/      # Next.js workbench at http://localhost:3000
+├── server/      # FastAPI API at http://localhost:8000
+├── extension/   # Chromium MV3 GitHub overlay
+└── plans/       # GitHub Decision Overlay plan specs and handoffs
 ```
 
----
+## Requirements
 
-## Environment Variables
+- Python 3.12
+- Node.js 20+
+- Chromium or Chrome for the extension
+- Optional: PostgreSQL for production-like database testing
+- Optional: a GitHub App installed in a test repository
 
-Copy `.env.example` to `.env` and configure:
+## Environment
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OPENAI_API_KEY` | *(required)* | Your OpenAI API key |
-| `OPENAI_MODEL` | `gpt-4o` | Model to use (gpt-4o-mini for dev) |
-| `DEMO_MODE` | `true` | Print all LLM prompts; use stub data |
-| `AUTO_APPROVE` | `false` | Skip human approval (demo only) |
-| `DATABASE_URL` | SQLite | Database connection string |
-| `LLM_MAX_RETRIES` | `3` | Max LLM retries per chunk |
-| `GITHUB_APP_ID` | *(empty)* | GitHub App ID used for installation-token flows |
-| `GITHUB_PRIVATE_KEY` | *(empty)* | GitHub App private key; keep real keys out of git |
-| `GITHUB_WEBHOOK_SECRET` | *(empty)* | Shared secret for `X-Hub-Signature-256` verification |
-| `GITHUB_CLIENT_ID` | *(empty)* | GitHub App OAuth client ID, reserved for later setup flows |
-| `GITHUB_CLIENT_SECRET` | *(empty)* | GitHub App OAuth client secret, reserved for later setup flows |
-| `OVERLAY_DEV_AUTH_TOKEN` | *(empty)* | Optional temporary bearer token for overlay mutations; `X-LegacyLift-User` is always required, and non-demo mode requires this token until full GitHub auth is wired |
+Server environment is read from `legacylift/server/.env` when present.
 
----
+| Variable | Default | Purpose |
+|---|---:|---|
+| `DEMO_MODE` | `true` | Enables local demo defaults and stubbed LLM behavior. |
+| `AUTO_APPROVE` | `false` | Skips manual approval gates for demo runs. |
+| `OPENAI_API_KEY` | empty | Required only when demo mode is disabled and LLM calls are used. |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./.data/legacylift.db` | Async SQLAlchemy database URL. |
+| `GITHUB_APP_ID` | empty | GitHub App ID for installation-token flows. |
+| `GITHUB_PRIVATE_KEY` | empty | GitHub App private key. Keep real keys out of git. |
+| `GITHUB_WEBHOOK_SECRET` | empty | Required for `X-Hub-Signature-256` webhook verification. |
+| `GITHUB_CLIENT_ID` | empty | Reserved for GitHub App OAuth setup. |
+| `GITHUB_CLIENT_SECRET` | empty | Reserved for GitHub App OAuth setup. |
+| `OVERLAY_DEV_AUTH_TOKEN` | empty | Temporary bearer token for overlay read and mutation auth. |
+| `OVERLAY_REQUIRE_AUTH` | `false` in demo | Set to `true` to require `X-LegacyLift-User` even in demo mode. |
+| `OVERLAY_ALLOWED_REPOS_BY_USER` | empty | JSON map of reviewer identities to allowed repos, for example `{"sam@example.com":["acme/checkout"]}`. |
+| `OVERLAY_RATE_LIMIT_PER_MINUTE` | `120` | Per-reviewer overlay API request limit. Set `0` to disable locally. |
 
-## File-by-File Handoff
+When `OVERLAY_DEV_AUTH_TOKEN`, `OVERLAY_ALLOWED_REPOS_BY_USER`, `OVERLAY_REQUIRE_AUTH=true`, or non-demo mode is used, overlay reads and writes require `X-LegacyLift-User`. If `OVERLAY_DEV_AUTH_TOKEN` is set, requests must also send `Authorization: Bearer <token>`.
 
-Every file has a status and a clear owner. The skeleton runs end-to-end with stub data today. Real features get wired in one file at a time.
+## Database Setup
 
-| File | What it does | Status | Next developer implements |
-|------|-------------|--------|--------------------------|
-| `setup.bat` | One-click Windows setup (activate venv, install deps) | ✅ Done | — |
-| `requirements.txt` | All pinned dependencies | ✅ Done | Add new packages here |
-| `.env.example` | All environment variables documented | ✅ Done | Copy to `.env`, add `OPENAI_API_KEY` |
-| `models/project.py` | `Project` + `UploadedFile` Pydantic models | ✅ Done | — |
-| `models/business_rule.py` | `BusinessRule` + `OwnershipResult` models | ✅ Done | — |
-| `models/chunk.py` | `MigrationChunk`, `TestResult`, analysis result models | ✅ Done | — |
-| `models/validation.py` | `ValidationResult` + `ApprovalDecision` models | ✅ Done | — |
-| `utils/llm_client.py` | OpenAI wrapper with retry + DEMO_MODE logging | ✅ Done | Model-specific prompt tuning |
-| `utils/code_parser.py` | tree-sitter facade + COBOL regex fallback | 🔧 Stub | Wire real COBOL/Java tree-sitter grammar |
-| `utils/schema_parser.py` | SQL DDL parser (handles `DECIMAL(15,2)`, no FK) | ✅ Done | `ALTER TABLE` support for schema evolution |
-| `api/websocket_manager.py` | WebSocket registry + event broadcaster with replay | ✅ Done | Add auth check on connect |
-| `api/main.py` | All REST routes + WebSocket endpoint | ✅ Done | Add JWT auth, swap in-memory store for DB |
-| `core/pipeline.py` | Full sequential orchestrator — all 6 layers | ✅ Done | **Add the LLM call that generates `migrated_code` before Layer 1 runs** |
-| `core/layer0/archaeologist.py` | Structural scanner + chunk builder | 🔧 Stub | Replace stub section detection with real tree-sitter COBOL parsing |
-| `core/layer0/business_extractor.py` | LLM business rule extractor | 🔧 Stub | Harden `_parse_llm_response()`; add parallel file processing |
-| `core/layer0/dependency_mapper.py` | Module call graph builder | 🔧 Stub | Replace regex `CALL` detection with AST walk + topological sort |
-| `core/layer0/risk_scorer.py` | Per-file risk scoring (0.0–1.0) | 🔧 Stub | Calibrate weights with real migration data |
-| `core/layer0_5/doc_fetcher.py` | Target language documentation fetcher | 🔧 Stub | Add real aiohttp URL fetching for Python stdlib docs |
-| `core/layer0_5/deprecation_mapper.py` | COBOL→Python anti-pattern list | ✅ Done | Move database to YAML for non-developer contributions |
-| `core/layer0_5/gotcha_registry.py` | Known migration pitfalls (COMP-3, date math, etc.) | ✅ Done | Move to YAML; add severity field |
-| `core/layer1/static_analyser.py` | Syntax check + float-in-finance detection | ✅ Done | Add `radon` for complexity, `mypy` for type checking |
-| `core/layer2/ai_reviewer.py` | LLM semantic equivalence reviewer | 🔧 Stub | Wire `self.gotchas` from Layer 0.5; harden JSON parsing |
-| `core/layer3/test_generator.py` | LLM test generation + in-process runner | 🔧 Stub | Replace `exec()` runner with `subprocess` + JUnit XML parsing |
-| `core/layer4/schema_validator.py` | Schema table coverage checker | 🔧 Stub | Replace text search with SQLAlchemy model reflection |
-| `ownership/classifier.py` | **Simonra's ownership classifier** | ✅ Done | Deterministic keyword/alias scoring with custom groups; deepen optional git/docs evidence as real inputs arrive |
-| `ownership/guidance.py` | Owner-aware change guidance | ✅ Done | Tune risk summaries and suggested tests with production review data |
-| `demo/sample_cobol/interest_calc.cbl` | Tiered interest rate COBOL (BR-001–003, COMP-3) | ✅ Done | Demo data |
-| `demo/sample_cobol/account_master.cbl` | Account lookup/update COBOL (reads 2 tables, writes 2) | ✅ Done | Demo data |
-| `demo/sample_cobol/end_of_day_batch.cbl` | EOD batch orchestrator COBOL (most complex, 170 lines) | ✅ Done | Demo data |
-| `demo/sample_schema/legacy_bank.sql` | 8-table legacy schema matching the COBOL files | ✅ Done | Demo data |
-| `tests/test_pipeline.py` | Pipeline smoke tests — all passing | ✅ Done | Replace remaining stub assertions with semantic ones as layers are implemented |
-| `tests/test_ownership_plan02.py` | Classifier, custom group, guidance, and persistence tests | ✅ Done | Add overlay API tests when Plan 04 exposes guidance |
-| `Dockerfile` | Multi-stage production build, Azure-compatible PORT env var | ✅ Done | Bump VM size for prod load |
-| `deploy.sh` | Azure Container Registry build + deploy script | ✅ Done | Set ACR name before running |
-| `azure-deploy.md` | Step-by-step Azure App Service deployment guide | ✅ Done | — |
+For local development, no separate database process is required. From `legacylift/server`, the default SQLite database is created automatically at:
 
-**Legend:** ✅ Done = working as-is, no changes needed to unblock others. 🔧 Stub = returns realistic dummy data, pipeline runs through it, needs real implementation.
+```text
+legacylift/server/.data/legacylift.db
+```
 
----
+To use PostgreSQL, set `DATABASE_URL` before starting the server:
 
-## Developer Guide — Who Implements What
+```bash
+export DATABASE_URL='postgresql+asyncpg://legacylift:legacylift@localhost:5432/legacylift'
+```
 
-### Core Pipeline (`core/pipeline.py`)
-The orchestrator is complete as a skeleton. The main TODO is adding the actual LLM call that generates `migrated_code` from `source_code` before Layer 1 runs.
+The FastAPI lifespan creates tables on startup through SQLAlchemy metadata. The `/health` endpoint runs a database `SELECT 1` and returns `503` if the database is unavailable.
 
-### Layer 0 — Archaeology
-- **`archaeologist.py`**: Replace stub section detection with real tree-sitter COBOL parsing.
-- **`business_extractor.py`**: Wire to LLM. The prompt template is ready; `_parse_llm_response()` needs robustness testing.
-- **`dependency_mapper.py`**: Replace regex `CALL` detection with tree-sitter AST walk; add topological sort.
-- **`risk_scorer.py`**: Replace stub weights with calibrated real signals; add min-max normalisation.
+## Server Setup
 
-### Layer 0.5 — Target Profile
-- **`doc_fetcher.py`**: Add real URL fetching for Python stdlib docs.
-- **`deprecation_mapper.py`**: Expand the pattern database from code to YAML.
-- **`gotcha_registry.py`**: Same — move to YAML for non-developer contributions.
+```bash
+cd legacylift/server
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+export DEMO_MODE=true
+export AUTO_APPROVE=true
+python -m uvicorn api.main:app --reload --port 8000
+```
 
-### Layer 1 — Static Analysis
-- Replace complexity estimate with `radon` library.
-- Add `mypy` API call for type checking.
+Verify:
 
-### Layer 2 — AI Review
-- `_parse_response()` needs production hardening (handle all LLM edge cases).
-- Wire `self.gotchas` from pipeline after Layer 0.5 completes.
+```bash
+curl http://localhost:8000/health
+python -m pytest tests -q
+```
 
-### Layer 3 — Test Generation
-- Replace `exec()`-based runner with `subprocess.run` + JUnit XML parsing.
-- Add test isolation (each test runs in its own temp directory).
+## Client Setup
 
-### Layer 4 — Schema Validation
-- Replace text-search with SQLAlchemy model reflection for stronger coverage checking.
+```bash
+cd legacylift/client
+npm install
+NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+```
 
-### Ownership Classifier (`ownership/classifier.py`) — **Simonra**
-- Backend ownership is now canonical for persisted overlay records.
-- The classifier scores default and custom groups by keywords and aliases, records matched signals, and falls back to `Unknown` with low confidence when evidence is weak.
-- Optional LLM fallback is conservative: malformed or unrecognized responses keep ownership as `Unknown`.
-- `ownership/guidance.py` generates owner-aware approval checklists, suggested reviewer messages, merge risk, and boundary tests for threshold changes.
-- The local frontend analyzer remains static/offline only and marks ownership as low-confidence inference.
+Open `http://localhost:3000`.
 
-### GitHub Overlay Extension
+Verify:
 
-The Chromium extension in `extension/` renders persisted LegacyLift ownership annotations directly in GitHub PR file diffs and blob views. It calls the backend `GET /github/overlay` endpoint for visible file ranges, injects inline owner/confidence badges, opens a detail panel with change guidance, current/original owner, review/approval state, recent audit trail entries, and sends review actions through `PATCH /github/overlay/annotation/{id}`.
+```bash
+npm run type-check
+```
 
-Local checks:
+## GitHub App Setup
 
-```bat
-cd extension
+Create a GitHub App for a test organization or personal account.
+
+Recommended local settings:
+
+- Webhook URL: use a tunnel such as `https://<tunnel>/github/webhook` pointing to `http://localhost:8000`.
+- Webhook secret: set the same value in GitHub and `GITHUB_WEBHOOK_SECRET`.
+- Subscribe to `installation`, `push`, and `pull_request` events.
+- Repository permissions: read access to contents and pull requests is enough for the MVP ingestion flow.
+- Install the app only on test repositories that are safe to index.
+
+Webhook requests without a valid `X-Hub-Signature-256` are rejected. Replayed `X-GitHub-Delivery` IDs are rejected at the route and the ingestion layer remains idempotent.
+
+## Overlay API
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/github/overlay` | Returns annotations for a repo/ref/path or PR/path. |
+| `PATCH` | `/github/overlay/annotation/{id}` | Confirms, reassigns, flags, requests approval, marks approved, or waives approval. |
+| `POST` | `/github/webhook` | Receives GitHub App installation, push, and pull request webhooks. |
+| `GET` | `/health` | Checks API and database readiness. |
+
+`GET /github/overlay` requires `owner`, `repo`, `path`, and either `ref` or `pull_number`. Use `start`/`end` or `visible_lines` to scope results to visible GitHub lines.
+
+Overlay responses include a `state` field: `ready`, `repo_not_indexed`, `pr_not_synced`, `unsupported_file_type`, or `empty`. Unauthorized responses do not include private criteria, evidence, or snippets.
+
+## Extension Setup
+
+```bash
+cd legacylift/extension
+npm test
+npm run type-check
+```
+
+Load the extension in Chromium:
+
+1. Open `chrome://extensions`.
+2. Enable developer mode.
+3. Choose **Load unpacked**.
+4. Select `legacylift/extension`.
+5. Open extension settings and configure:
+   - Overlay API base URL: `http://localhost:8000`
+   - LegacyLift app URL: `http://localhost:3000`
+   - Reviewer identity: your GitHub handle or email
+   - Dev auth token: `OVERLAY_DEV_AUTH_TOKEN`, when configured
+
+The extension supports GitHub PR file views and blob views. Failure banners cover backend unavailable, repo not indexed, PR not synced yet, unauthorized, unsupported file type, and empty annotation results without blocking GitHub page interactions.
+
+## End-To-End Local Demo
+
+1. Start the server from `legacylift/server`.
+2. Start the client from `legacylift/client`.
+3. Confirm `curl http://localhost:8000/health` returns database status `ok`.
+4. Install the GitHub App into a test repo.
+5. Open or update a pull request to trigger `pull_request` ingestion.
+6. Confirm webhook logs include event type, delivery ID, repository, and outcome.
+7. Load the Chromium extension and configure the API URL, reviewer identity, and optional dev token.
+8. Open the PR files page.
+9. Confirm LegacyLift badges or a clear failure banner appear.
+10. Open a badge detail panel and confirm or reassign the owner.
+11. Refresh the page and verify the review state persists.
+
+## Verification
+
+Server:
+
+```bash
+cd legacylift/server
+python -m pytest tests -q
+```
+
+Client:
+
+```bash
+cd legacylift/client
+npm run type-check
+```
+
+Extension:
+
+```bash
+cd legacylift/extension
 npm run type-check
 npm test
 ```
 
-Then load `legacylift\extension` as an unpacked Chromium extension and configure the overlay API base URL, reviewer identity, and optional `OVERLAY_DEV_AUTH_TOKEN` in the extension settings.
-
----
-
-## Running Tests
-
-```bat
-.venv\Scripts\pytest legacylift/tests/ -v
-
-REM For async tests (all pipeline tests are async):
-.venv\Scripts\pytest legacylift/tests/ -v --asyncio-mode=auto
-```
-
-All tests pass in DEMO_MODE without an OpenAI key. The server suite is currently 57 tests and runs in under 10 seconds.
-
----
-
-## Deploying to Azure
-
-See [azure-deploy.md](server/azure-deploy.md) for the full step-by-step guide.
-
-Quick deploy using `server/deploy.sh` (requires Azure CLI and Docker):
+Repository:
 
 ```bash
-cd server
-
-# Set your names once
-export ACR_NAME=legacyliftacr
-export RESOURCE_GROUP=legacylift-rg
-export APP_NAME=legacylift
-
-# Build, push, and deploy
-./deploy.sh
+git status --short
 ```
-
-The `/health` endpoint is used as the Azure App Service health probe.
-
----
-
-## WebSocket Events
-
-Connect to `ws://host/ws/{project_id}` to receive live pipeline events.
-
-```json
-{ "event": "archaeology_started",   "project_id": "proj-abc123", "timestamp": "..." }
-{ "event": "business_rule_found",   "rule": { "id": "BR-001", "title": "..." } }
-{ "event": "dependency_graph_ready","graph": { "interest_calc.cbl": ["account_master.cbl"] } }
-{ "event": "risk_scores_ready",     "scores": { "end_of_day_batch.cbl": 0.85 } }
-{ "event": "target_profile_ready",  "profile": { "language": "Python", ... } }
-{ "event": "chunk_started",         "chunk_id": "chunk-001", "name": "CALC-INTEREST" }
-{ "event": "static_analysis_complete", "passed": true, "issues": [] }
-{ "event": "ai_review_complete",    "issues_found": 0 }
-{ "event": "tests_complete",        "passed": 3, "failed": 0 }
-{ "event": "chunk_ready_for_approval", "diff": "--- ...\n+++ ..." }
-{ "event": "chunk_approved",        "chunk_id": "chunk-001" }
-{ "event": "migration_complete",    "report": { ... } }
-{ "event": "error",                 "layer": "Layer2", "message": "...", "recoverable": true }
-```
-
-Past events are replayed to newly-connected clients so they can reconstruct state.
-
----
-
-*Built for Impe Hackathon 2026*

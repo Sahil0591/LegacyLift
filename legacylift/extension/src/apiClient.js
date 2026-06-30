@@ -66,12 +66,19 @@
         url.searchParams.set("visible_lines", request.visibleLines);
       }
 
-      const payload = await requestJson(url, { method: "GET" });
+      const headers = {
+        "X-LegacyLift-User": reviewerIdentity,
+      };
+      if (devToken) {
+        headers.Authorization = `Bearer ${devToken}`;
+      }
+
+      const payload = await requestJson(url, { method: "GET", headers });
       const annotations = Array.isArray(payload.annotations) ? payload.annotations : [];
       return {
         ...payload,
         annotations,
-        state: annotations.length > 0 ? "ready" : "not_indexed",
+        state: annotations.length > 0 ? "ready" : payload.state || "empty",
       };
     }
 

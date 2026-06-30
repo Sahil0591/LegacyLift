@@ -18,6 +18,19 @@ The detail panel shows the current owner, original inferred owner, review state,
    - `https://github.com/*/*/pull/*/files*`
    - `https://github.com/*/*/blob/*`
 
+The extension sends `X-LegacyLift-User` on overlay reads and mutations. When the server has `OVERLAY_DEV_AUTH_TOKEN` configured, the same value must be saved in extension settings so reads and review actions include `Authorization: Bearer <token>`.
+
+## Failure States
+
+The overlay renders a non-blocking banner when it cannot draw badges:
+
+- Backend unavailable
+- Repository not indexed
+- Pull request not synced yet
+- User unauthorized
+- Unsupported file type
+- Empty annotation result
+
 ## Verification
 
 ```bash

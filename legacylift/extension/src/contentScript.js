@@ -75,6 +75,32 @@
     }
   }
 
+  function overlayStateMessage(state) {
+    const messages = {
+      unavailable: "LegacyLift backend is unavailable. GitHub can still be used normally.",
+      repo_not_indexed: "This repository has not been indexed by LegacyLift yet.",
+      pr_not_synced: "This pull request has not been synced by LegacyLift yet.",
+      unauthorized: "Configure LegacyLift overlay authentication for this repository.",
+      unsupported_file_type: "LegacyLift does not support this file type yet.",
+      empty: "LegacyLift found no ownership annotations for the visible lines.",
+      not_indexed: "No LegacyLift annotations found for the visible lines. This repository or ref may not be indexed yet.",
+    };
+    return messages[state] || "Unable to load LegacyLift overlay annotations.";
+  }
+
+  function prioritizedOverlayState(states) {
+    const priority = [
+      "unauthorized",
+      "unavailable",
+      "unsupported_file_type",
+      "repo_not_indexed",
+      "pr_not_synced",
+      "empty",
+      "not_indexed",
+    ];
+    return priority.find((state) => states.includes(state)) || states[0] || "empty";
+  }
+
   function panelHandlers(client, settings, context, document) {
     return {
       onAction(actionName, annotation) {
@@ -118,6 +144,7 @@
 
     const client = namespace.createOverlayApiClient(settings, global.fetch.bind(global));
     const badgeItems = [];
+    const emptyStates = [];
 
     for (const file of files) {
       try {
@@ -130,6 +157,9 @@
           visibleLines: namespace.formatVisibleLines(file.visibleLines),
         });
         overlay.annotations.forEach((annotation) => badgeItems.push({ file, annotation }));
+        if (overlay.annotations.length === 0) {
+          emptyStates.push(overlay.state || "empty");
+        }
       } catch (error) {
         const state = error && error.state ? error.state : "error";
         namespace.renderOverlayState(document, state, error.message || "Unable to load LegacyLift overlay annotations.");
@@ -138,11 +168,8 @@
     }
 
     if (badgeItems.length === 0) {
-      namespace.renderOverlayState(
-        document,
-        "not_indexed",
-        "No LegacyLift annotations found for the visible lines. This repository or ref may not be indexed yet.",
-      );
+      const state = prioritizedOverlayState(emptyStates);
+      namespace.renderOverlayState(document, state, overlayStateMessage(state));
       return;
     }
 
@@ -157,9 +184,11 @@
   namespace.createNavigationWatcher = createNavigationWatcher;
   namespace.runOverlay = runOverlay;
   namespace.buildLegacyLiftUrl = buildLegacyLiftUrl;
+  namespace.overlayStateMessage = overlayStateMessage;
+  namespace.prioritizedOverlayState = prioritizedOverlayState;
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { createNavigationWatcher, runOverlay, buildLegacyLiftUrl };
+    module.exports = { createNavigationWatcher, runOverlay, buildLegacyLiftUrl, overlayStateMessage, prioritizedOverlayState };
   }
 
   if (global.document && global.location && namespace.parseGitHubUrl(String(global.location.href))) {

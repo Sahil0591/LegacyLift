@@ -90,7 +90,7 @@ test("copies suggested stakeholder message", () => {
   assert.deepEqual(copied, ["Can you confirm the intended threshold?"]);
 });
 
-test("renders backend unavailable, repo not indexed, and unauthorized states", () => {
+test("renders backend unavailable, repo not indexed, PR not synced, unsupported, empty, and unauthorized states", () => {
   const document = createDocument();
 
   renderOverlayState(document, "unavailable", "LegacyLift backend is unavailable.");
@@ -98,6 +98,15 @@ test("renders backend unavailable, repo not indexed, and unauthorized states", (
 
   renderOverlayState(document, "not_indexed", "No LegacyLift annotations found.");
   assert.match(document.body.textContent, /No LegacyLift annotations/);
+
+  renderOverlayState(document, "pr_not_synced", "This pull request has not been synced by LegacyLift yet.");
+  assert.match(document.body.textContent, /pull request has not been synced/);
+
+  renderOverlayState(document, "unsupported_file_type", "LegacyLift does not support this file type yet.");
+  assert.match(document.body.textContent, /file type/);
+
+  renderOverlayState(document, "empty", "LegacyLift found no ownership annotations for this file.");
+  assert.match(document.body.textContent, /no ownership annotations/);
 
   renderOverlayState(document, "unauthorized", "Configure LegacyLift overlay authentication.");
   assert.match(document.body.textContent, /authentication/);

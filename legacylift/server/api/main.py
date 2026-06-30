@@ -34,6 +34,7 @@ from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile, W
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from api.github_overlay import router as github_overlay_router
 from api.websocket_manager import manager as ws_manager
@@ -151,7 +152,21 @@ class RuleReviewRequest(BaseModel):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "version": "0.1.0"}
+    try:
+        async with get_session() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as exc:
+        logger.exception("health_check database=unavailable")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "version": "0.1.0",
+                "database": {"status": "unavailable", "error": str(exc)},
+            },
+        )
+
+    return {"status": "ok", "version": "0.1.0", "database": {"status": "ok"}}
 
 
 # ---------------------------------------------------------------------------
@@ -168,11 +183,23 @@ async def github_webhook(
     settings = GitHubAppSettings.from_env()
     body = await request.body()
     if not verify_webhook_signature(body, x_hub_signature_256, settings.webhook_secret):
+        _log_webhook_outcome(
+            event=x_github_event,
+            delivery_id=x_github_delivery,
+            repository="unknown",
+            outcome="invalid_signature",
+        )
         raise HTTPException(status_code=401, detail="Invalid GitHub webhook signature")
 
     try:
         payload = json.loads(body.decode("utf-8"))
     except json.JSONDecodeError as exc:
+        _log_webhook_outcome(
+            event=x_github_event,
+            delivery_id=x_github_delivery,
+            repository="unknown",
+            outcome="invalid_json",
+        )
         raise HTTPException(status_code=400, detail="Invalid GitHub webhook JSON") from exc
 
     async with get_session() as session:
@@ -184,7 +211,59 @@ async def github_webhook(
             raw_body=body,
         )
 
+    repository = _github_payload_repository(payload)
+    outcome = str(result.get("status", "unknown"))
+    _log_webhook_outcome(
+        event=x_github_event,
+        delivery_id=x_github_delivery,
+        repository=repository,
+        outcome=outcome,
+    )
+    if outcome == "duplicate":
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "Duplicate GitHub webhook delivery",
+                "delivery_id": x_github_delivery,
+            },
+        )
+
     return JSONResponse(status_code=202, content=result)
+
+
+def _github_payload_repository(payload: dict) -> str:
+    repository = payload.get("repository")
+    if isinstance(repository, dict):
+        full_name = repository.get("full_name")
+        if full_name:
+            return str(full_name)
+
+    repositories = payload.get("repositories")
+    if isinstance(repositories, list) and repositories:
+        first = repositories[0]
+        if isinstance(first, dict) and first.get("full_name"):
+            count = len(repositories)
+            suffix = f" (+{count - 1})" if count > 1 else ""
+            return f"{first['full_name']}{suffix}"
+
+    return "unknown"
+
+
+def _log_webhook_outcome(
+    *,
+    event: str,
+    delivery_id: str,
+    repository: str,
+    outcome: str,
+) -> None:
+    log = logger.warning if outcome in {"duplicate", "invalid_signature", "invalid_json"} else logger.info
+    log(
+        "github_webhook event=%s delivery_id=%s repository=%s outcome=%s",
+        event,
+        delivery_id,
+        repository,
+        outcome,
+    )
 
 
 # ---------------------------------------------------------------------------

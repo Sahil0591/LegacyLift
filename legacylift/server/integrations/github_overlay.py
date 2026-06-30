@@ -43,6 +43,19 @@ class OverlayValidationError(OverlayError):
     status_code = 400
 
 
+SUPPORTED_OVERLAY_EXTENSIONS = {
+    ".cbl",
+    ".cob",
+    ".cobol",
+    ".java",
+    ".py",
+    ".sql",
+    ".vb",
+    ".vbs",
+    ".vb6",
+}
+
+
 @dataclass(frozen=True)
 class OverlayLineRange:
     start: int
@@ -64,18 +77,42 @@ async def query_overlay(
     if not ref and pull_number is None:
         raise OverlayValidationError("ref or pull_number is required")
 
+    if not _is_supported_overlay_path(path):
+        return _overlay_response(
+            owner=owner,
+            repo=repo,
+            ref=ref or "",
+            path=path,
+            annotations=[],
+            state="unsupported_file_type",
+        )
+
     repository = await _repository(session, owner=owner, repo=repo)
     resolved_ref = ref or ""
     pull_request_payload: dict[str, Any] | None = None
     ranges = parse_line_ranges(start=start, end=end, visible_lines=visible_lines)
 
-    if repository is None:
-        return _overlay_response(owner=owner, repo=repo, ref=resolved_ref, path=path, annotations=[])
+    if repository is None or not repository.is_active or not repository.installation_id:
+        return _overlay_response(
+            owner=owner,
+            repo=repo,
+            ref=resolved_ref,
+            path=path,
+            annotations=[],
+            state="repo_not_indexed",
+        )
 
     if pull_number is not None:
         pull_request = await _pull_request(session, repository_id=repository.id, pull_number=pull_number)
         if pull_request is None:
-            return _overlay_response(owner=owner, repo=repo, ref=resolved_ref, path=path, annotations=[])
+            return _overlay_response(
+                owner=owner,
+                repo=repo,
+                ref=resolved_ref,
+                path=path,
+                annotations=[],
+                state="pr_not_synced",
+            )
         chunks = await _chunks_for_pull_request(
             session,
             repository_id=repository.id,
@@ -167,6 +204,21 @@ async def mutate_overlay_annotation(
 
     annotation = await _annotation_for_criterion(session, chunk=chunk, criterion=criterion)
     return {"annotation": annotation}
+
+
+async def repository_for_annotation(
+    session: AsyncSession,
+    *,
+    annotation_id: str,
+) -> Repository | None:
+    criterion_id = annotation_id.removeprefix("ann_")
+    result = await session.execute(
+        select(Repository)
+        .join(CodeChunk, CodeChunk.repository_id == Repository.id)
+        .join(DecisionCriterion, DecisionCriterion.code_chunk_id == CodeChunk.id)
+        .where(DecisionCriterion.id == criterion_id)
+    )
+    return result.scalar_one_or_none()
 
 
 def parse_line_ranges(
@@ -405,16 +457,23 @@ def _overlay_response(
     path: str,
     annotations: list[dict[str, Any]],
     pull_request: dict[str, Any] | None = None,
+    state: str | None = None,
 ) -> dict[str, Any]:
     response: dict[str, Any] = {
         "repository": {"owner": owner, "repo": repo},
         "ref": ref,
         "path": path,
+        "state": state or ("ready" if annotations else "empty"),
         "annotations": annotations,
     }
     if pull_request is not None:
         response["pull_request"] = pull_request
     return response
+
+
+def _is_supported_overlay_path(path: str) -> bool:
+    normalized = path.lower()
+    return any(normalized.endswith(extension) for extension in SUPPORTED_OVERLAY_EXTENSIONS)
 
 
 def _line_range(start: int, end: int) -> OverlayLineRange:

@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { createNavigationWatcher } = require("../src/contentScript.js");
+const { createNavigationWatcher, overlayStateMessage, prioritizedOverlayState } = require("../src/contentScript.js");
 
 test("re-renders on GitHub SPA navigation events", async () => {
   const listeners = new Map();
@@ -42,4 +42,14 @@ test("re-renders on GitHub SPA navigation events", async () => {
 
   assert.equal(historyCalls.length, 1);
   assert.equal(renders, 3);
+});
+
+test("prioritizes and names release-hardening overlay failure states", () => {
+  assert.equal(prioritizedOverlayState(["empty", "pr_not_synced"]), "pr_not_synced");
+  assert.equal(prioritizedOverlayState(["repo_not_indexed", "unsupported_file_type"]), "unsupported_file_type");
+  assert.match(overlayStateMessage("unavailable"), /backend is unavailable/);
+  assert.match(overlayStateMessage("repo_not_indexed"), /repository has not been indexed/);
+  assert.match(overlayStateMessage("pr_not_synced"), /pull request has not been synced/);
+  assert.match(overlayStateMessage("unsupported_file_type"), /file type/);
+  assert.match(overlayStateMessage("empty"), /no ownership annotations/);
 });

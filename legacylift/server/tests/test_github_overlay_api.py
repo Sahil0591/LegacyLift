@@ -65,6 +65,7 @@ async def overlay_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             github_owner="acme",
             github_name="checkout",
             default_branch="main",
+            installation_id="4242",
         )
         await upsert_commit(session, repository_id=repository.id, sha="abc123", ref="refs/heads/main")
         chunk = await upsert_code_chunk(
@@ -235,6 +236,7 @@ async def test_bdd_no_matching_annotations_returns_empty_response_shape(overlay_
         "repository": {"owner": "acme", "repo": "checkout"},
         "ref": "abc123",
         "path": "src/checkout/checkout-risk.cbl",
+        "state": "empty",
         "annotations": [],
     }
 
