@@ -90,16 +90,23 @@ test("falls back to README on PR pages when GitHub hides file path metadata", ()
   assert.deepEqual(visibleFile.visibleLines, []);
 });
 
-test("finds a matching line anchor for an annotation range", () => {
+test("finds a matching code-cell anchor for an annotation range", () => {
   const document = createDocument();
   const file = document.createElement("div");
   file.setAttribute("data-file-path", "src/checkout/checkout-risk.cbl");
+  const firstRow = document.createElement("tr");
   const first = createLine(document, 249);
-  const second = createLine(document, 250);
-  file.append(first, second);
+  const codeCell = document.createElement("td");
+  codeCell.classList.add("blob-code");
+  codeCell.setAttribute("id", "LC249");
+  codeCell.textContent = "IF PURCHASE-AMOUNT > 500.00";
+  firstRow.append(first, codeCell);
+  const secondRow = document.createElement("tr");
+  secondRow.append(createLine(document, 250));
+  file.append(firstRow, secondRow);
   document.body.appendChild(file);
 
   const [visibleFile] = extractVisibleFiles(document, { kind: "pull" });
 
-  assert.equal(findLineAnchor(visibleFile, [249, 256]), first);
+  assert.equal(findLineAnchor(visibleFile, [249, 256]), codeCell);
 });

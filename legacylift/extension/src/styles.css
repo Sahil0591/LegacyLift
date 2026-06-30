@@ -14,9 +14,11 @@
   appearance: none;
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   min-height: 22px;
-  margin: 0 6px;
-  padding: 2px 8px;
+  max-width: min(320px, calc(100vw - 96px));
+  margin: 0 10px 0 0;
+  padding: 3px 8px;
   border: 1px solid rgba(9, 105, 218, 0.35);
   border-radius: 6px;
   background: #ddf4ff;
@@ -24,6 +26,7 @@
   font: 600 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
   vertical-align: middle;
+  white-space: nowrap;
 }
 
 .ll-overlay-badge:hover {
@@ -31,12 +34,24 @@
   border-color: rgba(9, 105, 218, 0.6);
 }
 
+.ll-overlay-badge-prefix {
+  color: #0969da;
+  font-weight: 600;
+}
+
+.ll-overlay-badge-owner {
+  overflow: hidden;
+  color: #0550ae;
+  font-weight: 700;
+  text-overflow: ellipsis;
+}
+
 .ll-overlay-panel {
   position: fixed;
   top: 72px;
   right: 24px;
   z-index: 2147483646;
-  width: min(390px, calc(100vw - 32px));
+  width: min(460px, calc(100vw - 32px));
   max-height: calc(100vh - 96px);
   overflow: auto;
   border: 1px solid var(--ll-border);
@@ -88,14 +103,48 @@
   padding-left: 18px;
 }
 
-.ll-overlay-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.ll-overlay-key-values {
+  display: grid;
+  grid-template-columns: minmax(108px, max-content) 1fr;
+  gap: 8px 14px;
+  margin: 0;
 }
 
-.ll-overlay-actions h3 {
-  flex: 1 0 100%;
+.ll-overlay-key-values dt,
+.ll-overlay-key-values dd {
+  margin: 0;
+}
+
+.ll-overlay-key-values dt {
+  color: var(--ll-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ll-overlay-key-values dd {
+  min-width: 0;
+  font-weight: 600;
+}
+
+.ll-overlay-actions {
+  display: block;
+}
+
+.ll-overlay-action-group + .ll-overlay-action-group {
+  margin-top: 12px;
+}
+
+.ll-overlay-action-group h4 {
+  margin: 0 0 6px;
+  color: var(--ll-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ll-overlay-action-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
 }
 
 .ll-overlay-action,
@@ -110,7 +159,9 @@
 }
 
 .ll-overlay-action {
-  padding: 6px 9px;
+  min-height: 34px;
+  padding: 7px 10px;
+  text-align: center;
 }
 
 .ll-overlay-icon-button {
@@ -122,6 +173,27 @@
 .ll-overlay-icon-button:hover {
   border-color: var(--ll-accent);
   color: var(--ll-accent);
+}
+
+.ll-overlay-action-primary {
+  border-color: rgba(9, 105, 218, 0.7);
+  background: var(--ll-accent);
+  color: #ffffff;
+}
+
+.ll-overlay-action-primary:hover {
+  border-color: #0550ae;
+  background: #0550ae;
+  color: #ffffff;
+}
+
+.ll-overlay-action-danger {
+  color: var(--ll-danger);
+}
+
+.ll-overlay-action-danger:hover {
+  border-color: var(--ll-danger);
+  color: var(--ll-danger);
 }
 
 .ll-overlay-action[disabled] {

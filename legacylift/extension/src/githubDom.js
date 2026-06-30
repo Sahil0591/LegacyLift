@@ -58,6 +58,39 @@
     return [...new Set(lines)].sort((a, b) => a - b);
   }
 
+  function isCodeCell(element) {
+    if (!element) return false;
+    const classList = element.classList;
+    const id = getAttribute(element, "id") || "";
+    return (
+      id.startsWith("LC") ||
+      (classList && typeof classList.contains === "function" && (classList.contains("blob-code") || classList.contains("blob-code-inner"))) ||
+      Boolean(getAttribute(element, "data-code-cell"))
+    );
+  }
+
+  function lineContentAnchor(lineElement) {
+    if (isCodeCell(lineElement)) return lineElement;
+
+    const row = lineElement && typeof lineElement.closest === "function" ? lineElement.closest("tr") : null;
+    if (row && typeof row.querySelector === "function") {
+      const explicit = row.querySelector(".blob-code, .blob-code-inner, [data-code-cell], [id^=\"LC\"]");
+      if (explicit) return explicit;
+
+      const cells = toArray(row.children).filter((child) => {
+        const classList = child.classList;
+        return (
+          child !== lineElement &&
+          !(classList && typeof classList.contains === "function" && classList.contains("blob-num"))
+        );
+      });
+      if (cells.length > 0) return cells[cells.length - 1];
+    }
+
+    const next = lineElement && lineElement.nextElementSibling ? lineElement.nextElementSibling : null;
+    return next && isCodeCell(next) ? next : lineElement;
+  }
+
   function extractPageFilePath(root) {
     if (!root.querySelector) return null;
     const candidate = root.querySelector(
@@ -156,7 +189,7 @@
       return lineNumber !== null && lineNumber >= start && lineNumber <= end;
     });
     if (match) {
-      return match;
+      return lineContentAnchor(match);
     }
 
     if (file.root.querySelector) {

@@ -42,15 +42,24 @@ test("renders inline owner badges beside matching lines", () => {
   const document = createDocument();
   const file = document.createElement("div");
   file.setAttribute("data-file-path", "src/checkout/checkout-risk.cbl");
-  file.append(createLine(document, 249), createLine(document, 250));
+  const row = document.createElement("tr");
+  const lineNumber = createLine(document, 249);
+  const codeCell = document.createElement("td");
+  codeCell.classList.add("blob-code");
+  codeCell.setAttribute("id", "LC249");
+  codeCell.textContent = "IF PURCHASE-AMOUNT > 500.00";
+  row.append(lineNumber, codeCell);
+  file.append(row, createLine(document, 250));
   document.body.appendChild(file);
   const [visibleFile] = extractVisibleFiles(document, { kind: "pull" });
 
   renderBadges(document, [{ file: visibleFile, annotation }], { onSelect() {} });
 
   const badge = document.querySelector(".ll-overlay-badge");
-  assert.equal(badge.textContent, "Finance / Pricing - High");
+  assert.equal(badge.textContent, "Decision owner:Finance / Pricing");
   assert.equal(badge.getAttribute("data-annotation-id"), "ann_123");
+  assert.equal(badge.parentElement, codeCell);
+  assert.match(badge.getAttribute("aria-label"), /High confidence/);
 });
 
 test("renders detail panel sections and approval actions", () => {
@@ -67,8 +76,12 @@ test("renders detail panel sections and approval actions", () => {
 
   assert.match(document.body.textContent, /Orders over \$500 require manual review/);
   assert.match(document.body.textContent, /Finance \/ Pricing/);
+  assert.match(document.body.textContent, /High confidence/);
   assert.match(document.body.textContent, /Matched monetary threshold/);
   assert.match(document.body.textContent, /Tests to add/);
+  assert.match(document.body.textContent, /Review owner/);
+  assert.match(document.body.textContent, /Confirm Finance \/ Pricing/);
+  assert.match(document.body.textContent, /Ask for approval/);
 
   document.querySelector('[data-action="confirm_owner"]').click();
   assert.deepEqual(actions, ["confirm_owner"]);
@@ -86,7 +99,9 @@ test("copies suggested stakeholder message", () => {
     onOpenLegacyLift() {},
   });
 
-  document.querySelector('[data-action="copy_message"]').click();
+  const copy = document.querySelector('[data-action="copy_message"]');
+  assert.equal(copy.textContent, "Copy suggested message");
+  copy.click();
   assert.deepEqual(copied, ["Can you confirm the intended threshold?"]);
 });
 
