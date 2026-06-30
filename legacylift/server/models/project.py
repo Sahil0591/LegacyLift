@@ -100,6 +100,9 @@ class Project(BaseModel):
     id: str = Field(default_factory=lambda: f"proj-{uuid.uuid4().hex[:8]}")
     """Short unique ID, e.g. 'proj-a1b2c3d4'."""
 
+    owner_id: str = ""
+    """Clerk user ID of the user who created this project."""
+
     name: str
     """Human-readable project name, e.g. 'BankCore COBOL Migration'."""
 

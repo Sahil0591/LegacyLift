@@ -10,12 +10,7 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "next": "14.2.35",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "framer-motion": "^11.3.19",
-    "react-diff-viewer-continued": "^3.4.0",
-    "reactflow": "^11.11.4",
+    "@clerk/nextjs": "^7.5.10",
     "@radix-ui/react-dialog": "^1.1.1",
     "@radix-ui/react-dropdown-menu": "^2.1.1",
     "@radix-ui/react-label": "^2.1.0",
@@ -29,7 +24,13 @@
     "@radix-ui/react-tooltip": "^1.1.2",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "framer-motion": "^11.3.19",
     "lucide-react": "^0.400.0",
+    "next": "14.2.35",
+    "react": "^18.3.1",
+    "react-diff-viewer-continued": "^3.4.0",
+    "react-dom": "^18.3.1",
+    "reactflow": "^11.11.4",
     "tailwind-merge": "^2.4.0",
     "tailwindcss-animate": "^1.0.7"
   },

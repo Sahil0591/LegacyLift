@@ -10,7 +10,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { isDemoProject, createDemoState } from "@/lib/demoData";
-import { loadAnalysis } from "@/lib/projectStore";
+import {
+  loadAnalysis,
+  loadProgress,
+  saveProgress,
+  updateProjectProgress,
+} from "@/lib/projectStore";
 import { RISK_RANK } from "@/components/workbench/shared";
 import type { AnalyzeResult } from "@/lib/analyze";
 import type {
@@ -223,11 +228,28 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     }
     if (isLocal && projectId) {
       const analysis = loadAnalysis(projectId);
-      setState(
-        analysis
-          ? stateFromAnalysis(projectId, analysis)
-          : { ...INITIAL_STATE, projectId },
-      );
+      if (!analysis) {
+        setState({ ...INITIAL_STATE, projectId });
+        return;
+      }
+      const base = stateFromAnalysis(projectId, analysis);
+      const progress = loadProgress(projectId);
+      if (progress) {
+        const chunks = base.chunks.map((c) => {
+          const saved = progress[c.id];
+          return saved ? { ...c, status: saved.status as typeof c.status, migrated_code: saved.migrated_code } : c;
+        });
+        const allApproved = chunks.every((c) => c.status === "Approved");
+        setState({
+          ...base,
+          chunks,
+          currentChunk: chunks.find((c) => c.status === "Review") ?? chunks.find((c) => c.status === "Pending") ?? chunks[0] ?? null,
+          migrationComplete: allApproved,
+          currentLayer: allApproved ? 4 : base.currentLayer,
+        });
+      } else {
+        setState(base);
+      }
       return;
     }
     setState({ ...INITIAL_STATE, projectId });
@@ -557,6 +579,25 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
 
     return () => unsubs.forEach((u) => u());
   }, [subscribe, setLayer]);
+
+  // ------------------------------------------------------------------
+  // Auto-save progress for local projects
+  // Runs after every chunk state change so a refresh restores approvals.
+  // ------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!isLocal || !projectId || state.chunks.length === 0) return;
+    saveProgress(projectId, state.chunks);
+    const approved = state.chunks.filter((c) => c.status === "Approved").length;
+    updateProjectProgress(projectId, {
+      chunksApproved: approved,
+      status: state.migrationComplete
+        ? "complete"
+        : approved > 0
+          ? "in_progress"
+          : "ready",
+    });
+  }, [state.chunks, state.migrationComplete, isLocal, projectId]);
 
   // ------------------------------------------------------------------
   // Optimistic UI helpers

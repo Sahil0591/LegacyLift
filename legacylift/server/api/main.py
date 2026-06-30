@@ -20,29 +20,26 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv(usecwd=True))
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from api.auth import get_current_user_id
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition
-from models.project import Project, ProjectStatus, SourceLanguage, UploadedFile
+from core.storage import storage
+from models.project import Project, SourceLanguage, UploadedFile
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# In-memory storage
-# ---------------------------------------------------------------------------
-
-projects: dict[str, Project] = {}
 active_pipelines: dict[str, asyncio.Task] = {}
 
 
@@ -63,7 +60,9 @@ async def lifespan(app: FastAPI):
     print(f"  LLM MODEL:    {os.getenv('VENICE_MODEL', 'openai-gpt-52-codex')}")
     print(f"  AUTO_APPROVE: {os.getenv('AUTO_APPROVE', 'false')}")
     print("=" * 60)
+    await storage.load()
     yield
+    await storage.persist()
     print("LegacyLift API shutting down...")
 
 
@@ -129,21 +128,31 @@ async def health_check():
 # ---------------------------------------------------------------------------
 
 @app.post("/project", status_code=201)
-async def create_project(body: CreateProjectRequest):
+async def create_project(body: CreateProjectRequest, user_id: str = Depends(get_current_user_id)):
     """Create a new migration project. Returns id, name, status, created_at."""
     try:
         project = Project(
             name=body.name,
             source_language=body.source_language,
             target_language=body.target_language,
+            owner_id=user_id,
         )
-        projects[project.id] = project
+        if not storage.can_create_project(user_id):
+            raise HTTPException(
+                status_code=429,
+                detail="Project limit reached. Delete an existing project to create a new one.",
+            )
+        storage.put(project)
+        storage.increment_projects_used(user_id)
+        asyncio.ensure_future(storage.persist())
         return {
             "project_id": project.id,
             "name": project.name,
             "status": _status_str(project),
             "created_at": project.created_at.isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -156,9 +165,10 @@ async def create_project(body: CreateProjectRequest):
 async def upload_files(
     project_id: str,
     files: list[UploadFile] = File(...),
+    user_id: str = Depends(get_current_user_id),
 ):
     """Upload one or more legacy source files. Stores content keyed by filename."""
-    project = _get_project(project_id)
+    project = _get_project(project_id, user_id)
 
     filenames: list[str] = []
     for upload in files:
@@ -183,6 +193,7 @@ async def upload_files(
     if _status_str(project) == "created":
         project.status = "uploading"
 
+    asyncio.ensure_future(storage.persist())
     return {
         "project_id": project_id,
         "files_uploaded": filenames,
@@ -195,9 +206,9 @@ async def upload_files(
 # ---------------------------------------------------------------------------
 
 @app.post("/project/{project_id}/start", status_code=202)
-async def start_pipeline(project_id: str):
+async def start_pipeline(project_id: str, user_id: str = Depends(get_current_user_id)):
     """Start the migration pipeline. Returns 202 immediately; progress via WebSocket."""
-    project = _get_project(project_id)
+    project = _get_project(project_id, user_id)
 
     current = _status_str(project)
     if current not in ("created", "uploading"):
@@ -228,6 +239,7 @@ async def approve_chunk(
     project_id: str,
     chunk_id: str,
     body: ApproveChunkRequest = ApproveChunkRequest(),
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     Approve a migration chunk.
@@ -235,7 +247,7 @@ async def approve_chunk(
     Works both during an active pipeline (resolves the approval gate) and
     after the pipeline has finished (records the decision for audit).
     """
-    project = _get_project(project_id)
+    project = _get_project(project_id, user_id)
     project.chunk_approvals[chunk_id] = "approved"
     await ws_manager.emit(project.id, "chunk_approved", chunk_id=chunk_id)
 
@@ -249,7 +261,7 @@ async def approve_chunk(
     if all_approved:
         await _transition(project, "validating")
         await _transition(project, "complete")
-        project.completed_at = datetime.utcnow()
+        project.completed_at = datetime.now(timezone.utc)
         await ws_manager.emit(
             project.id,
             "migration_complete",
@@ -264,6 +276,7 @@ async def approve_chunk(
         await _transition(project, "ready")
         await ws_manager.emit(project.id, "ready_for_next_chunk")
 
+    asyncio.ensure_future(storage.persist())
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
@@ -281,9 +294,10 @@ async def reject_chunk(
     project_id: str,
     chunk_id: str,
     body: RejectChunkRequest,
+    user_id: str = Depends(get_current_user_id),
 ):
     """Reject a migration chunk with required comment and optional feedback."""
-    project = _get_project(project_id)
+    project = _get_project(project_id, user_id)
     project.chunk_approvals[chunk_id] = "rejected"
     await _transition(project, "ready")
     await ws_manager.emit(
@@ -293,6 +307,7 @@ async def reject_chunk(
         feedback=body.feedback or body.comment,
     )
 
+    asyncio.ensure_future(storage.persist())
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
@@ -306,14 +321,14 @@ async def reject_chunk(
 # ---------------------------------------------------------------------------
 
 @app.post("/project/{project_id}/confirm-rule/{chunk_id}", status_code=200)
-async def confirm_rule(project_id: str, chunk_id: str):
+async def confirm_rule(project_id: str, chunk_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Mark the business rule for a chunk as Confirmed by a domain expert.
 
     Must be called before select-chunk — the chunk selection endpoint rejects
     requests where the rule has not been confirmed.
     """
-    project = _get_project(project_id)
+    project = _get_project(project_id, user_id)
 
     chunk_dict = next(
         (c for c in project.layer0_chunks if c["id"] == chunk_id), None
@@ -335,7 +350,7 @@ async def confirm_rule(project_id: str, chunk_id: str):
 # ---------------------------------------------------------------------------
 
 @app.post("/project/{project_id}/select-chunk/{chunk_id}", status_code=202)
-async def select_chunk(project_id: str, chunk_id: str):
+async def select_chunk(project_id: str, chunk_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Select a Layer 0 chunk for migration.
 
@@ -350,7 +365,7 @@ async def select_chunk(project_id: str, chunk_id: str):
       - Broadcasts { event: 'chunk_selected', chunk_id }
       - Returns 202 immediately
     """
-    project = _get_project(project_id)
+    project = _get_project(project_id, user_id)
 
     current = _status_str(project)
     if current not in ("ready", "migrating"):
@@ -400,8 +415,8 @@ async def select_chunk(project_id: str, chunk_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/project/{project_id}/status")
-async def get_project_status(project_id: str):
-    project = _get_project(project_id)
+async def get_project_status(project_id: str, user_id: str = Depends(get_current_user_id)):
+    project = _get_project(project_id, user_id)
     return {
         "project_id":         project.id,
         "status":             _status_str(project),
@@ -419,8 +434,8 @@ async def get_project_status(project_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/project/{project_id}/rules")
-async def get_business_rules(project_id: str):
-    project = _get_project(project_id)
+async def get_business_rules(project_id: str, user_id: str = Depends(get_current_user_id)):
+    project = _get_project(project_id, user_id)
     rules = project.layer0_rules
     return {
         "project_id": project_id,
@@ -435,8 +450,8 @@ async def get_business_rules(project_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/project/{project_id}/graph")
-async def get_dependency_graph(project_id: str):
-    project = _get_project(project_id)
+async def get_dependency_graph(project_id: str, user_id: str = Depends(get_current_user_id)):
+    project = _get_project(project_id, user_id)
     graph = project.layer0_graph
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
@@ -446,6 +461,54 @@ async def get_dependency_graph(project_id: str):
         "edge_count": len(edges),
         "nodes":      nodes,
         "edges":      edges,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /projects
+# ---------------------------------------------------------------------------
+
+@app.get("/projects")
+async def list_projects(user_id: str = Depends(get_current_user_id)):
+    """Return a summary of all projects belonging to the authenticated user."""
+    projects = storage.list_for_user(user_id)
+    return {
+        "projects": [
+            {
+                "project_id":   p.id,
+                "name":         p.name,
+                "status":       _status_str(p),
+                "source_language": p.source_language if isinstance(p.source_language, str) else p.source_language.value,
+                "target_language": p.target_language,
+                "chunk_count":  p.chunk_count,
+                "chunks_approved": sum(1 for v in p.chunk_approvals.values() if v == "approved"),
+                "created_at":   p.created_at.isoformat(),
+                "completed_at": p.completed_at.isoformat() if p.completed_at else None,
+            }
+            for p in projects
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /user/limits
+# ---------------------------------------------------------------------------
+
+@app.get("/user/limits")
+async def get_user_limits(user_id: str = Depends(get_current_user_id)):
+    """Return the current user's quota and usage counters."""
+    lim = storage.get_limits(user_id)
+    lim.reset_daily_if_needed()
+    return {
+        "user_id":                 user_id,
+        "max_projects":            lim.max_projects,
+        "projects_used":           lim.projects_used,
+        "projects_remaining":      lim.projects_remaining,
+        "max_files_per_project":   lim.max_files_per_project,
+        "max_file_size_mb":        lim.max_file_size_mb,
+        "max_migrations_per_day":  lim.max_migrations_per_day,
+        "migrations_today":        lim.migrations_today,
+        "migrations_remaining":    lim.migrations_remaining_today,
     }
 
 
@@ -476,10 +539,12 @@ async def websocket_endpoint(websocket: WebSocket, project_id: str):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_project(project_id: str) -> Project:
-    project = projects.get(project_id)
+def _get_project(project_id: str, user_id: str) -> Project:
+    project = storage.get(project_id)
     if not project:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    if project.owner_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
     return project
 
 

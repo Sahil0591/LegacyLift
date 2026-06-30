@@ -42,6 +42,10 @@ pytest-asyncio>=0.23.0,<0.25.0    # async/await support in pytest
 pytest-mock>=3.14.0,<4.0.0        # Mocking utilities
 httpx>=0.27.0,<0.28.0             # Async test client for FastAPI
 
+# --- Auth ---
+PyJWT>=2.8.0,<3.0.0               # JWT decode + RS256 verification for Clerk tokens
+cryptography>=42.0.0,<44.0.0      # RSA key support required by PyJWT
+
 # --- Utilities ---
 tenacity>=8.3.0,<9.0.0             # Retry logic with exponential backoff (LLM calls)
 rich>=13.7.0,<14.0.0               # Beautiful console output for DEMO_MODE

@@ -1,11 +1,7 @@
 "use client";
-// hooks/useWebSocket.ts — React hook wrapping lib/websocket.ts.
-// Creates one WebSocketClient per projectId, manages its lifecycle with React,
-// and exposes the connection status plus a subscribe function.
-//
-// TODO: Add auth header passing once backend JWT auth is implemented.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@clerk/nextjs";
 import { createWebSocketClient, type WebSocketClient } from "@/lib/websocket";
 import type { ConnectionStatus, WSEvent, WSEventName } from "@/types/legacylift";
 
@@ -21,15 +17,16 @@ interface UseWebSocketReturn {
 export function useWebSocket(projectId: string | null): UseWebSocketReturn {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const clientRef = useRef<WebSocketClient | null>(null);
+  const { getToken } = useAuth();
 
   useEffect(() => {
     if (!projectId) return;
 
-    const client = createWebSocketClient(projectId);
+    const client = createWebSocketClient(projectId, () => getToken());
     clientRef.current = client;
 
     const unsubStatus = client.onStatusChange(setStatus);
-    client.connect();
+    void client.connect();
 
     return () => {
       unsubStatus();

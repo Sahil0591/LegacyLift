@@ -17,9 +17,12 @@ export class WebSocketClient {
   private readonly listeners = new Map<WSEventName, Set<InternalEventCallback>>();
   private readonly statusListeners = new Set<StatusListener>();
 
-  constructor(private readonly projectId: string) {}
+  constructor(
+    private readonly projectId: string,
+    private readonly getToken?: () => Promise<string | null>,
+  ) {}
 
-  connect(): void {
+  async connect(): Promise<void> {
     if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
       return;
     }
@@ -27,7 +30,11 @@ export class WebSocketClient {
     this.manuallyClosed = false;
     this.setStatus("connecting");
 
-    const url = `${WS_BASE_URL.replace(/\/$/, "")}/ws/${encodeURIComponent(this.projectId)}`;
+    let url = `${WS_BASE_URL.replace(/\/$/, "")}/ws/${encodeURIComponent(this.projectId)}`;
+    if (this.getToken) {
+      const token = await this.getToken().catch(() => null);
+      if (token) url += `?token=${encodeURIComponent(token)}`;
+    }
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
@@ -110,7 +117,7 @@ export class WebSocketClient {
     this.setStatus("connecting");
     const delay = BASE_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempts;
     this.reconnectAttempts += 1;
-    this.reconnectTimer = setTimeout(() => this.connect(), delay);
+    this.reconnectTimer = setTimeout(() => { void this.connect(); }, delay);
   }
 
   private setStatus(status: ConnectionStatus): void {
@@ -119,6 +126,9 @@ export class WebSocketClient {
   }
 }
 
-export function createWebSocketClient(projectId: string): WebSocketClient {
-  return new WebSocketClient(projectId);
+export function createWebSocketClient(
+  projectId: string,
+  getToken?: () => Promise<string | null>,
+): WebSocketClient {
+  return new WebSocketClient(projectId, getToken);
 }

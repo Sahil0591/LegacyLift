@@ -14,15 +14,27 @@ interface ApiErrorBody {
   message?: string;
 }
 
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    // window.Clerk is set by @clerk/nextjs automatically on the client side
+    const token = await (window as any).Clerk?.session?.getToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
   options: { ignoreNotFound?: boolean } = {},
 ): Promise<T> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+      ...authHeaders,
       ...init.headers,
     },
   });
@@ -156,6 +168,47 @@ export async function selectChunkForMigration(
       method: "POST",
     },
   );
+}
+
+export interface ServerProject {
+  project_id: string;
+  name: string;
+  status: string;
+  source_language: string;
+  target_language: string;
+  chunk_count: number;
+  chunks_approved: number;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface UserLimits {
+  user_id: string;
+  max_projects: number;
+  projects_used: number;
+  projects_remaining: number;
+  max_files_per_project: number;
+  max_file_size_mb: number;
+  max_migrations_per_day: number;
+  migrations_today: number;
+  migrations_remaining: number;
+}
+
+export async function listServerProjects(): Promise<ServerProject[]> {
+  try {
+    const data = await request<{ projects: ServerProject[] }>("/projects");
+    return data.projects;
+  } catch {
+    return [];
+  }
+}
+
+export async function getUserLimits(): Promise<UserLimits | null> {
+  try {
+    return await request<UserLimits>("/user/limits");
+  } catch {
+    return null;
+  }
 }
 
 export async function updateBusinessRule(
