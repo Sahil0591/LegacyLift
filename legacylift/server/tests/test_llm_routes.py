@@ -7,8 +7,8 @@ Design rules:
 - No real Venice call is made. LLMClient is patched to return canned text.
 - Storage lifespan events are NOT triggered (TestClient used without context
   manager) — the LLM routes have no dependency on loaded storage.
-- Auth dependency is not on these routes, so no Clerk token is needed.
-- Rate-limit state is cleared between test cases via module-level setup.
+- Auth dependency is overridden via app.dependency_overrides in the auth fixture.
+- Rate-limit state and per-user storage limits are cleared between test cases.
 """
 
 from __future__ import annotations
@@ -31,7 +31,11 @@ os.environ.setdefault(
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import api.main as _main
+from api.auth import get_current_user_id
 from api.main import app, _rl_hits
+from core.storage import storage
+
+TEST_USER_ID = "user_test_llm_123"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -99,11 +103,21 @@ def _unconfigured_llm() -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
+def auth_override():
+    """Override get_current_user_id so LLM routes return TEST_USER_ID without a real JWT."""
+    app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
+    yield
+    app.dependency_overrides.pop(get_current_user_id, None)
+
+
+@pytest.fixture(autouse=True)
 def clear_rate_limit():
-    """Wipe in-memory rate-limit counters before each test."""
+    """Wipe in-memory rate-limit counters and per-user quota before each test."""
     _rl_hits.clear()
+    storage._limits.pop(TEST_USER_ID, None)
     yield
     _rl_hits.clear()
+    storage._limits.pop(TEST_USER_ID, None)
 
 
 # ── /llm/migrate ─────────────────────────────────────────────────────────────
@@ -265,6 +279,55 @@ class TestRateLimit:
         assert r2.status_code == 200
         assert r3.status_code == 429
         assert "Retry-After" in r3.headers
+
+    def test_429_when_daily_quota_exhausted(self):
+        """Exceeding migrations_today budget returns 429 before touching Venice."""
+        lim = storage.get_limits(TEST_USER_ID)
+        lim.migrations_today = lim.max_migrations_per_day  # exhaust quota
+        with patch.object(_main, "_get_llm", return_value=_make_llm(MIGRATED_CODE)):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/migrate", json=MIGRATE_BODY)
+        assert r.status_code == 429
+        assert "quota" in r.json()["detail"].lower()
+
+    def test_quota_increments_on_success(self):
+        """Successful /llm/migrate call increments migrations_today by 1."""
+        before = storage.get_limits(TEST_USER_ID).migrations_today
+        with patch.object(_main, "_get_llm", return_value=_make_llm(MIGRATED_CODE)):
+            client = TestClient(app, raise_server_exceptions=True)
+            client.post("/llm/migrate", json=MIGRATE_BODY)
+        assert storage.get_limits(TEST_USER_ID).migrations_today == before + 1
+
+
+class TestLlmAuthRequired:
+    """Verify that /llm/* endpoints return 401 when no auth is present."""
+
+    def test_migrate_requires_auth(self):
+        app.dependency_overrides.pop(get_current_user_id, None)
+        try:
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/migrate", json=MIGRATE_BODY)
+        finally:
+            app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
+        assert r.status_code == 401
+
+    def test_review_requires_auth(self):
+        app.dependency_overrides.pop(get_current_user_id, None)
+        try:
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/review", json=REVIEW_BODY)
+        finally:
+            app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
+        assert r.status_code == 401
+
+    def test_tests_requires_auth(self):
+        app.dependency_overrides.pop(get_current_user_id, None)
+        try:
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/tests", json=TESTS_BODY)
+        finally:
+            app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
+        assert r.status_code == 401
 
 
 # ── Prompt + JSON helper unit tests ──────────────────────────────────────────
