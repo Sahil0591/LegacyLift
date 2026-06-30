@@ -134,7 +134,41 @@ class Project(BaseModel):
     target_profile: Optional[dict] = None
     """Library/API compatibility profile for the target language version."""
 
+    # --- Layer 0 outputs (populated by core/layer0/__init__.py) ---
+    layer0_rules: list[dict] = Field(default_factory=list)
+    """Serialized BusinessRule dicts from Layer 0 — served by GET /rules."""
+
+    layer0_graph: dict = Field(default_factory=dict)
+    """Serialized DependencyGraph dict (nodes + edges) — served by GET /graph."""
+
+    # --- Pipeline timing and summary ---
+    started_at: Optional[datetime] = None
+    """UTC timestamp when the pipeline transitioned to 'analysing'."""
+
+    completed_at: Optional[datetime] = None
+    """UTC timestamp when the pipeline reached 'complete' or 'failed'."""
+
+    chunk_count: int = 0
+    """Number of migration chunks discovered by Layer 0."""
+
+    risk_summary: dict = Field(default_factory=dict)
+    """Aggregated risk level counts, e.g. {'Low': 3, 'Medium': 5, ...}."""
+
+    needs_review_count: int = 0
+    """Number of business rules flagged for human review."""
+
+    # --- Upload tracking (populated by POST /project/{id}/upload) ---
+    uploaded_files: dict = Field(default_factory=dict)
+    """filename → content_string, populated on upload for quick lookup."""
+
+    # --- Chunk approval state (populated by POST /project/{id}/approve|reject) ---
+    chunk_approvals: dict = Field(default_factory=dict)
+    """chunk_id → 'approved' | 'rejected', set by the approval endpoints."""
+
     # --- Error tracking ---
+    error: Optional[str] = None
+    """Most recent unrecoverable pipeline error message."""
+
     error_log: list[str] = Field(default_factory=list)
     """Chronological list of error messages accumulated during the pipeline."""
 

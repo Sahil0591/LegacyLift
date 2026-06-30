@@ -8,7 +8,7 @@
 # The result is a lean ~300MB image vs ~600MB single-stage.
 #
 # Build:  docker build -t legacylift .
-# Run:    docker run -p 8000:8000 --env-file .env legacylift
+# Run:    docker run -p 8000:8000 -e PORT=8000 --env-file .env legacylift
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ COPY . .
 
 # ---------------------------------------------------------------------------
 # Environment defaults
-# (Override all of these via docker run --env or Fly.io secrets)
+# (Override all of these via docker run --env or Azure App Service settings)
 # ---------------------------------------------------------------------------
 ENV DEMO_MODE=false
 ENV API_HOST=0.0.0.0
@@ -60,10 +60,11 @@ ENV OPENAI_MODEL=gpt-4o
 ENV LLM_PROVIDER=openai
 ENV AUTO_APPROVE=false
 
-# Fly.io health check hits /health — must return 200 within timeout
+# Health check — Azure App Service also probes /health
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+    CMD python -c "import urllib.request, os; urllib.request.urlopen('http://localhost:' + os.environ.get('PORT','8000') + '/health')"
 
+# Azure App Service dynamically assigns PORT; default 8000 for local dev.
 EXPOSE 8000
 
 # ---------------------------------------------------------------------------
@@ -71,11 +72,7 @@ EXPOSE 8000
 # ---------------------------------------------------------------------------
 # uvicorn[standard] is in requirements.txt and includes WebSocket support.
 # --workers 1: single worker for now (no shared in-memory state in multi-worker).
-# TODO (implementer): switch to multi-worker + Redis for pipeline state when
-# scaling beyond a single instance.
+# Azure App Service sets PORT at runtime; ${PORT:-8000} falls back to 8000
+# for local docker run without the env var.
 # ---------------------------------------------------------------------------
-CMD ["uvicorn", "api.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "1", \
-     "--log-level", "info"]
+CMD uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --log-level info

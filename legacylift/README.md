@@ -107,7 +107,7 @@ curl -X POST http://localhost:8000/api/project/{project_id}/start
 | GET  | `/api/project/{id}/status` | Get project status and chunk counts |
 | GET  | `/api/project/{id}/rules` | Get extracted business rules |
 | GET  | `/api/project/{id}/graph` | Get dependency graph and risk scores |
-| GET  | `/health` | Health check (used by Fly.io) |
+| GET  | `/health` | Health check (used by Azure App Service) |
 | WS   | `/ws/{project_id}` | WebSocket event stream |
 
 Interactive API docs: `http://localhost:8000/docs`
@@ -196,8 +196,9 @@ Every file has a status and a clear owner. The skeleton runs end-to-end with stu
 | `demo/sample_cobol/end_of_day_batch.cbl` | EOD batch orchestrator COBOL (most complex, 170 lines) | ✅ Done | Demo data |
 | `demo/sample_schema/legacy_bank.sql` | 8-table legacy schema matching the COBOL files | ✅ Done | Demo data |
 | `tests/test_pipeline.py` | 37 smoke tests — all passing | ✅ Done | Replace stub assertions with semantic ones as layers are implemented |
-| `Dockerfile` | Multi-stage production build | ✅ Done | Bump VM size for prod load |
-| `fly.toml` | Fly.io deploy config (Sydney region) | ✅ Done | Add Postgres volume mount |
+| `Dockerfile` | Multi-stage production build, Azure-compatible PORT env var | ✅ Done | Bump VM size for prod load |
+| `deploy.sh` | Azure Container Registry build + deploy script | ✅ Done | Set ACR name before running |
+| `azure-deploy.md` | Step-by-step Azure App Service deployment guide | ✅ Done | — |
 
 **Legend:** ✅ Done = working as-is, no changes needed to unblock others. 🔧 Stub = returns realistic dummy data, pipeline runs through it, needs real implementation.
 
@@ -254,25 +255,25 @@ All tests pass in DEMO_MODE without an OpenAI key. The full test suite runs in u
 
 ---
 
-## Deploying to Fly.io
+## Deploying to Azure
+
+See [azure-deploy.md](server/azure-deploy.md) for the full step-by-step guide.
+
+Quick deploy using `server/deploy.sh` (requires Azure CLI and Docker):
 
 ```bash
-# First deploy
-fly launch            # Creates the app, use name 'legacylift'
-fly secrets set OPENAI_API_KEY=sk-your-key-here
-fly deploy
+cd server
 
-# Subsequent deploys
-fly deploy
+# Set your names once
+export ACR_NAME=legacyliftacr
+export RESOURCE_GROUP=legacylift-rg
+export APP_NAME=legacylift
 
-# View logs
-fly logs
-
-# Scale up when demo load hits
-fly scale vm performance-2x
+# Build, push, and deploy
+./deploy.sh
 ```
 
-The `/health` endpoint is configured as the Fly.io health check in `fly.toml`.
+The `/health` endpoint is used as the Azure App Service health probe.
 
 ---
 

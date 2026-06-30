@@ -30,20 +30,23 @@ Usage (from api/main.py):
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
+from datetime import datetime
 from typing import Optional
 
 from rich.console import Console
 from rich.rule import Rule
 
-from api.websocket_manager import WebSocketManager
+from api.websocket_manager import WebSocketManager, manager as ws_manager
 from models.project import Project, ProjectStatus
 from models.business_rule import BusinessRule
 from models.chunk import MigrationChunk, ChunkStatus, StaticAnalysisResult, AIReviewResult
 from models.validation import ValidationResult, ApprovalDecision, ApprovalAction
 
 # Layer imports
+import core.layer0 as _layer0_module
 from core.layer0.archaeologist     import Archaeologist
 from core.layer0.business_extractor import BusinessExtractor
 from core.layer0.dependency_mapper  import DependencyMapper
@@ -57,8 +60,139 @@ from core.layer3.test_generator     import TestGenerator
 from core.layer4.schema_validator   import SchemaValidator, SchemaValidationResult
 
 console = Console()
+logger = logging.getLogger(__name__)
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 AUTO_APPROVE = os.getenv("AUTO_APPROVE", "false").lower() == "true"
+
+# ---------------------------------------------------------------------------
+# State machine
+# ---------------------------------------------------------------------------
+
+_VALID_TRANSITIONS: dict[str, list[str]] = {
+    "created":    ["uploading"],
+    "uploading":  ["analysing"],
+    "analysing":  ["ready", "failed"],
+    "ready":      ["migrating"],
+    "migrating":  ["validating", "failed"],
+    "validating": ["complete", "failed"],
+    "failed":     [],
+}
+
+
+async def _transition(project: Project, new_status: str) -> None:
+    """Advance project.status through the allowed state machine."""
+    current = project.status if isinstance(project.status, str) else project.status.value
+    allowed = _VALID_TRANSITIONS.get(current, [])
+    if new_status not in allowed:
+        logger.warning(
+            "Invalid transition %s → %s for project %s",
+            current, new_status, project.id,
+        )
+        return
+    logger.info("Project %s: %s → %s", project.id, current, new_status)
+    project.status = new_status
+
+
+# ---------------------------------------------------------------------------
+# Primary pipeline entry point (called by api/main.py via asyncio.create_task)
+# ---------------------------------------------------------------------------
+
+async def run_pipeline(project: Project) -> None:
+    """
+    Run the full migration pipeline in the background.
+
+    Currently implements Layer 0 (Code Archaeology) and transitions the
+    project to 'ready'. Layers 1–4 are stubbed with TODOs below.
+
+    Never raises — all exceptions are caught, the project transitions to
+    'failed', and a pipeline_failed WebSocket event is broadcast.
+    """
+    try:
+        await _transition(project, "analysing")
+        project.started_at = datetime.utcnow()
+        await ws_manager.emit(
+            project.id,
+            "pipeline_started",
+            status="analysing",
+        )
+
+        # ── LAYER 0: Code Archaeology ──────────────────────────────────────
+        logger.info("Project %s: starting Layer 0", project.id)
+        import core.layer0 as layer0  # local import avoids circular dep at module load
+        await ws_manager.emit(project.id, "archaeology_started")
+        layer0_result = await layer0.run(project)
+
+        # Cache summary stats on the project for GET /status
+        project.chunk_count = len(layer0_result.chunks)
+        project.needs_review_count = sum(
+            1 for r in layer0_result.business_rules if r.needs_review
+        )
+        risk_summary: dict[str, int] = {"Low": 0, "Medium": 0, "High": 0, "Critical": 0}
+        for chunk in layer0_result.chunks:
+            lvl = chunk.risk_level
+            risk_summary[lvl] = risk_summary.get(lvl, 0) + 1
+        project.risk_summary = risk_summary
+
+        # Emit events the frontend already handles (layer0.run() serialises
+        # rules and graph onto the project before returning).
+        for rule_dict in project.layer0_rules:
+            await ws_manager.emit(project.id, "business_rule_found", rule=rule_dict)
+        await ws_manager.emit(
+            project.id,
+            "dependency_graph_ready",
+            graph=project.layer0_graph,
+        )
+        await ws_manager.emit(
+            project.id,
+            "risk_scores_ready",
+            scores=project.risk_scores,
+        )
+        await ws_manager.emit(project.id, "archaeology_complete")
+
+        await _transition(project, "ready")
+        project.completed_at = datetime.utcnow()
+        logger.info("Project %s: Layer 0 complete, status → ready", project.id)
+        await ws_manager.emit(
+            project.id,
+            "analysis_complete",
+            status="ready",
+            chunk_count=project.chunk_count,
+            rules_extracted=len(layer0_result.business_rules),
+            needs_review_count=project.needs_review_count,
+        )
+
+        # ── LAYER 0.5: Target language profiling ───────────────────────────
+        # TODO: implement core/layer0_5.py
+        # await layer0_5.run(project)
+
+        # ── LAYER 1: Static analysis ───────────────────────────────────────
+        # TODO: implement core/layer1.py
+        # await layer1.run(project)
+
+        # ── LAYER 2: AI semantic review ────────────────────────────────────
+        # TODO: implement core/layer2.py
+        # await layer2.run(project)
+
+        # ── LAYER 3: Test generation ───────────────────────────────────────
+        # TODO: implement core/layer3.py
+        # await layer3.run(project)
+
+        # ── LAYER 4: Schema validation ─────────────────────────────────────
+        # TODO: implement core/layer4.py
+        # await layer4.run(project)
+
+    except Exception as e:
+        logger.error(
+            "Pipeline failed for project %s: %s", project.id, e, exc_info=True
+        )
+        await _transition(project, "failed")
+        project.error = str(e)
+        project.completed_at = datetime.utcnow()
+        await ws_manager.emit(
+            project.id,
+            "pipeline_failed",
+            error=str(e),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -226,46 +360,42 @@ class MigrationPipeline:
         t_start = time.monotonic()
 
         try:
-            # Step 1: Archaeologist — structural scan
-            archaeologist = Archaeologist()
-            findings = await archaeologist.analyse(project)
+            # Delegate to the full Layer 0 implementation
+            l0 = await _layer0_module.run(project)
 
-            # Step 2: Business rule extraction
-            extractor = BusinessExtractor()
-            rules: list[BusinessRule] = await extractor.extract(project)
-            for rule in rules:
-                await self.manager.emit(
-                    project.id, "business_rule_found", rule=rule.dict()
-                )
+            # Convert Layer0 dataclass MigrationChunks → pydantic MigrationChunks
+            # so downstream Layers 1-3 get the expected type.
+            pydantic_chunks: list[MigrationChunk] = []
+            for dc in l0.chunks:
+                pydantic_chunks.append(MigrationChunk(
+                    id=dc.id,
+                    name=dc.name,
+                    source_code=dc.source,
+                    migrated_code="# TODO: LLM-generated Python goes here\npass",
+                    diff=(
+                        f"--- {dc.filename} (lines {dc.start_line}-{dc.end_line})\n"
+                        "+++ migrated.py\n"
+                        "# diff will be generated after migration\n"
+                    ),
+                    risk_level=dc.risk_level,
+                ))
+            self.chunks = pydantic_chunks
 
-            # Step 3: Dependency mapping
-            mapper = DependencyMapper()
-            graph: dict = await mapper.build_graph(project)
-            project.dependency_graph = graph
-            await self.manager.emit(
-                project.id, "dependency_graph_ready", graph=graph
-            )
-
-            # Step 4: Risk scoring
-            scorer = RiskScorer()
-            scores: dict[str, float] = await scorer.score(project, graph)
-            project.risk_scores = scores
-            await self.manager.emit(
-                project.id, "risk_scores_ready", scores=scores
-            )
-
-            # Build chunks from archaeologist findings
-            chunks = archaeologist.build_chunks(project, scores)
-            self.chunks = chunks
+            # Keep project.dependency_graph as the legacy adjacency dict so
+            # existing pipeline code doesn't break; the rich graph is in
+            # project.layer0_graph (served by GET /graph).
+            project.dependency_graph = {
+                pf.filename: [] for pf in l0.parsed_files
+            }
 
             elapsed = (time.monotonic() - t_start) * 1000
             await self.manager.emit(
                 project.id,
                 "archaeology_complete",
                 findings={
-                    "rules_found": len(rules),
-                    "files_scanned": len(project.files),
-                    "chunks_created": len(chunks),
+                    "rules_found": len(l0.business_rules),
+                    "files_scanned": len(l0.parsed_files),
+                    "chunks_created": len(pydantic_chunks),
                     "elapsed_ms": round(elapsed),
                 },
             )
@@ -273,10 +403,10 @@ class MigrationPipeline:
                 ValidationResult(layer="Layer0", passed=True, duration_ms=elapsed)
             )
             return Layer0Result(
-                business_rules=rules,
-                dependency_graph=graph,
-                risk_scores=scores,
-                chunks=chunks,
+                business_rules=l0.business_rules,
+                dependency_graph=project.dependency_graph,
+                risk_scores=project.risk_scores,
+                chunks=pydantic_chunks,
             )
 
         except Exception as exc:
