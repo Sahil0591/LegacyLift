@@ -47,6 +47,7 @@ export interface OwnershipResult {
 
 export interface BusinessRule {
   id: string;
+  chunk_id?: string;
   title: string;
   description: string;
   source_file: string;
@@ -120,12 +121,13 @@ export interface MigrationChunk {
 
 export type ProjectStatus =
   | "created"
-  | "running_layer0"
-  | "awaiting_rule_review"
-  | "running_layer0_5"
+  | "uploading"
+  | "analysing"
+  | "ready"
   | "migrating"
+  | "validating"
   | "complete"
-  | "error";
+  | "failed";
 
 export interface Project {
   id: string;
@@ -203,10 +205,16 @@ export type WSEventName =
   | "business_rule_found"
   | "dependency_graph_ready"
   | "risk_scores_ready"
+  | "pipeline_started"
+  | "pipeline_failed"
+  | "layer0_complete"
+  | "analysis_complete"
   | "docs_fetching"
   | "docs_fetched"
   | "target_profile_ready"
+  | "chunk_selected"
   | "chunk_started"
+  | "migration_generated"
   | "static_analysis_complete"
   | "ai_review_complete"
   | "tests_running"
@@ -214,6 +222,8 @@ export type WSEventName =
   | "tests_complete"
   | "chunk_ready_for_approval"
   | "chunk_approved"
+  | "chunk_rejected"
+  | "ready_for_next_chunk"
   | "migration_complete"
   | "error";
 
@@ -241,6 +251,32 @@ export interface WSEventRiskScoresReady extends WSEventBase {
   scores: Record<string, number>;
 }
 
+export interface WSEventPipelineStarted extends WSEventBase {
+  event: "pipeline_started";
+  status: ProjectStatus;
+}
+
+export interface WSEventPipelineFailed extends WSEventBase {
+  event: "pipeline_failed";
+  error: string;
+}
+
+export interface WSEventLayer0Complete extends WSEventBase {
+  event: "layer0_complete";
+  chunk_count: number;
+  rules_extracted: number;
+  needs_review_count: number;
+  risk_summary: Record<RiskLevel, number>;
+}
+
+export interface WSEventAnalysisComplete extends WSEventBase {
+  event: "analysis_complete";
+  status: ProjectStatus;
+  chunk_count: number;
+  rules_extracted: number;
+  needs_review_count: number;
+}
+
 export interface WSEventDocsFetching extends WSEventBase {
   event: "docs_fetching";
   url: string;
@@ -256,14 +292,28 @@ export interface WSEventTargetProfileReady extends WSEventBase {
   profile: TargetProfile;
 }
 
+export interface WSEventChunkSelected extends WSEventBase {
+  event: "chunk_selected";
+  chunk_id: string;
+}
+
 export interface WSEventChunkStarted extends WSEventBase {
   event: "chunk_started";
   chunk_id: string;
   name: string;
 }
 
+export interface WSEventMigrationGenerated extends WSEventBase {
+  event: "migration_generated";
+  chunk_id: string;
+  migrated_code: string;
+  explanation: string;
+  confidence: string;
+}
+
 export interface WSEventStaticAnalysisComplete extends WSEventBase {
   event: "static_analysis_complete";
+  chunk_id?: string;
   passed: boolean;
   issues: string[];
 }
@@ -301,6 +351,16 @@ export interface WSEventChunkApproved extends WSEventBase {
   chunk_id: string;
 }
 
+export interface WSEventChunkRejected extends WSEventBase {
+  event: "chunk_rejected";
+  chunk_id: string;
+  feedback: string;
+}
+
+export interface WSEventReadyForNextChunk extends WSEventBase {
+  event: "ready_for_next_chunk";
+}
+
 export interface WSEventMigrationComplete extends WSEventBase {
   event: "migration_complete";
   report: Record<string, unknown>;
@@ -319,10 +379,16 @@ export type WSEvent =
   | WSEventBusinessRuleFound
   | WSEventDependencyGraphReady
   | WSEventRiskScoresReady
+  | WSEventPipelineStarted
+  | WSEventPipelineFailed
+  | WSEventLayer0Complete
+  | WSEventAnalysisComplete
   | WSEventDocsFetching
   | WSEventDocsFetched
   | WSEventTargetProfileReady
+  | WSEventChunkSelected
   | WSEventChunkStarted
+  | WSEventMigrationGenerated
   | WSEventStaticAnalysisComplete
   | WSEventAIReviewComplete
   | WSEventTestsRunning
@@ -330,6 +396,8 @@ export type WSEvent =
   | WSEventTestsComplete
   | WSEventChunkReadyForApproval
   | WSEventChunkApproved
+  | WSEventChunkRejected
+  | WSEventReadyForNextChunk
   | WSEventMigrationComplete
   | WSEventError;
 

@@ -27,6 +27,7 @@ interface ChunkReviewProps {
   regenError?: string | null;
   /** Regenerations left for this chunk (limit). */
   regenRemaining?: number;
+  regenerateLabel?: string;
 }
 
 function CheckRow({
@@ -139,6 +140,7 @@ export function ChunkReview({
   regenerating = false,
   regenError = null,
   regenRemaining = Infinity,
+  regenerateLabel = "Regenerate with Venice",
 }: ChunkReviewProps) {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
@@ -180,7 +182,7 @@ export function ChunkReview({
                 ? "Generating…"
                 : !canRegen
                   ? "Limit reached"
-                  : "Regenerate with Venice"}
+                  : regenerateLabel}
             </button>
           )}
           <span className="font-mono text-xs text-sub">{chunk.id}</span>

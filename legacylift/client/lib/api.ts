@@ -53,10 +53,20 @@ function toSourceLanguage(language: ProjectLanguage): string {
   return language;
 }
 
+function toBackendChunkId(ruleIdOrChunkId: string): string {
+  if (ruleIdOrChunkId.startsWith("rule_")) {
+    return ruleIdOrChunkId.slice("rule_".length);
+  }
+  if (ruleIdOrChunkId.startsWith("rule-")) {
+    return ruleIdOrChunkId.slice("rule-".length);
+  }
+  return ruleIdOrChunkId;
+}
+
 export async function createProject(
   body: CreateProjectRequest,
 ): Promise<CreateProjectResponse> {
-  const response = await request<CreateProjectResponse & { id?: string }>("/project", {
+  return await request<CreateProjectResponse>("/project", {
     method: "POST",
     body: JSON.stringify({
       name: body.name,
@@ -64,11 +74,6 @@ export async function createProject(
       target_language: "Python",
     }),
   });
-
-  return {
-    project_id: response.project_id ?? response.id ?? "",
-    status: response.status,
-  };
 }
 
 export async function uploadFiles(
@@ -125,17 +130,42 @@ export async function rejectChunk(
   );
 }
 
-export async function updateBusinessRule(
+export async function confirmBusinessRule(
   projectId: string,
-  ruleId: string,
-  patch: { status: RuleStatus },
+  chunkId: string,
 ): Promise<void> {
   await request<unknown>(
-    `/project/${encodeURIComponent(projectId)}/rules/${encodeURIComponent(ruleId)}`,
+    `/project/${encodeURIComponent(projectId)}/confirm-rule/${encodeURIComponent(
+      chunkId,
+    )}`,
     {
-      method: "PATCH",
-      body: JSON.stringify(patch),
+      method: "POST",
     },
-    { ignoreNotFound: true },
   );
+}
+
+export async function selectChunkForMigration(
+  projectId: string,
+  chunkId: string,
+): Promise<void> {
+  await request<unknown>(
+    `/project/${encodeURIComponent(projectId)}/select-chunk/${encodeURIComponent(
+      chunkId,
+    )}`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function updateBusinessRule(
+  projectId: string,
+  ruleIdOrChunkId: string,
+  patch: { status: RuleStatus },
+): Promise<void> {
+  if (patch.status !== "Confirmed") {
+    return;
+  }
+
+  await confirmBusinessRule(projectId, toBackendChunkId(ruleIdOrChunkId));
 }

@@ -20,6 +20,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -80,7 +81,6 @@ app = FastAPI(
 # CORS — specific origins for production safety
 _allow_origins = [
     "http://localhost:3000",          # Next.js dev
-    "https://*.vercel.app",           # Vercel preview deployments
     "https://legacylift.vercel.app",  # production
 ]
 if os.getenv("FRONTEND_URL"):
@@ -89,6 +89,7 @@ if os.getenv("FRONTEND_URL"):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allow_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -101,6 +102,8 @@ app.add_middleware(
 
 class CreateProjectRequest(BaseModel):
     name: str = "Untitled"
+    source_language: SourceLanguage = SourceLanguage.COBOL
+    target_language: str = "Python"
 
 
 class ApproveChunkRequest(BaseModel):
@@ -129,10 +132,14 @@ async def health_check():
 async def create_project(body: CreateProjectRequest):
     """Create a new migration project. Returns id, name, status, created_at."""
     try:
-        project = Project(name=body.name)
+        project = Project(
+            name=body.name,
+            source_language=body.source_language,
+            target_language=body.target_language,
+        )
         projects[project.id] = project
         return {
-            "id": project.id,
+            "project_id": project.id,
             "name": project.name,
             "status": _status_str(project),
             "created_at": project.created_at.isoformat(),
@@ -160,7 +167,7 @@ async def upload_files(
             filename = upload.filename or "unnamed.txt"
             f = UploadedFile(
                 filename=filename,
-                language=SourceLanguage.COBOL,
+                language=project.source_language,
                 content=content,
                 size_bytes=len(content.encode("utf-8")),
             )
@@ -230,13 +237,32 @@ async def approve_chunk(
     """
     project = _get_project(project_id)
     project.chunk_approvals[chunk_id] = "approved"
+    await ws_manager.emit(project.id, "chunk_approved", chunk_id=chunk_id)
 
-    # If the pipeline is still running and waiting for this chunk, resolve it
-    pipeline = active_pipelines.get(project_id)
-    if pipeline is not None and not pipeline.done():
-        # The run_pipeline coroutine doesn't use MigrationPipeline.resolve_approval
-        # (it's the lightweight path); nothing extra to do here.
-        pass
+    all_approved = bool(project.layer0_chunks) and all(
+        project.chunk_approvals.get(c["id"]) == "approved"
+        for c in project.layer0_chunks
+    )
+    approved_count = sum(
+        1 for decision in project.chunk_approvals.values() if decision == "approved"
+    )
+    if all_approved:
+        await _transition(project, "validating")
+        await _transition(project, "complete")
+        project.completed_at = datetime.utcnow()
+        await ws_manager.emit(
+            project.id,
+            "migration_complete",
+            report={
+                "project_id": project.id,
+                "project_name": project.name,
+                "chunks_total": len(project.layer0_chunks),
+                "chunks_approved": approved_count,
+            },
+        )
+    else:
+        await _transition(project, "ready")
+        await ws_manager.emit(project.id, "ready_for_next_chunk")
 
     return {
         "project_id": project_id,
@@ -259,6 +285,13 @@ async def reject_chunk(
     """Reject a migration chunk with required comment and optional feedback."""
     project = _get_project(project_id)
     project.chunk_approvals[chunk_id] = "rejected"
+    await _transition(project, "ready")
+    await ws_manager.emit(
+        project.id,
+        "chunk_rejected",
+        chunk_id=chunk_id,
+        feedback=body.feedback or body.comment,
+    )
 
     return {
         "project_id": project_id,
@@ -320,10 +353,10 @@ async def select_chunk(project_id: str, chunk_id: str):
     project = _get_project(project_id)
 
     current = _status_str(project)
-    if current != "ready":
+    if current not in ("ready", "migrating"):
         raise HTTPException(
             status_code=409,
-            detail=f"Project must be in 'ready' state to select a chunk (current: {current})",
+            detail=f"Project must be ready to select a chunk (current: {current})",
         )
 
     chunk_dict = next(
@@ -332,6 +365,10 @@ async def select_chunk(project_id: str, chunk_id: str):
     if chunk_dict is None:
         raise HTTPException(
             status_code=404, detail=f"Chunk '{chunk_id}' not found in Layer 0 output"
+        )
+    if project.chunk_approvals.get(chunk_id) == "approved":
+        raise HTTPException(
+            status_code=409, detail=f"Chunk '{chunk_id}' is already approved"
         )
 
     rule_status = project.chunk_rule_statuses.get(chunk_id, "Pending")
