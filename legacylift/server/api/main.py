@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from api.websocket_manager import manager as ws_manager
-from core.pipeline import run_pipeline
+from core.pipeline import run_pipeline, run_migration_generation, _transition
 from models.project import Project, ProjectStatus, SourceLanguage, UploadedFile
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI):
     print("=" * 60)
     print("  LegacyLift API starting up")
     print(f"  DEMO_MODE:    {os.getenv('DEMO_MODE', 'true')}")
-    print(f"  LLM MODEL:    {os.getenv('OPENAI_MODEL', 'gpt-4o')}")
+    print(f"  LLM MODEL:    {os.getenv('VENICE_MODEL', 'openai-gpt-52-codex')}")
     print(f"  AUTO_APPROVE: {os.getenv('AUTO_APPROVE', 'false')}")
     print("=" * 60)
     yield
@@ -266,6 +266,96 @@ async def reject_chunk(
         "decision": "rejected",
         "feedback": body.feedback or body.comment,
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /project/{id}/confirm-rule/{chunk_id}
+# ---------------------------------------------------------------------------
+
+@app.post("/project/{project_id}/confirm-rule/{chunk_id}", status_code=200)
+async def confirm_rule(project_id: str, chunk_id: str):
+    """
+    Mark the business rule for a chunk as Confirmed by a domain expert.
+
+    Must be called before select-chunk — the chunk selection endpoint rejects
+    requests where the rule has not been confirmed.
+    """
+    project = _get_project(project_id)
+
+    chunk_dict = next(
+        (c for c in project.layer0_chunks if c["id"] == chunk_id), None
+    )
+    if chunk_dict is None:
+        raise HTTPException(status_code=404, detail=f"Chunk '{chunk_id}' not found")
+
+    project.chunk_rule_statuses[chunk_id] = "Confirmed"
+
+    return {
+        "project_id": project_id,
+        "chunk_id": chunk_id,
+        "rule_status": "Confirmed",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /project/{id}/select-chunk/{chunk_id}
+# ---------------------------------------------------------------------------
+
+@app.post("/project/{project_id}/select-chunk/{chunk_id}", status_code=202)
+async def select_chunk(project_id: str, chunk_id: str):
+    """
+    Select a Layer 0 chunk for migration.
+
+    Validates:
+      - Project is in 'ready' state (Layer 0 complete)
+      - chunk_id exists in Layer 0 output
+      - Business rule for this chunk has been Confirmed by a domain expert
+
+    On success:
+      - Transitions project to 'migrating'
+      - Fires a background task that calls generate_migration() then Layer 1
+      - Broadcasts { event: 'chunk_selected', chunk_id }
+      - Returns 202 immediately
+    """
+    project = _get_project(project_id)
+
+    current = _status_str(project)
+    if current != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Project must be in 'ready' state to select a chunk (current: {current})",
+        )
+
+    chunk_dict = next(
+        (c for c in project.layer0_chunks if c["id"] == chunk_id), None
+    )
+    if chunk_dict is None:
+        raise HTTPException(
+            status_code=404, detail=f"Chunk '{chunk_id}' not found in Layer 0 output"
+        )
+
+    rule_status = project.chunk_rule_statuses.get(chunk_id, "Pending")
+    if rule_status != "Confirmed":
+        raise HTTPException(
+            status_code=400,
+            detail="Business rule must be confirmed before migration can begin",
+        )
+
+    project.selected_chunk_id = chunk_id
+    await _transition(project, "migrating")
+
+    asyncio.create_task(run_migration_generation(project, chunk_id))
+
+    await ws_manager.emit(project.id, "chunk_selected", chunk_id=chunk_id)
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "accepted",
+            "chunk_id": chunk_id,
+            "message": "Migration generation started",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -165,6 +165,25 @@ class Project(BaseModel):
     chunk_approvals: dict = Field(default_factory=dict)
     """chunk_id → 'approved' | 'rejected', set by the approval endpoints."""
 
+    # --- Chunk selection (Step 5 — populated by POST /select-chunk) ---
+    selected_chunk_id: Optional[str] = None
+    """ID of the Layer 0 chunk the human chose to migrate first."""
+
+    current_migration: Optional[dict] = None
+    """Serialised MigrationResult from core/migration/generator.py (latest run)."""
+
+    # --- Layer 0 chunk storage (populated by run_pipeline after Layer 0) ---
+    layer0_chunks: list[dict] = Field(default_factory=list)
+    """
+    Serialised Layer 0 MigrationChunk dicts (includes source code).
+    Stored so the select-chunk endpoint can look up chunk source without
+    re-parsing the uploaded files.
+    """
+
+    # --- Business rule confirmation (populated by POST /confirm-rule) ---
+    chunk_rule_statuses: dict[str, str] = Field(default_factory=dict)
+    """chunk_id → 'Pending' | 'Confirmed' — tracks human rule confirmation."""
+
     # --- Error tracking ---
     error: Optional[str] = None
     """Most recent unrecoverable pipeline error message."""

@@ -56,8 +56,9 @@ COPY . .
 ENV DEMO_MODE=false
 ENV API_HOST=0.0.0.0
 ENV API_PORT=8000
-ENV OPENAI_MODEL=gpt-4o
-ENV LLM_PROVIDER=openai
+ENV VENICE_BASE_URL=https://api.venice.ai/api/v1
+ENV VENICE_MODEL=openai-gpt-52-codex
+ENV LLM_PROVIDER=venice
 ENV AUTO_APPROVE=false
 
 # Health check — Azure App Service also probes /health

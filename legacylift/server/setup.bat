@@ -43,7 +43,7 @@ if %ERRORLEVEL% NEq 0 (
 echo.
 echo  =========================================
 echo   LegacyLift server ready.
-echo   Copy .env.example to .env, add your OPENAI_API_KEY, then run:
+echo   Copy .env.example to .env, add your VENICE_API_KEY, then run:
 echo     python -m uvicorn api.main:app --reload
 echo  =========================================
 echo.

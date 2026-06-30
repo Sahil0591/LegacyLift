@@ -79,7 +79,10 @@ class LLMClient:
 
         # Instantiate client only if key is available
         if OPENAI_AVAILABLE and self.api_key and self.api_key != "your-venice-api-key":
-            self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            self._client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+            )
         else:
             self._client = None
             if self.demo_mode:
