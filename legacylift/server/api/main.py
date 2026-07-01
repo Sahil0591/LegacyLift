@@ -30,7 +30,8 @@ load_dotenv(find_dotenv(usecwd=True))
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.alias_generators import to_camel
 
 from api.auth import get_current_user_id, verify_ws_token
 from api.websocket_manager import manager as ws_manager
@@ -761,6 +762,8 @@ class _TargetProfileIn(BaseModel):
 
 
 class MigrateUnitRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
     name: str = Field(..., min_length=1, max_length=200)
     source_code: str = Field(..., min_length=1, max_length=80_000)
     source_lang: str = Field("COBOL", max_length=32)
@@ -771,6 +774,8 @@ class MigrateUnitRequest(BaseModel):
 
 
 class ReviewUnitRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
     name: str = Field(..., min_length=1, max_length=200)
     source_code: str = Field(..., min_length=1, max_length=80_000)
     migrated_code: str = Field(..., min_length=1, max_length=120_000)
@@ -779,6 +784,8 @@ class ReviewUnitRequest(BaseModel):
 
 
 class TestsUnitRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
     name: str = Field(..., min_length=1, max_length=200)
     migrated_code: str = Field(..., min_length=1, max_length=120_000)
     target_lang: str = Field("Python", max_length=32)

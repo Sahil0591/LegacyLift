@@ -21,7 +21,7 @@ import {
 } from "@/lib/migration";
 import { staticAnalyze } from "@/lib/staticCheck";
 import { downloadMigration } from "@/lib/download";
-import { isDemoProject, DEMO_REPO } from "@/lib/demoData";
+import { getDemoRepo, isDemoProject } from "@/lib/demoData";
 import type { MigrationChunk } from "@/types/legacylift";
 
 const MAX_REGENS = 5;
@@ -94,7 +94,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [regenCounts, setRegenCounts] = useState<Record<string, number>>({});
 
-  const repo = demo ? DEMO_REPO.replace("github.com/", "") : projectId;
+  const repo = demo ? getDemoRepo(projectId).replace("github.com/", "") : projectId;
   const approved = state.chunks.filter((c) => c.status === "Approved").length;
   const canDownload = state.chunks.some(
     (c) => c.migrated_code && c.migrated_code.trim().length > 0,

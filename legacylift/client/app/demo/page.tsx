@@ -13,7 +13,7 @@ import { Footer } from "@/components/shared/Footer";
 import { AmbientBackground } from "@/components/landing/AmbientBackground";
 import { FileUpload } from "@/components/pipeline/FileUpload";
 import { storeAnalysis } from "@/lib/projectStore";
-import { DEMO_PROJECT_ID } from "@/lib/demoData";
+import { DEMO_HERITAGE_PROJECT_ID, DEMO_PROJECT_ID } from "@/lib/demoData";
 import type { AnalyzeResult } from "@/lib/analyze";
 import type { ProjectLanguage } from "@/types/legacylift";
 
@@ -212,7 +212,14 @@ export default function DemoPage() {
               href={`/project/${DEMO_PROJECT_ID}`}
               className="text-[#7C3AED] underline-offset-2 hover:underline"
             >
-              explore the sample workbench
+              explore the COBOL sample
+            </Link>
+            {" "}or{" "}
+            <Link
+              href={`/project/${DEMO_HERITAGE_PROJECT_ID}`}
+              className="text-[#7C3AED] underline-offset-2 hover:underline"
+            >
+              open heritage-payments
             </Link>
           </p>
         </main>

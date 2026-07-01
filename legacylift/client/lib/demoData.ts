@@ -13,9 +13,15 @@ import type {
 
 export const DEMO_PROJECT_ID = "demo-loan-engine";
 export const DEMO_REPO = "github.com/acme-bank/loan-engine";
+export const DEMO_HERITAGE_PROJECT_ID = "demo-heritage-payments";
+export const DEMO_HERITAGE_REPO = "github.com/acme-bank/heritage-payments";
 
 export function isDemoProject(projectId: string | null): boolean {
   return !!projectId && projectId.startsWith("demo");
+}
+
+export function getDemoRepo(projectId: string | null): string {
+  return projectId === DEMO_HERITAGE_PROJECT_ID ? DEMO_HERITAGE_REPO : DEMO_REPO;
 }
 
 // ── Business rules ───────────────────────────────────────────────────────────
@@ -276,12 +282,242 @@ const CHUNKS: MigrationChunk[] = [
 
 const CURRENT = CHUNKS.find((c) => c.status === "Review") ?? null;
 
+const JAVA_RULES: BusinessRule[] = [
+  {
+    id: "java-rule-account-status",
+    title: "Account status gate",
+    description:
+      "Every posting path rejects Suspended and Closed accounts before balance or ledger mutation.",
+    source_file: "AccountService.java",
+    source_lines: [29, 98],
+    confidence: "High",
+    hardcoded_values: ["ACTIVE", "SUSPENDED", "CLOSED"],
+    warnings: ["Status literals are embedded in service code."],
+    status: "Pending",
+    ownership_category: "Ops",
+    ownership_evidence: "Operational account controls owned by payments operations.",
+    ownership_confidence: "High",
+    ownership_detail: null,
+  },
+  {
+    id: "java-rule-daily-limit",
+    title: "Daily customer transfer limit",
+    description:
+      "Transfer amount plus used daily amount must not exceed DAILY_LIMIT before any funds movement.",
+    source_file: "FundsTransferProcessor.java",
+    source_lines: [128, 160],
+    confidence: "High",
+    hardcoded_values: [],
+    warnings: ["Uses row locking and mutable USED_AMOUNT counters."],
+    status: "Pending",
+    ownership_category: "Risk",
+    ownership_evidence: "Customer exposure limits map to risk controls.",
+    ownership_confidence: "High",
+    ownership_detail: null,
+  },
+  {
+    id: "java-rule-routing",
+    title: "Internal versus external routing",
+    description:
+      "Same-bank transfers post debit and credit directly; external transfers credit a settlement suspense account for EOD clearing.",
+    source_file: "FundsTransferProcessor.java",
+    source_lines: [59, 82],
+    confidence: "High",
+    hardcoded_values: ["25000.00", "10000.00", "9"],
+    warnings: ["External routing number validation is length-only."],
+    status: "Pending",
+    ownership_category: "Product",
+    ownership_evidence: "Payment rail behavior owned by payments product.",
+    ownership_confidence: "Medium",
+    ownership_detail: null,
+  },
+  {
+    id: "java-rule-overdraft-cap",
+    title: "Overdraft fee cap",
+    description:
+      "Overdraft fees are percentage based, bounded by minimum and maximum fees, and further capped at a daily regulatory ceiling.",
+    source_file: "OverdraftFeeCalculator.java",
+    source_lines: [14, 49],
+    confidence: "High",
+    hardcoded_values: ["0.035", "5.00", "35.00", "50.00"],
+    warnings: ["Regulatory cap is compiled into Java constants."],
+    status: "Pending",
+    ownership_category: "Compliance",
+    ownership_evidence: "Fee caps fall under compliance approval.",
+    ownership_confidence: "High",
+    ownership_detail: null,
+  },
+  {
+    id: "java-rule-eod",
+    title: "EOD settlement audit",
+    description:
+      "External network settlement posts suspense double-entry rows and writes SETTLEMENT_AUDIT only after totals are complete.",
+    source_file: "EndOfDaySettlementJob.java",
+    source_lines: [25, 66],
+    confidence: "High",
+    hardcoded_values: ["POSTED", "COMPLETE", "FAILED"],
+    warnings: ["Failure audit is best-effort after rollback."],
+    status: "Pending",
+    ownership_category: "Finance",
+    ownership_evidence: "Settlement totals feed finance reconciliation.",
+    ownership_confidence: "High",
+    ownership_detail: null,
+  },
+];
+
+const JAVA_GRAPH: DependencyGraph = {
+  nodes: [
+    { id: "processTransfer", label: "processTransfer", file: "FundsTransferProcessor.java", type: "paragraph" },
+    { id: "getAvailableBalance", label: "getAvailableBalance", file: "AccountService.java", type: "paragraph" },
+    { id: "applyBalanceChange", label: "applyBalanceChange", file: "AccountService.java", type: "paragraph" },
+    { id: "postDoubleEntry", label: "postDoubleEntry", file: "LedgerPostingDao.java", type: "paragraph" },
+    { id: "calculateFee", label: "calculateFee", file: "OverdraftFeeCalculator.java", type: "paragraph" },
+    { id: "runSettlement", label: "runSettlement", file: "EndOfDaySettlementJob.java", type: "paragraph" },
+    { id: "legacy_java_bank.sql", label: "legacy_java_bank.sql", file: "sample_schema", type: "external" },
+  ],
+  edges: [
+    { source: "processTransfer", target: "getAvailableBalance" },
+    { source: "processTransfer", target: "applyBalanceChange" },
+    { source: "processTransfer", target: "postDoubleEntry" },
+    { source: "processTransfer", target: "calculateFee", label: "overdraft" },
+    { source: "runSettlement", target: "postDoubleEntry", label: "EOD" },
+    { source: "processTransfer", target: "legacy_java_bank.sql", label: "JDBC" },
+    { source: "runSettlement", target: "legacy_java_bank.sql", label: "JDBC" },
+  ],
+};
+
+const JAVA_RISK_SCORES: Record<string, number> = {
+  processTransfer: 0.93,
+  runSettlement: 0.81,
+  postDoubleEntry: 0.78,
+  calculateFee: 0.69,
+  applyBalanceChange: 0.62,
+  getAvailableBalance: 0.44,
+};
+
+const JAVA_TARGET_PROFILE: TargetProfile = {
+  language: "Java",
+  version: "21 / Spring Boot 3",
+  recommended_libraries: [],
+  deprecated_patterns: [],
+  gotchas: [],
+  style_guide: "Spring service boundaries, constructor injection, transaction annotations",
+  type_system: "Strong Java types with BigDecimal preserved for monetary values",
+  async_model: "Synchronous APIs with scheduled settlement jobs",
+  test_framework: "JUnit 5",
+  notes: "Preserve double-entry ledger invariants and explicit settlement audit semantics.",
+};
+
+const JAVA_PROCESS_TRANSFER_SOURCE = `public void processTransfer(Connection connection, long transferRequestId)
+        throws SQLException {
+    boolean originalAutoCommit = connection.getAutoCommit();
+    connection.setAutoCommit(false);
+    try {
+        TransferRequest request = loadTransferRequest(connection, transferRequestId);
+        assertDailyLimitAvailable(connection, request.customerId, request.amount);
+        BigDecimal currentBalance = accountService.getAvailableBalance(connection, request.debitAccountId);
+        BigDecimal projectedBalance = currentBalance.subtract(request.amount);
+        if (isFraudHoldRequired(connection, request, projectedBalance)) {
+            createRiskHold(connection, request, "FRAUD_REVIEW_THRESHOLD");
+            updateTransferStatus(connection, transferRequestId, TRANSFER_STATUS_HELD);
+            connection.commit();
+            return;
+        }
+        connection.commit();
+    } catch (SQLException ex) {
+        connection.rollback();
+        throw ex;
+    } finally {
+        connection.setAutoCommit(originalAutoCommit);
+    }
+}`;
+
+const JAVA_CHUNKS: MigrationChunk[] = [
+  chunk({
+    id: "java-chunk-01",
+    name: "processTransfer",
+    risk_level: "Critical",
+    status: "Review",
+    source_code: JAVA_PROCESS_TRANSFER_SOURCE,
+    migrated_code:
+      "@Transactional\npublic void processTransfer(long transferRequestId) {\n    TransferRequest request = transferRepository.lockById(transferRequestId);\n    dailyLimitService.assertAvailable(request.customerId(), request.amount());\n    riskHoldService.placeHoldWhenRequired(request);\n    ledgerService.postTransfer(request);\n}",
+    static_analysis: {
+      passed: true,
+      issues: [],
+      complexity_score: 14,
+      line_count: 118,
+    },
+    ai_review: {
+      issues_found: 2,
+      critical_issues: [],
+      warnings: [
+        "Confirm rollback behavior for rejected transfer status updates.",
+        "External suspense posting must remain balanced."
+      ],
+      suggestions: ["Add transaction tests for held, posted, and rejected transfers."],
+      ai_confidence: "High",
+      raw_response: "",
+    },
+    test_results: [
+      { name: "processTransfer_holdsHighRiskPayment", passed: true, error_message: null, duration_ms: 7 },
+      { name: "processTransfer_rejectsDailyLimitBreach", passed: true, error_message: null, duration_ms: 6 },
+    ],
+  }),
+  chunk({
+    id: "java-chunk-02",
+    name: "calculateFee",
+    risk_level: "High",
+    status: "Pending",
+    source_code:
+      'BigDecimal proposedFee = overdrawnAmount.multiply(OVERDRAFT_FEE_RATE);\nproposedFee = proposedFee.setScale(2, RoundingMode.HALF_UP);\nif (proposedFee.compareTo(MAXIMUM_FEE) > 0) {\n    proposedFee = MAXIMUM_FEE;\n}',
+    migrated_code:
+      'BigDecimal fee = overdraftPolicy.calculate(balanceAfterDebit, feesAlreadyAssessedToday);',
+  }),
+  chunk({
+    id: "java-chunk-03",
+    name: "postDoubleEntry",
+    risk_level: "High",
+    status: "Pending",
+    source_code:
+      'insertLedgerEntry(connection, transferRequestId, debitAccountId, ENTRY_TYPE_DEBIT, amount, narrative);\ninsertLedgerEntry(connection, transferRequestId, creditAccountId, ENTRY_TYPE_CREDIT, amount, narrative);',
+    migrated_code:
+      "ledgerRepository.saveAll(List.of(debitEntry, creditEntry));",
+  }),
+  chunk({
+    id: "java-chunk-04",
+    name: "runSettlement",
+    risk_level: "High",
+    status: "Pending",
+    source_code:
+      "while (resultSet.next()) {\n    ledgerPostingDao.postDoubleEntry(connection, transferRequestId, suspenseAccountId, debitAccountId, amount, \"EOD external network settlement\");\n    settledCount++;\n}",
+    migrated_code:
+      "settlementRepository.findPostedExternalTransfers(businessDate).forEach(this::settleExternalTransfer);",
+  }),
+];
+
+const JAVA_CURRENT = JAVA_CHUNKS.find((c) => c.status === "Review") ?? null;
+
 // ── Public factory ───────────────────────────────────────────────────────────
 
 export function createDemoState(
   projectId: string,
   currentLayer: PipelineLayer = 0,
 ): PipelineState {
+  if (projectId === DEMO_HERITAGE_PROJECT_ID) {
+    return {
+      projectId,
+      currentLayer,
+      businessRules: JAVA_RULES.map((r) => ({ ...r })),
+      dependencyGraph: { nodes: [...JAVA_GRAPH.nodes], edges: [...JAVA_GRAPH.edges] },
+      riskScores: { ...JAVA_RISK_SCORES },
+      targetProfile: { ...JAVA_TARGET_PROFILE },
+      currentChunk: JAVA_CURRENT ? { ...JAVA_CURRENT } : null,
+      chunks: JAVA_CHUNKS.map((c) => ({ ...c })),
+      migrationComplete: false,
+      error: null,
+    };
+  }
+
   return {
     projectId,
     currentLayer,
