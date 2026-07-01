@@ -12,6 +12,7 @@ import type {
   DependencyNode,
   MigrationChunk,
   OwnershipCategory,
+  ProjectFile,
   RiskLevel,
   RuleConfidence,
   TargetProfile,
@@ -30,6 +31,7 @@ export interface AnalyzeResult {
   dependencyGraph: DependencyGraph;
   riskScores: Record<string, number>;
   targetProfile: TargetProfile;
+  files: ProjectFile[];
   summary: {
     files: number;
     units: number;
@@ -361,6 +363,9 @@ export function analyzeFiles(
     chunks.push({
       id: unit.id,
       name: unit.name,
+      source_file: unit.file,
+      start_line: unit.startLine,
+      end_line: unit.endLine,
       source_code: unit.source,
       migrated_code: "",
       diff: "",
@@ -416,6 +421,12 @@ export function analyzeFiles(
     ? scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length
     : 0;
 
+  const projectFiles: ProjectFile[] = usable.map((f) => ({
+    filename: f.filename,
+    content: f.content,
+    language: detectLanguage(f.filename),
+  }));
+
   return {
     projectName: meta.projectName,
     source: meta.source,
@@ -424,6 +435,7 @@ export function analyzeFiles(
     dependencyGraph: { nodes, edges },
     riskScores,
     targetProfile: DEFAULT_PROFILE,
+    files: projectFiles,
     summary: {
       files: usable.length,
       units: units.length,

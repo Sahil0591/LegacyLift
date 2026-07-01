@@ -40,6 +40,8 @@ class MigrationInput:
     rule_confidence: float      # 0.0–1.0 from Layer 0 extractor
     source_language: str        # project-level, e.g. "COBOL"
     related_chunks: list[dict]  # [{"name": str, "source": str, "rule": str}, ...]
+    file_context: str = ""      # full content of the file this chunk belongs to
+    project_manifest: str = ""  # lightweight cross-file manifest (deps + rules)
 
 
 @dataclass
@@ -114,6 +116,22 @@ def _build_user_prompt(inp: MigrationInput) -> str:
                 "```",
                 "",
             ]
+
+    if inp.file_context:
+        lines += [
+            "### Full Source File (context only — migrate just the chunk above)",
+            "```",
+            inp.file_context[:20_000],
+            "```",
+            "",
+        ]
+
+    if inp.project_manifest:
+        lines += [
+            "### Project Manifest (other files, dependencies, extracted rules)",
+            inp.project_manifest[:4_000],
+            "",
+        ]
 
     lines += [
         "### Task",

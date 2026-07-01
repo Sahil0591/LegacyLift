@@ -264,6 +264,57 @@ async def run_pipeline(project: Project) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lightweight cross-file manifest (mirrors client/lib/manifest.ts) — dependency
+# edges + extracted business rules for every OTHER file in the project, so a
+# chunk's migration prompt gets cheap whole-tree awareness without shipping
+# every other file's raw source.
+# ---------------------------------------------------------------------------
+
+def _build_project_manifest(project: Project, current_filename: str) -> str:
+    graph = project.layer0_graph or {}
+    nodes = graph.get("nodes", [])
+    edges = graph.get("edges", [])
+    rules = project.layer0_rules or []
+
+    node_file_by_id = {n.get("id"): n.get("file", "") for n in nodes}
+
+    filenames: set[str] = set()
+    for n in nodes:
+        if n.get("file"):
+            filenames.add(n["file"])
+    for r in rules:
+        if r.get("filename") or r.get("source_file"):
+            filenames.add(r.get("filename") or r.get("source_file"))
+
+    other_files = sorted(f for f in filenames if f and f != current_filename)
+    if not other_files:
+        return ""
+
+    lines: list[str] = []
+    for filename in other_files:
+        lines.append(f"- {filename}")
+
+        file_edges = [
+            e for e in edges
+            if node_file_by_id.get(e.get("source")) == filename
+            or node_file_by_id.get(e.get("target")) == filename
+        ]
+        for e in file_edges[:10]:
+            label = f" ({e['label']})" if e.get("label") else ""
+            lines.append(f"    depends: {e.get('source')} -> {e.get('target')}{label}")
+
+        file_rules = [
+            r for r in rules
+            if (r.get("filename") or r.get("source_file")) == filename
+        ]
+        for r in file_rules[:10]:
+            title = r.get("title") or (r.get("rule", "") or "")[:80]
+            lines.append(f"    rule: {title}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Step 5+6: background task triggered by POST /select-chunk
 # ---------------------------------------------------------------------------
 
@@ -324,6 +375,10 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         # ── generate migration ──────────────────────────────────────────────
         from core.migration.generator import MigrationInput, generate_migration  # noqa: PLC0415
 
+        chunk_filename = chunk_dict.get("filename", "")
+        file_context = project.uploaded_files.get(chunk_filename, "")
+        project_manifest = _build_project_manifest(project, chunk_filename)
+
         migration_input = MigrationInput(
             chunk_id=chunk_id,
             chunk_name=chunk_dict.get("name", chunk_id),
@@ -335,6 +390,8 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             rule_confidence=float(rule_dict.get("confidence", 0.5)) if rule_dict else 0.5,
             source_language=str(project.source_language),
             related_chunks=related_chunks,
+            file_context=file_context,
+            project_manifest=project_manifest,
         )
 
         result = await generate_migration(migration_input)
@@ -355,6 +412,9 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         pydantic_chunk = MigrationChunk(
             id=chunk_id,
             name=chunk_dict.get("name", chunk_id),
+            source_file=chunk_dict.get("filename", ""),
+            start_line=chunk_dict.get("start_line", 0),
+            end_line=chunk_dict.get("end_line", 0),
             source_code=chunk_dict.get("source", ""),
             migrated_code=result.migrated_code,
         )
@@ -773,6 +833,9 @@ class MigrationPipeline:
                 pydantic_chunks.append(MigrationChunk(
                     id=dc.id,
                     name=dc.name,
+                    source_file=dc.filename,
+                    start_line=dc.start_line,
+                    end_line=dc.end_line,
                     source_code=dc.source,
                     migrated_code="# TODO: LLM-generated Python goes here\npass",
                     diff=(

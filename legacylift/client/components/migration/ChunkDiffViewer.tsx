@@ -13,6 +13,9 @@ import type { MigrationChunk } from "@/types/legacylift";
 const PLACEHOLDER_CHUNK: MigrationChunk = {
   id: "chunk-placeholder",
   name: "CALC-INTEREST-SECTION",
+  source_file: "interest.cbl",
+  start_line: 1,
+  end_line: 8,
   source_code: `       CALC-INTEREST-SECTION.
            COMPUTE WS-INTEREST ROUNDED =
                WS-BALANCE * WS-RATE / 100

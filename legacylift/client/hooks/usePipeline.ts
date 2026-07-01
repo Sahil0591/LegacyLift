@@ -12,22 +12,29 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import { isDemoProject, createDemoState } from "@/lib/demoData";
 import {
   loadAnalysis,
+  loadFileStatus,
+  loadLessons,
   loadProgress,
+  saveFileStatus,
+  saveLessons,
   saveProgress,
   updateProjectProgress,
 } from "@/lib/projectStore";
 import { RISK_RANK } from "@/components/workbench/shared";
 import type { AnalyzeResult } from "@/lib/analyze";
+import type { Lesson } from "@/lib/lessons";
 import type {
   BusinessRule,
   DependencyGraph,
   MigrationChunk,
   PipelineLayer,
   PipelineState,
+  ProjectFile,
   RiskLevel,
   RuleConfidence,
   TargetProfile,
 } from "@/types/legacylift";
+import { getProjectFiles } from "@/lib/api";
 
 const INITIAL_STATE: PipelineState = {
   projectId: null,
@@ -38,6 +45,7 @@ const INITIAL_STATE: PipelineState = {
   targetProfile: null,
   currentChunk: null,
   chunks: [],
+  files: [],
   migrationComplete: false,
   error: null,
 };
@@ -57,6 +65,16 @@ interface UsePipelineReturn {
   advanceDemoChunk: () => void;
   /** Patch a chunk's fields (migrated_code, ai_review, status, …). */
   patchChunk: (chunkId: string, patch: Partial<MigrationChunk>) => void;
+  /** Filenames the human has explicitly finalized (assembled + checked). */
+  finalizedFiles: Record<string, true>;
+  /** Mark a file as finalized; persisted for local projects. */
+  markFileFinalized: (filename: string) => void;
+  /** Clear a file's finalized flag — used when a chunk inside it is reopened. */
+  unmarkFileFinalized: (filename: string) => void;
+  /** Accumulated feedback (rejections + review findings) fed into future prompts. */
+  lessons: Lesson[];
+  /** Record a new lesson; persisted for local projects. */
+  addLesson: (lesson: Lesson) => void;
 }
 
 function stateFromAnalysis(
@@ -76,6 +94,7 @@ function stateFromAnalysis(
     targetProfile: a.targetProfile,
     currentChunk: chunks[0] ?? null,
     chunks,
+    files: a.files ?? [],
     migrationComplete: false,
     error: null,
   };
@@ -193,6 +212,9 @@ function chunkFromGraphNode(node: Record<string, unknown>): MigrationChunk {
   return {
     id: String(node.id ?? node.label ?? "unknown"),
     name: String(node.label ?? node.id ?? "unknown"),
+    source_file: String(node.file ?? node.filename ?? ""),
+    start_line: 0,
+    end_line: 0,
     source_code: "",
     migrated_code: "",
     diff: "",
@@ -218,15 +240,21 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
       ? createDemoState(projectId)
       : { ...INITIAL_STATE, projectId },
   );
+  const [finalizedFiles, setFinalizedFiles] = useState<Record<string, true>>({});
+  const [lessons, setLessons] = useState<Lesson[]>([]);
 
   // Reset / load when the project changes. sessionStorage is client-only, so
   // local projects are loaded here (in an effect) rather than in the initializer.
   useEffect(() => {
     if (demo && projectId) {
       setState(createDemoState(projectId));
+      setFinalizedFiles({});
+      setLessons([]);
       return;
     }
     if (isLocal && projectId) {
+      setFinalizedFiles(loadFileStatus(projectId) ?? {});
+      setLessons(loadLessons(projectId) ?? []);
       const analysis = loadAnalysis(projectId);
       if (!analysis) {
         setState({ ...INITIAL_STATE, projectId });
@@ -252,8 +280,28 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
       }
       return;
     }
+    setFinalizedFiles({});
+    setLessons([]);
     setState({ ...INITIAL_STATE, projectId });
   }, [projectId, demo, isLocal]);
+
+  // Backend-tracked (non-offline) projects don't have file content client-side
+  // yet — fetch it best-effort so the file context panel/manifest can use it.
+  useEffect(() => {
+    if (offline || !projectId) return;
+    let cancelled = false;
+    getProjectFiles(projectId)
+      .then((files: ProjectFile[]) => {
+        if (cancelled || files.length === 0) return;
+        setState((prev) => ({ ...prev, files }));
+      })
+      .catch(() => {
+        // Files not ready yet (pipeline still running) — leave as [].
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [offline, projectId]);
 
   const setLayer = useCallback((layer: PipelineLayer) => {
     setState((prev) => ({ ...prev, currentLayer: layer }));
@@ -309,6 +357,9 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
                   {
                     id: rule.chunk_id,
                     name: rule.title,
+                    source_file: rule.source_file,
+                    start_line: rule.source_lines[0] ?? 0,
+                    end_line: rule.source_lines[1] ?? 0,
                     source_code: "",
                     migrated_code: "",
                     diff: "",
@@ -368,6 +419,9 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
             ...(existing ?? {}),
             id: e.chunk_id,
             name: e.name,
+            source_file: existing?.source_file ?? "",
+            start_line: existing?.start_line ?? 0,
+            end_line: existing?.end_line ?? 0,
             source_code: existing?.source_code ?? "",
             migrated_code: existing?.migrated_code ?? "",
             diff: existing?.diff ?? "",
@@ -415,6 +469,9 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
             ...(existing ?? {
               id: e.chunk_id,
               name: e.chunk_id,
+              source_file: "",
+              start_line: 0,
+              end_line: 0,
               source_code: "",
               diff: "",
               risk_level: "Medium" as RiskLevel,
@@ -674,6 +731,45 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     [],
   );
 
+  const markFileFinalized = useCallback(
+    (filename: string) => {
+      setFinalizedFiles((prev) => {
+        const next = { ...prev, [filename]: true as const };
+        if (isLocal && projectId) saveFileStatus(projectId, next);
+        return next;
+      });
+    },
+    [isLocal, projectId],
+  );
+
+  const unmarkFileFinalized = useCallback(
+    (filename: string) => {
+      setFinalizedFiles((prev) => {
+        if (!prev[filename]) return prev;
+        const next = { ...prev };
+        delete next[filename];
+        if (isLocal && projectId) saveFileStatus(projectId, next);
+        return next;
+      });
+    },
+    [isLocal, projectId],
+  );
+
+  const addLesson = useCallback(
+    (lesson: Lesson) => {
+      setLessons((prev) => {
+        // Dedupe by (sourceFile, text) so repeated identical findings don't pile up.
+        if (prev.some((l) => l.sourceFile === lesson.sourceFile && l.text === lesson.text)) {
+          return prev;
+        }
+        const next = [...prev, lesson];
+        if (isLocal && projectId) saveLessons(projectId, next);
+        return next;
+      });
+    },
+    [isLocal, projectId],
+  );
+
   return {
     state,
     wsStatus: offline ? "connected" : wsStatus,
@@ -683,5 +779,10 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     selectLayer: setLayer,
     advanceDemoChunk,
     patchChunk,
+    finalizedFiles,
+    markFileFinalized,
+    unmarkFileFinalized,
+    lessons,
+    addLesson,
   };
 }

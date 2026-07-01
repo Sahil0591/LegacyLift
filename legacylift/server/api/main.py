@@ -41,6 +41,7 @@ from models.project import Project, SourceLanguage, UploadedFile
 from utils.llm_client import DEMO_RESPONSE, LLMClient
 from utils.migration_prompts import (
     build_migration_prompt,
+    build_project_review_prompt,
     build_review_prompt,
     build_test_prompt,
     parse_json_loose,
@@ -692,6 +693,28 @@ async def get_target_profile(project_id: str, user_id: str = Depends(get_current
 
 
 # ---------------------------------------------------------------------------
+# GET /project/{id}/files
+# ---------------------------------------------------------------------------
+
+@app.get("/project/{project_id}/files")
+async def get_project_files(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """Return the full raw content of every uploaded source file for a project.
+
+    Used by the client to build whole-file context for migration prompts and
+    to render the file-context panel in the review workbench.
+    """
+    project = _get_project(project_id, user_id)
+    language = project.source_language if isinstance(project.source_language, str) else project.source_language.value
+    return {
+        "project_id": project_id,
+        "files": [
+            {"filename": filename, "content": content, "language": language}
+            for filename, content in project.uploaded_files.items()
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /projects
 # ---------------------------------------------------------------------------
 
@@ -771,6 +794,10 @@ class MigrateUnitRequest(BaseModel):
     business_rules: list[_BusinessRuleIn] = Field(default_factory=list, max_length=20)
     target_profile: Optional[_TargetProfileIn] = None
     instructions: Optional[str] = Field(None, max_length=4_000)
+    previous_attempt: Optional[str] = Field(None, max_length=120_000)
+    file_context: Optional[str] = Field(None, max_length=60_000)
+    project_manifest: Optional[str] = Field(None, max_length=8_000)
+    lessons_learned: Optional[str] = Field(None, max_length=4_000)
 
 
 class ReviewUnitRequest(BaseModel):
@@ -789,6 +816,22 @@ class TestsUnitRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     migrated_code: str = Field(..., min_length=1, max_length=120_000)
     target_lang: str = Field("Python", max_length=32)
+
+
+class _FileSummaryIn(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    filename: str = Field(..., max_length=260)
+    chunk_count: int = 0
+    risk_level: str = "Medium"
+
+
+class ReviewProjectRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    project_name: str = Field(..., min_length=1, max_length=200)
+    manifest: str = Field("", max_length=20_000)
+    file_summaries: list[_FileSummaryIn] = Field(default_factory=list, max_length=200)
 
 
 # --- Lazy LLM client singleton (re-uses one AsyncOpenAI connection pool) -----
@@ -889,6 +932,10 @@ async def llm_migrate(
         business_rules=[r.model_dump() for r in body.business_rules],
         target_profile=body.target_profile.model_dump() if body.target_profile else None,
         instructions=body.instructions,
+        previous_attempt=body.previous_attempt,
+        file_context=body.file_context,
+        project_manifest=body.project_manifest,
+        lessons_learned=body.lessons_learned,
     )
     content = await llm.complete(system=system, user=user, temperature=0.1, max_tokens=8000)
     content = _ensure_real_output(content)
@@ -998,6 +1045,56 @@ async def llm_tests(
         if isinstance(t, dict) and isinstance(t.get("name"), str)
     ][:8]
     return {"tests": tests, "code": parsed.get("code") or ""}
+
+
+# ---------------------------------------------------------------------------
+# POST /llm/review-project
+# ---------------------------------------------------------------------------
+
+@app.post("/llm/review-project")
+async def llm_review_project(
+    body: ReviewProjectRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Whole-project AI review, run once every file is finalized. Sees only a
+    manifest (filenames, dependencies, extracted rules) — never full code —
+    and flags cross-file concerns only. Returns a ProjectReviewResult."""
+    _rate_limit(request, "review-project", user_id)
+    _check_and_charge_quota(user_id)
+    llm = _get_llm()
+    _require_configured(llm)
+
+    system, user = build_project_review_prompt(
+        project_name=body.project_name,
+        manifest=body.manifest,
+        file_summaries=[f.model_dump() for f in body.file_summaries],
+    )
+    content = await llm.complete(
+        system=system,
+        user=user,
+        temperature=0.1,
+        max_tokens=3000,
+        json_response=True,
+    )
+    content = _ensure_real_output(content)
+    storage.increment_migrations_today(user_id)
+
+    parsed = parse_json_loose(content)
+    if not parsed:
+        return {
+            "summary": "Project review model returned unstructured output.",
+            "risk_notes": [],
+            "cross_file_concerns": [],
+            "confidence": "Low",
+        }
+
+    return {
+        "summary": parsed.get("summary") or "",
+        "risk_notes": parsed.get("risk_notes") or [],
+        "cross_file_concerns": parsed.get("cross_file_concerns") or [],
+        "confidence": parsed.get("confidence") or "Medium",
+    }
 
 
 # ---------------------------------------------------------------------------

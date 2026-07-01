@@ -22,6 +22,9 @@ interface WorkbenchHeaderProps {
   total: number;
   onDownload?: () => void;
   canDownload?: boolean;
+  /** Remaining/max daily AI-call quota — every migrate/review/tests call shares it. */
+  quotaRemaining?: number | null;
+  quotaMax?: number | null;
 }
 
 const TABS: { id: WorkbenchView; label: string; Icon: typeof Cpu }[] = [
@@ -37,7 +40,20 @@ export function WorkbenchHeader({
   total,
   onDownload,
   canDownload = false,
+  quotaRemaining = null,
+  quotaMax = null,
 }: WorkbenchHeaderProps) {
+  const quotaRatio =
+    quotaRemaining != null && quotaMax ? quotaRemaining / quotaMax : null;
+  const quotaColor =
+    quotaRatio == null
+      ? "#6B7280"
+      : quotaRatio <= 0.05
+        ? "#DC2626"
+        : quotaRatio <= 0.2
+          ? "#F59E0B"
+          : "#6B7280";
+
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-ink/10 bg-base/80 px-4 backdrop-blur-xl">
       <Link
@@ -88,6 +104,16 @@ export function WorkbenchHeader({
           {approved}/{total}
         </span>
       </div>
+
+      {quotaRemaining != null && (
+        <span
+          className="hidden shrink-0 rounded-full border px-2 py-0.5 font-mono text-[11px] font-medium md:inline"
+          style={{ borderColor: `${quotaColor}40`, color: quotaColor }}
+          title="Daily AI-call budget remaining — every generate/review/test call shares it"
+        >
+          {quotaRemaining}/{quotaMax} AI calls left
+        </span>
+      )}
 
       {onDownload && (
         <button

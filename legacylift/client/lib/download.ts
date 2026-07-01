@@ -3,7 +3,10 @@
 // a browser download. (Single file keeps it dependency-free; swap for a zip if
 // you want the original folder structure.)
 
+import JSZip from "jszip";
 import type { MigrationChunk } from "@/types/legacylift";
+import type { FileGroup } from "@/hooks/useFileStatus";
+import { assembleFile } from "@/lib/fileAssembly";
 
 interface SaveFilePickerWindow extends Window {
   showSaveFilePicker?: (options?: {
@@ -13,6 +16,12 @@ interface SaveFilePickerWindow extends Window {
       accept: Record<string, string[]>;
     }>;
   }) => Promise<FileSystemFileHandle>;
+}
+
+/** 'interest.cbl' -> 'interest.py'; 'AccountService.java' -> 'AccountService.py'. */
+export function toPythonFilename(originalName: string): string {
+  const stripped = originalName.replace(/\.[^./\\]+$/, "");
+  return `${stripped}.py`;
 }
 
 export function buildMigratedFile(
@@ -58,15 +67,12 @@ function fallbackDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-export async function downloadMigration(
-  projectName: string,
-  chunks: MigrationChunk[],
+/** Shared save-picker-or-blob-fallback path used by every download helper. */
+async function saveBlob(
+  blob: Blob,
+  filename: string,
+  pickerType?: { description: string; accept: Record<string, string[]> },
 ): Promise<void> {
-  const text = buildMigratedFile(projectName, chunks);
-  const safe = projectName.replace(/[^\w.-]+/g, "_") || "migration";
-  const filename = `${safe}_migrated.py`;
-  const blob = new Blob([text], { type: "text/x-python;charset=utf-8" });
-
   const savePicker = (window as SaveFilePickerWindow).showSaveFilePicker;
   if (!savePicker) {
     fallbackDownload(blob, filename);
@@ -76,12 +82,7 @@ export async function downloadMigration(
   try {
     const handle = await savePicker({
       suggestedName: filename,
-      types: [
-        {
-          description: "Python file",
-          accept: { "text/x-python": [".py"] },
-        },
-      ],
+      types: pickerType ? [pickerType] : undefined,
     });
     const writable = await handle.createWritable();
     await writable.write(blob);
@@ -92,4 +93,58 @@ export async function downloadMigration(
     }
     fallbackDownload(blob, filename);
   }
+}
+
+export async function downloadMigration(
+  projectName: string,
+  chunks: MigrationChunk[],
+): Promise<void> {
+  const text = buildMigratedFile(projectName, chunks);
+  const safe = projectName.replace(/[^\w.-]+/g, "_") || "migration";
+  const filename = `${safe}_migrated.py`;
+  const blob = new Blob([text], { type: "text/x-python;charset=utf-8" });
+  await saveBlob(blob, filename, {
+    description: "Python file",
+    accept: { "text/x-python": [".py"] },
+  });
+}
+
+/** Download one finalized file's assembled Python module on its own. */
+export async function downloadSingleFile(fileGroup: FileGroup): Promise<void> {
+  const content = assembleFile(fileGroup.filename, fileGroup.chunks);
+  const filename = toPythonFilename(fileGroup.filename);
+  const blob = new Blob([content], { type: "text/x-python;charset=utf-8" });
+  await saveBlob(blob, filename, {
+    description: "Python file",
+    accept: { "text/x-python": [".py"] },
+  });
+}
+
+/** Bundle every finalized file into one zip, preserving original filenames. */
+export async function downloadProjectZip(
+  projectName: string,
+  fileGroups: FileGroup[],
+): Promise<void> {
+  const zip = new JSZip();
+  const finalized = fileGroups.filter((f) => f.status === "finalized");
+
+  const approved = finalized.reduce((n, f) => n + f.approvedCount, 0);
+  const total = finalized.reduce((n, f) => n + f.totalCount, 0);
+  zip.file(
+    "_MIGRATION_SUMMARY.txt",
+    [
+      `Migrated by LegacyLift — ${projectName}`,
+      `${finalized.length} file(s) finalized · ${approved}/${total} units approved.`,
+      "Generated code is a starting point — review every unit before use.",
+      "",
+    ].join("\n"),
+  );
+
+  for (const fg of finalized) {
+    zip.file(toPythonFilename(fg.filename), assembleFile(fg.filename, fg.chunks));
+  }
+
+  const blob = await zip.generateAsync({ type: "blob" });
+  const safe = projectName.replace(/[^\w.-]+/g, "_") || "migration";
+  await saveBlob(blob, `${safe}_migrated.zip`);
 }

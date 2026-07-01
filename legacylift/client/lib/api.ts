@@ -242,6 +242,23 @@ export async function getUserLimits(): Promise<UserLimits | null> {
   }
 }
 
+export interface ServerProjectFile {
+  filename: string;
+  content: string;
+  language: string;
+}
+
+export async function getProjectFiles(
+  projectId: string,
+): Promise<ServerProjectFile[]> {
+  const data = await request<{ files: ServerProjectFile[] } | undefined>(
+    `/project/${encodeURIComponent(projectId)}/files`,
+    {},
+    { ignoreNotFound: true },
+  );
+  return data?.files ?? [];
+}
+
 export async function updateBusinessRule(
   projectId: string,
   ruleIdOrChunkId: string,

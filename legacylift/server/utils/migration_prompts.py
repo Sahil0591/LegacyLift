@@ -74,6 +74,10 @@ def build_migration_prompt(
     business_rules: Optional[list[BusinessRuleCtx]] = None,
     target_profile: Optional[TargetProfileCtx] = None,
     instructions: Optional[str] = None,
+    previous_attempt: Optional[str] = None,
+    file_context: Optional[str] = None,
+    project_manifest: Optional[str] = None,
+    lessons_learned: Optional[str] = None,
 ) -> tuple[str, str]:
     system = f"""You are a principal engineer who migrates legacy {source_lang} to idiomatic, production-grade {target_lang}.
 
@@ -90,17 +94,46 @@ Output ONLY the {target_lang} code for this unit. No markdown fences, no prose, 
     if instructions and instructions.strip():
         guidance = f"\n=== REVIEWER GUIDANCE (must apply) ===\n{instructions.strip()}\n"
 
+    previous_block = ""
+    if previous_attempt and previous_attempt.strip():
+        previous_block = (
+            f"\n=== YOUR PREVIOUS ATTEMPT ===\n{previous_attempt.strip()}\n"
+            "Edit the previous attempt to satisfy the reviewer guidance below. "
+            "Keep everything else about it identical — do not rewrite from scratch.\n"
+        )
+
+    file_block = ""
+    if file_context and file_context.strip():
+        file_block = (
+            f"\n=== FULL SOURCE FILE (context only — migrate ONLY the unit above) ===\n"
+            f"{file_context.strip()}\n"
+        )
+
+    manifest_block = ""
+    if project_manifest and project_manifest.strip():
+        manifest_block = (
+            f"\n=== PROJECT MANIFEST (other files, dependencies, extracted rules) ===\n"
+            f"{project_manifest.strip()}\n"
+        )
+
+    lessons_block = ""
+    if lessons_learned and lessons_learned.strip():
+        lessons_block = (
+            f"\n=== LESSONS FROM PAST REVIEWS (do not repeat these mistakes) ===\n"
+            f"{lessons_learned.strip()}\n"
+        )
+
     user = f"""Migrate this {source_lang} unit "{name}" to {target_lang}.
 
 === SOURCE ({source_lang}) ===
 {source_code}
-
+{file_block}
 === BUSINESS RULES THIS CODE ENCODES ===
 {_rules_block(business_rules)}
-
+{manifest_block}{lessons_block}
 === TARGET PROFILE ===
 {_profile_block(target_profile)}
-{guidance}
+{previous_block}{guidance}
 Return only the migrated {target_lang} code."""
 
     return system, user
@@ -135,6 +168,46 @@ Respond with ONLY a JSON object, no prose, in exactly this shape:
 
 === MIGRATED {target_lang} ===
 {migrated_code}
+
+Return only the JSON review object."""
+
+    return system, user
+
+
+def build_project_review_prompt(
+    *,
+    project_name: str,
+    manifest: str,
+    file_summaries: list[dict],
+) -> tuple[str, str]:
+    system = """You are reviewing a completed legacy-code-to-Python migration at the \
+WHOLE-PROJECT level. You are given a manifest of files, their dependency edges, and \
+extracted business rules — NOT the full migrated code for every file. Flag ONLY \
+cross-file concerns: naming/style inconsistency across files, constants or business \
+rules duplicated in more than one file, dependency-ordering issues (a file migrated \
+before something it depends on), or files that reference each other but may not have \
+been reviewed together. Do NOT invent per-line bugs you cannot see.
+
+Respond with ONLY a JSON object, no prose, in exactly this shape:
+{
+  "summary": string,
+  "risk_notes": string[],
+  "cross_file_concerns": string[],
+  "confidence": "High" | "Medium" | "Low"
+}"""
+
+    summary_lines = "\n".join(
+        f"- {f.get('filename', '?')}: {f.get('chunk_count', 0)} units, risk {f.get('risk_level', '?')}"
+        for f in file_summaries
+    )
+
+    user = f"""Project: {project_name}
+
+=== FILES ===
+{summary_lines or "No files supplied."}
+
+=== PROJECT MANIFEST (dependencies + extracted business rules) ===
+{manifest or "No manifest supplied."}
 
 Return only the JSON review object."""
 

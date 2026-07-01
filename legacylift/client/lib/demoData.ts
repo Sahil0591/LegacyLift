@@ -8,6 +8,7 @@ import type {
   MigrationChunk,
   PipelineLayer,
   PipelineState,
+  ProjectFile,
   TargetProfile,
 } from "@/types/legacylift";
 
@@ -181,6 +182,9 @@ function chunk(
     Partial<MigrationChunk>,
 ): MigrationChunk {
   return {
+    source_file: "",
+    start_line: 0,
+    end_line: 0,
     source_code: "",
     migrated_code: "",
     diff: "",
@@ -217,6 +221,9 @@ const CHUNKS: MigrationChunk[] = [
     name: "FORMAT-DATE",
     risk_level: "Low",
     status: "Approved",
+    source_file: "dates.cbl",
+    start_line: 5,
+    end_line: 22,
     source_code: "       FORMAT-DATE.\n           STRING WS-DD WS-MM WS-YY INTO WS-OUT.",
     migrated_code:
       'def format_date(d: date) -> str:\n    return d.strftime("%d%m%y")',
@@ -226,6 +233,9 @@ const CHUNKS: MigrationChunk[] = [
     name: "GET-RATE",
     risk_level: "Medium",
     status: "Approved",
+    source_file: "rates.cbl",
+    start_line: 40,
+    end_line: 75,
     source_code:
       "       GET-RATE.\n           SEARCH ALL RATE-TABLE\n               WHEN RT-TIER = WS-TIER\n               MOVE RT-APR TO WS-APR.",
     migrated_code:
@@ -236,6 +246,9 @@ const CHUNKS: MigrationChunk[] = [
     name: "INTEREST-CALC",
     risk_level: "High",
     status: "Review",
+    source_file: "interest.cbl",
+    start_line: 128,
+    end_line: 156,
     source_code: INTEREST_SOURCE,
     migrated_code: INTEREST_TARGET,
     static_analysis: {
@@ -263,6 +276,9 @@ const CHUNKS: MigrationChunk[] = [
     name: "POST-LEDGER",
     risk_level: "High",
     status: "Pending",
+    source_file: "ledger.cbl",
+    start_line: 210,
+    end_line: 288,
     source_code:
       "       POST-LEDGER.\n           WRITE LEDGER-DEBIT FROM WS-TXN.\n           WRITE LEDGER-CREDIT FROM WS-TXN.\n           PERFORM DB2-AUDIT.",
     migrated_code:
@@ -273,6 +289,9 @@ const CHUNKS: MigrationChunk[] = [
     name: "APPLY-LATE-FEE",
     risk_level: "Critical",
     status: "Pending",
+    source_file: "fees.cbl",
+    start_line: 88,
+    end_line: 140,
     source_code:
       "       APPLY-LATE-FEE.\n           COMPUTE WS-FEE = WS-OVERDUE * 0.15.\n           IF WS-FEE > 25.00\n               MOVE 25.00 TO WS-FEE\n           END-IF.",
     migrated_code:
@@ -281,6 +300,26 @@ const CHUNKS: MigrationChunk[] = [
 ];
 
 const CURRENT = CHUNKS.find((c) => c.status === "Review") ?? null;
+
+// Reconstruct a "full file" view per source file from its chunks' original
+// source, in line order — just enough for the file-context panel to show
+// something coherent; not meant to be authentic re-parsed COBOL/Java.
+function buildDemoFiles(chunks: MigrationChunk[], language: string): ProjectFile[] {
+  const byFile = new Map<string, MigrationChunk[]>();
+  for (const c of chunks) {
+    if (!c.source_file) continue;
+    const list = byFile.get(c.source_file) ?? [];
+    list.push(c);
+    byFile.set(c.source_file, list);
+  }
+  return [...byFile.entries()].map(([filename, fileChunks]) => {
+    const ordered = [...fileChunks].sort((a, b) => a.start_line - b.start_line);
+    const content = ordered.map((c) => c.source_code).join("\n\n");
+    return { filename, content, language };
+  });
+}
+
+const FILES: ProjectFile[] = buildDemoFiles(CHUNKS, "COBOL");
 
 const JAVA_RULES: BusinessRule[] = [
   {
@@ -438,6 +477,9 @@ const JAVA_CHUNKS: MigrationChunk[] = [
     name: "processTransfer",
     risk_level: "Critical",
     status: "Review",
+    source_file: "FundsTransferProcessor.java",
+    start_line: 20,
+    end_line: 160,
     source_code: JAVA_PROCESS_TRANSFER_SOURCE,
     migrated_code:
       "@Transactional\npublic void processTransfer(long transferRequestId) {\n    TransferRequest request = transferRepository.lockById(transferRequestId);\n    dailyLimitService.assertAvailable(request.customerId(), request.amount());\n    riskHoldService.placeHoldWhenRequired(request);\n    ledgerService.postTransfer(request);\n}",
@@ -468,6 +510,9 @@ const JAVA_CHUNKS: MigrationChunk[] = [
     name: "calculateFee",
     risk_level: "High",
     status: "Pending",
+    source_file: "OverdraftFeeCalculator.java",
+    start_line: 14,
+    end_line: 49,
     source_code:
       'BigDecimal proposedFee = overdrawnAmount.multiply(OVERDRAFT_FEE_RATE);\nproposedFee = proposedFee.setScale(2, RoundingMode.HALF_UP);\nif (proposedFee.compareTo(MAXIMUM_FEE) > 0) {\n    proposedFee = MAXIMUM_FEE;\n}',
     migrated_code:
@@ -478,6 +523,9 @@ const JAVA_CHUNKS: MigrationChunk[] = [
     name: "postDoubleEntry",
     risk_level: "High",
     status: "Pending",
+    source_file: "LedgerPostingDao.java",
+    start_line: 10,
+    end_line: 40,
     source_code:
       'insertLedgerEntry(connection, transferRequestId, debitAccountId, ENTRY_TYPE_DEBIT, amount, narrative);\ninsertLedgerEntry(connection, transferRequestId, creditAccountId, ENTRY_TYPE_CREDIT, amount, narrative);',
     migrated_code:
@@ -488,6 +536,9 @@ const JAVA_CHUNKS: MigrationChunk[] = [
     name: "runSettlement",
     risk_level: "High",
     status: "Pending",
+    source_file: "EndOfDaySettlementJob.java",
+    start_line: 25,
+    end_line: 66,
     source_code:
       "while (resultSet.next()) {\n    ledgerPostingDao.postDoubleEntry(connection, transferRequestId, suspenseAccountId, debitAccountId, amount, \"EOD external network settlement\");\n    settledCount++;\n}",
     migrated_code:
@@ -496,6 +547,8 @@ const JAVA_CHUNKS: MigrationChunk[] = [
 ];
 
 const JAVA_CURRENT = JAVA_CHUNKS.find((c) => c.status === "Review") ?? null;
+
+const JAVA_FILES: ProjectFile[] = buildDemoFiles(JAVA_CHUNKS, "Java");
 
 // ── Public factory ───────────────────────────────────────────────────────────
 
@@ -513,6 +566,7 @@ export function createDemoState(
       targetProfile: { ...JAVA_TARGET_PROFILE },
       currentChunk: JAVA_CURRENT ? { ...JAVA_CURRENT } : null,
       chunks: JAVA_CHUNKS.map((c) => ({ ...c })),
+      files: JAVA_FILES.map((f) => ({ ...f })),
       migrationComplete: false,
       error: null,
     };
@@ -527,6 +581,7 @@ export function createDemoState(
     targetProfile: { ...TARGET_PROFILE },
     currentChunk: CURRENT ? { ...CURRENT } : null,
     chunks: CHUNKS.map((c) => ({ ...c })),
+    files: FILES.map((f) => ({ ...f })),
     migrationComplete: false,
     error: null,
   };

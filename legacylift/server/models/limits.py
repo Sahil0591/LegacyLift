@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 
 from pydantic import BaseModel, Field
+
+
+def _default_daily_migration_limit() -> int:
+    # Every LLM proxy call charges this counter (migrate, review, tests, and
+    # project-review), so one chunk's happy path alone costs 3 units, and one
+    # auto-fix round on a flagged chunk costs 3 more. A real filetree migration
+    # (100-200 chunks, some needing 2-3 fix rounds) can land at 700-1000+ units
+    # in a single sitting, so a flat 50/day breaks on the first small file.
+    return int(os.getenv("LLM_DAILY_MIGRATION_LIMIT", "1000"))
 
 
 class UserLimit(BaseModel):
@@ -18,8 +28,9 @@ class UserLimit(BaseModel):
     max_files_per_project: int = 25
     max_file_size_mb: float = 5.0
 
-    # Daily migration budget (AI calls are expensive)
-    max_migrations_per_day: int = 50
+    # Daily migration budget (AI calls are expensive) — override with
+    # LLM_DAILY_MIGRATION_LIMIT for local/test sessions that need more headroom.
+    max_migrations_per_day: int = Field(default_factory=_default_daily_migration_limit)
     migrations_today: int = 0
     migrations_reset_date: str = Field(default_factory=lambda: date.today().isoformat())
 

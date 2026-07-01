@@ -8,9 +8,12 @@
 //      consumed by the workbench. Large; loaded on demand.
 
 import type { AnalyzeResult } from "@/lib/analyze";
+import type { Lesson } from "@/lib/lessons";
 
 const ANALYSIS_PREFIX = "legacylift:analysis:";
 const PROGRESS_PREFIX = "legacylift:progress:";
+const FILE_STATUS_PREFIX = "legacylift:filestatus:";
+const LESSONS_PREFIX = "legacylift:lessons:";
 const INDEX_KEY = "legacylift:project-index";
 
 export interface ProjectIndexEntry {
@@ -152,6 +155,55 @@ export function loadProgress(
   try {
     const raw = localStorage.getItem(PROGRESS_PREFIX + projectId);
     return raw ? (JSON.parse(raw) as Record<string, ChunkProgressEntry>) : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// File finalization status (local projects only)
+// ---------------------------------------------------------------------------
+
+/** Persist which files have been finalized so a refresh doesn't lose it. */
+export function saveFileStatus(
+  projectId: string,
+  statuses: Record<string, true>,
+): void {
+  try {
+    localStorage.setItem(FILE_STATUS_PREFIX + projectId, JSON.stringify(statuses));
+  } catch {
+    // best-effort
+  }
+}
+
+/** Load previously finalized files. Returns null when nothing is stored. */
+export function loadFileStatus(projectId: string): Record<string, true> | null {
+  try {
+    const raw = localStorage.getItem(FILE_STATUS_PREFIX + projectId);
+    return raw ? (JSON.parse(raw) as Record<string, true>) : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lessons learned (local projects only) — the feedback loop's memory.
+// ---------------------------------------------------------------------------
+
+/** Persist accumulated lessons so a refresh doesn't lose the feedback loop. */
+export function saveLessons(projectId: string, lessons: Lesson[]): void {
+  try {
+    localStorage.setItem(LESSONS_PREFIX + projectId, JSON.stringify(lessons));
+  } catch {
+    // best-effort
+  }
+}
+
+/** Load previously captured lessons. Returns null when nothing is stored. */
+export function loadLessons(projectId: string): Lesson[] | null {
+  try {
+    const raw = localStorage.getItem(LESSONS_PREFIX + projectId);
+    return raw ? (JSON.parse(raw) as Lesson[]) : null;
   } catch {
     return null;
   }

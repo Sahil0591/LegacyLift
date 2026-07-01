@@ -104,6 +104,9 @@ export interface AIReviewResult {
 export interface MigrationChunk {
   id: string;
   name: string;
+  source_file: string;
+  start_line: number;
+  end_line: number;
   source_code: string;
   migrated_code: string;
   diff: string;
@@ -137,6 +140,16 @@ export interface Project {
   created_at: string;
   files: string[];
   schema_file: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// ProjectFile — full raw content of an uploaded source file
+// ---------------------------------------------------------------------------
+
+export interface ProjectFile {
+  filename: string;
+  content: string;
+  language: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +441,7 @@ export interface PipelineState {
   targetProfile: TargetProfile | null;
   currentChunk: MigrationChunk | null;
   chunks: MigrationChunk[];
+  files: ProjectFile[];
   migrationComplete: boolean;
   error: string | null;
 }

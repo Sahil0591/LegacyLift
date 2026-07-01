@@ -179,6 +179,15 @@ class MigrationChunk(BaseModel):
     e.g. 'CALC-INTEREST-SECTION', 'VALIDATE-ACCOUNT-PARA'
     """
 
+    source_file: str = ""
+    """Original filename this chunk was extracted from, e.g. 'interest.cbl'."""
+
+    start_line: int = 0
+    """1-indexed start line of this chunk within source_file."""
+
+    end_line: int = 0
+    """1-indexed end line (inclusive) of this chunk within source_file."""
+
     source_code: str = ""
     """Original legacy source code for this chunk."""
 

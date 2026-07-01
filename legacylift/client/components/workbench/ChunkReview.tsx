@@ -10,8 +10,11 @@ import {
   Sparkles,
   FlaskConical,
   AlertTriangle,
+  AlertOctagon,
   CornerDownRight,
   Loader2,
+  RotateCcw,
+  Wrench,
 } from "lucide-react";
 import type { MigrationChunk } from "@/types/legacylift";
 import { CodeCompare } from "@/components/workbench/CodeCompare";
@@ -21,10 +24,20 @@ interface ChunkReviewProps {
   chunk: MigrationChunk;
   onApprove: (id: string) => void;
   onReject: (id: string, reason: string) => void;
+  /** Reopen an already-approved (or rejected) chunk for another look/edit. */
+  onReopen?: (id: string) => void;
   /** Re-generate + re-review with Venice; optional reviewer guidance. */
   onRegenerate?: (instructions?: string) => void;
+  /** One-click "Fix with AI" on a specific AI review finding — regenerates using it as guidance. */
+  onFixWithAI?: (instructions: string) => void;
+  /** Save a hand-edited version of the migrated code — bypasses the LLM entirely. */
+  onManualEdit?: (code: string) => void;
+  /** Re-run static analysis/AI review/tests on the current code without regenerating it. */
+  onRunChecks?: () => void;
   regenerating?: boolean;
   regenError?: string | null;
+  /** Live status while an auto-fix loop is running, e.g. "Fixing issues (attempt 2/8)…". */
+  regenStatus?: string | null;
   /** Regenerations left for this chunk (limit). */
   regenRemaining?: number;
   regenerateLabel?: string;
@@ -72,16 +85,44 @@ function CheckRow({
   );
 }
 
+function FixWithAIButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title="Fix with AI — regenerate this chunk using this finding as guidance"
+      className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-[#7C3AED]/30 px-1.5 py-0.5 text-[10px] font-semibold text-[#7C3AED] transition-colors hover:bg-[#7C3AED]/10"
+    >
+      <Wrench className="h-2.5 w-2.5" />
+      Fix with AI
+    </button>
+  );
+}
+
 function Checks({
   chunk,
   regenerating,
+  onFixIssue,
 }: {
   chunk: MigrationChunk;
   regenerating: boolean;
+  onFixIssue?: (text: string) => void;
 }) {
   const tests = chunk.test_results;
   const passed = tests.filter((t) => t.passed).length;
   const ai = chunk.ai_review;
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggle = (text: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(text)) next.delete(text);
+      else next.add(text);
+      return next;
+    });
+  const fixSelected = () => {
+    if (!onFixIssue || selected.size === 0) return;
+    onFixIssue([...selected].map((t) => `- ${t}`).join("\n"));
+    setSelected(new Set());
+  };
 
   // A check is loading when Venice is working AND the result hasn't arrived yet.
   const codeReady = chunk.migrated_code.trim().length > 0;
@@ -151,28 +192,81 @@ function Checks({
           }
         />
 
-        {ai && (ai.warnings.length > 0 || ai.suggestions.length > 0) && (
-          <div className="space-y-1.5 bg-ink/[0.02] px-4 py-3">
-            {ai.warnings.map((w) => (
-              <div
-                key={w}
-                className="flex items-start gap-2 text-xs text-ink/70"
-              >
-                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-[#F59E0B]" />
-                {w}
-              </div>
-            ))}
-            {ai.suggestions.map((s) => (
-              <div
-                key={s}
-                className="flex items-start gap-2 text-xs text-sub"
-              >
-                <CornerDownRight className="mt-0.5 h-3 w-3 shrink-0" />
-                {s}
-              </div>
-            ))}
-          </div>
-        )}
+        {ai &&
+          (ai.critical_issues.length > 0 ||
+            ai.warnings.length > 0 ||
+            ai.suggestions.length > 0) && (
+            <div className="space-y-1.5 bg-ink/[0.02] px-4 py-3">
+              {onFixIssue && selected.size > 0 && (
+                <div className="flex items-center justify-between rounded-lg bg-[#7C3AED]/10 px-2.5 py-1.5">
+                  <span className="text-[11px] font-medium text-[#7C3AED]">
+                    {selected.size} selected
+                  </span>
+                  <button
+                    onClick={fixSelected}
+                    className="inline-flex items-center gap-1 rounded-full bg-[#7C3AED] px-2 py-0.5 text-[10px] font-semibold text-white transition-colors hover:bg-[#6D28D9]"
+                  >
+                    <Wrench className="h-2.5 w-2.5" />
+                    Fix {selected.size} with AI
+                  </button>
+                </div>
+              )}
+              {ai.critical_issues.map((c) => (
+                <div
+                  key={c}
+                  className="flex items-start gap-2 text-xs text-[#DC2626]"
+                >
+                  {onFixIssue && (
+                    <input
+                      type="checkbox"
+                      checked={selected.has(c)}
+                      onChange={() => toggle(c)}
+                      className="mt-0.5 h-3 w-3 shrink-0 accent-[#7C3AED]"
+                    />
+                  )}
+                  <AlertOctagon className="mt-0.5 h-3 w-3 shrink-0" />
+                  <span className="flex-1">{c}</span>
+                  {onFixIssue && <FixWithAIButton onClick={() => onFixIssue(c)} />}
+                </div>
+              ))}
+              {ai.warnings.map((w) => (
+                <div
+                  key={w}
+                  className="flex items-start gap-2 text-xs text-ink/70"
+                >
+                  {onFixIssue && (
+                    <input
+                      type="checkbox"
+                      checked={selected.has(w)}
+                      onChange={() => toggle(w)}
+                      className="mt-0.5 h-3 w-3 shrink-0 accent-[#7C3AED]"
+                    />
+                  )}
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-[#F59E0B]" />
+                  <span className="flex-1">{w}</span>
+                  {onFixIssue && <FixWithAIButton onClick={() => onFixIssue(w)} />}
+                </div>
+              ))}
+              {ai.suggestions.map((s) => (
+                <div
+                  key={s}
+                  className="flex items-start gap-2 text-xs text-sub"
+                >
+                  {onFixIssue && (
+                    <input
+                      type="checkbox"
+                      checked={selected.has(s)}
+                      onChange={() => toggle(s)}
+                      className="mt-0.5 h-3 w-3 shrink-0 accent-[#7C3AED]"
+                    />
+                  )}
+                  <CornerDownRight className="mt-0.5 h-3 w-3 shrink-0" />
+                  <span className="flex-1">{s}</span>
+                  {onFixIssue && <FixWithAIButton onClick={() => onFixIssue(s)} />}
+                </div>
+              ))}
+            </div>
+          )}
       </div>
     </div>
   );
@@ -182,17 +276,40 @@ export function ChunkReview({
   chunk,
   onApprove,
   onReject,
+  onReopen,
   onRegenerate,
+  onFixWithAI,
+  onManualEdit,
+  onRunChecks,
   regenerating = false,
   regenError = null,
+  regenStatus = null,
   regenRemaining = Infinity,
   regenerateLabel = "Regenerate with Venice",
 }: ChunkReviewProps) {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  const [confirmCritical, setConfirmCritical] = useState(false);
   const inReview = chunk.status === "Review";
   const statusMeta = STATUS_META[chunk.status];
   const canRegen = regenRemaining > 0;
+
+  const codeReady = chunk.migrated_code.trim().length > 0;
+  const checksComplete = !!chunk.static_analysis && !!chunk.ai_review;
+  const canApprove = codeReady && checksComplete && !regenerating;
+  const criticalIssues = chunk.ai_review?.critical_issues ?? [];
+  const approveBlockedReason = !codeReady
+    ? "No migrated code yet — generate before merging"
+    : !checksComplete
+      ? "Waiting for checks to finish"
+      : regenerating
+        ? "Regeneration in progress"
+        : undefined;
+
+  const requestApprove = () => {
+    if (criticalIssues.length > 0) setConfirmCritical(true);
+    else onApprove(chunk.id);
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -212,6 +329,21 @@ export function ChunkReview({
           {statusMeta.label}
         </span>
         <div className="ml-auto flex items-center gap-3">
+          {onRunChecks && (
+            <button
+              onClick={onRunChecks}
+              disabled={regenerating || !codeReady}
+              title={
+                codeReady
+                  ? "Re-run static analysis, AI review, and tests on the current code — no regeneration"
+                  : "No migrated code to check yet"
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-ink/15 px-3 py-1.5 text-xs font-semibold text-ink/70 transition-colors hover:border-[#7C3AED]/50 hover:text-[#7C3AED] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Run checks
+            </button>
+          )}
           {onRegenerate && (
             <button
               onClick={() => onRegenerate()}
@@ -240,22 +372,41 @@ export function ChunkReview({
           {regenError}
         </div>
       )}
+      {!regenError && regenStatus && (
+        <div className="flex items-center gap-2 border-b border-[#7C3AED]/30 bg-[#7C3AED]/10 px-6 py-2.5 text-xs font-medium text-[#7C3AED]">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {regenStatus}
+        </div>
+      )}
 
       {/* Scroll body */}
       <div className="flex-1 space-y-5 overflow-y-auto p-6">
-        <CodeCompare source={chunk.source_code} migrated={chunk.migrated_code} />
-        <Checks chunk={chunk} regenerating={regenerating} />
+        <CodeCompare
+          source={chunk.source_code}
+          migrated={chunk.migrated_code}
+          onSaveEdit={onManualEdit}
+        />
+        <Checks key={chunk.id} chunk={chunk} regenerating={regenerating} onFixIssue={onFixWithAI} />
       </div>
 
       {/* Decision bar */}
       <div className="border-t border-ink/10 bg-surface/40 px-6 py-4">
         {!inReview ? (
-          <div className="flex items-center justify-center gap-2 text-sm text-sub">
+          <div className="flex items-center justify-center gap-3 text-sm text-sub">
             <span
               className="h-2 w-2 rounded-full"
               style={{ background: statusMeta.color }}
             />
             This chunk is {statusMeta.label.toLowerCase()}.
+            {onReopen && (chunk.status === "Approved" || chunk.status === "Rejected") && (
+              <button
+                onClick={() => onReopen(chunk.id)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-ink/15 px-3 py-1.5 text-xs font-semibold text-ink/80 transition-colors hover:border-[#7C3AED]/50 hover:text-[#7C3AED]"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Reopen for edits
+              </button>
+            )}
           </div>
         ) : rejecting ? (
           <div className="space-y-3">
@@ -329,8 +480,10 @@ export function ChunkReview({
               Request changes
             </button>
             <button
-              onClick={() => onApprove(chunk.id)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#10B981] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition-colors hover:bg-[#059669]"
+              onClick={requestApprove}
+              disabled={!canApprove}
+              title={approveBlockedReason}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#10B981] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition-colors hover:bg-[#059669] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Check className="h-4 w-4" />
               Approve &amp; merge
@@ -338,6 +491,46 @@ export function ChunkReview({
           </div>
         )}
       </div>
+
+      {confirmCritical && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
+          <div className="w-full max-w-md rounded-xl border border-ink/10 bg-base p-6 shadow-2xl">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#DC2626]">
+              <AlertOctagon className="h-4 w-4" />
+              {criticalIssues.length} critical issue{criticalIssues.length === 1 ? "" : "s"} found
+            </div>
+            <p className="mt-2 text-sm text-ink/80">
+              The AI review flagged critical issues on this chunk. Are you sure
+              you want to approve and merge it anyway?
+            </p>
+            <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto text-xs text-ink/70">
+              {criticalIssues.map((c) => (
+                <li key={c} className="flex items-start gap-1.5">
+                  <span className="shrink-0">•</span>
+                  {c}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setConfirmCritical(false)}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-sub transition-colors hover:text-ink"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmCritical(false);
+                  onApprove(chunk.id);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#DC2626] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#B91C1C]"
+              >
+                Approve anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

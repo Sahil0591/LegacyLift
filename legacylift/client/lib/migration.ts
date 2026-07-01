@@ -16,6 +16,9 @@ const MAX_MIGRATED_CODE_LENGTH = 120_000;
 const MAX_INSTRUCTIONS_LENGTH = 4_000;
 const MAX_BUSINESS_RULES = 20;
 const MAX_HARDCODED_VALUES = 50;
+const MAX_FILE_CONTEXT_LENGTH = 60_000;
+const MAX_MANIFEST_LENGTH = 8_000;
+const MAX_LESSONS_LENGTH = 4_000;
 
 export interface GenerateInput {
   name: string;
@@ -32,6 +35,15 @@ export interface GenerateInput {
   > | null;
   /** Reviewer guidance applied on a regeneration. */
   instructions?: string;
+  /** The chunk's last generated code — lets the model make a targeted edit
+   *  instead of blind-rewriting from source, so a fix reliably sticks. */
+  previousAttempt?: string;
+  /** Full content of the file this chunk belongs to, for whole-file context. */
+  fileContext?: string;
+  /** Lightweight cross-file manifest (other filenames, deps, business rules). */
+  projectManifest?: string;
+  /** Accumulated lessons from past rejections/review findings for this file/project. */
+  lessonsLearned?: string;
 }
 
 export interface ReviewInput {
@@ -92,6 +104,18 @@ export function generateMigration(
     target_profile: normalizeTargetProfile(input.targetProfile),
     instructions: input.instructions
       ? truncate(input.instructions, MAX_INSTRUCTIONS_LENGTH)
+      : null,
+    previous_attempt: input.previousAttempt
+      ? truncate(input.previousAttempt, MAX_MIGRATED_CODE_LENGTH)
+      : null,
+    file_context: input.fileContext
+      ? truncate(input.fileContext, MAX_FILE_CONTEXT_LENGTH)
+      : null,
+    project_manifest: input.projectManifest
+      ? truncate(input.projectManifest, MAX_MANIFEST_LENGTH)
+      : null,
+    lessons_learned: input.lessonsLearned
+      ? truncate(input.lessonsLearned, MAX_LESSONS_LENGTH)
       : null,
   });
 }
