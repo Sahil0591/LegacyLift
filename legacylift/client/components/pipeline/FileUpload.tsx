@@ -115,7 +115,14 @@ export function FileUpload({ onSubmit, loading }: FileUploadProps) {
   const handleSubmit = async () => {
     if (demoMode) {
       const demoBlob = new Blob(
-        ["       IDENTIFICATION DIVISION.\n       PROGRAM-ID. PAYROLL.\n"],
+        [
+          "       IDENTIFICATION DIVISION.\n" +
+            "       PROGRAM-ID. PAYROLL.\n" +
+            "       PROCEDURE DIVISION.\n" +
+            "       0000-MAIN-PARA.\n" +
+            "           DISPLAY 'PROCESS PAYROLL'.\n" +
+            "           STOP RUN.\n",
+        ],
         { type: "text/plain" },
       );
       const demoFile = new File([demoBlob], "PAYROLL.cbl", {

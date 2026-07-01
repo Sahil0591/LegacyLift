@@ -1,21 +1,21 @@
 {
   "projects": {
-    "proj-3abc95b8": {
-      "id": "proj-3abc95b8",
+    "proj-d6329132": {
+      "id": "proj-d6329132",
       "owner_id": "user_owner_111",
       "name": "Test Project",
       "source_language": "COBOL",
       "target_language": "Python",
       "status": "uploading",
-      "created_at": "2026-06-30T23:16:55.142047",
+      "created_at": "2026-07-01T16:19:46.757850",
       "files": [
         {
-          "id": "2f131ae4-a1b6-473d-a2dd-e33d3a2b3a5e",
+          "id": "27400305-08c9-4743-827b-595eb0e245af",
           "filename": "main.cbl",
           "language": "COBOL",
           "content": "IDENTIFICATION DIVISION.",
           "size_bytes": 24,
-          "uploaded_at": "2026-06-30T23:16:55.145047",
+          "uploaded_at": "2026-07-01T16:19:46.763047",
           "line_count": 0,
           "detected_dependencies": []
         }
@@ -40,6 +40,7 @@
       "current_migration": null,
       "layer0_chunks": [],
       "chunk_rule_statuses": {},
+      "chunk_rule_reviews": {},
       "error": null,
       "error_log": []
     }
