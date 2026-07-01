@@ -454,6 +454,9 @@ class AIReviewer:
             console.print(
                 f"[dim]AIReviewer.review() → reviewing chunk [{chunk.name}][/dim]"
             )
+            # Demo mode never makes a real Venice call, even if a (possibly
+            # misconfigured) key happens to be present in the environment.
+            return self._stub_result(chunk.name)
 
         try:
             user_prompt = _LEGACY_REVIEW_TEMPLATE.format(

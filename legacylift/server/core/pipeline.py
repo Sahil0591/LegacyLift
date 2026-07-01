@@ -63,14 +63,21 @@ from core.layer4.schema_validator   import SchemaValidator, SchemaValidationResu
 console = Console()
 logger = logging.getLogger(__name__)
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
-AUTO_APPROVE = os.getenv("AUTO_APPROVE", "false").lower() == "true"
+# NOT cached at import time like DEMO_MODE above: await_approval() reads this
+# fresh on every call (see _auto_approve_enabled()) so toggling AUTO_APPROVE
+# actually takes effect without reimporting this module.
 
 # ---------------------------------------------------------------------------
 # State machine
 # ---------------------------------------------------------------------------
 
 _VALID_TRANSITIONS: dict[str, list[str]] = {
-    "created":    ["uploading"],
+    # "created" -> "analysing" is included because POST /project/{id}/start
+    # (api/main.py) explicitly allows starting the pipeline while status is
+    # still "created" (not just "uploading") — without this, run_pipeline()'s
+    # first _transition() call silently no-ops and the project status gets
+    # stuck at "created" for the rest of the run.
+    "created":    ["uploading", "analysing"],
     "uploading":  ["analysing"],
     "analysing":  ["ready", "failed"],
     "ready":      ["migrating", "validating"],
@@ -148,8 +155,14 @@ async def run_pipeline(project: Project) -> None:
     """
     Run the full migration pipeline in the background.
 
-    Currently implements Layer 0 (Code Archaeology) and transitions the
-    project to 'ready'. Layers 1–4 are stubbed with TODOs below.
+    Runs Layer 0 (Code Archaeology) and Layer 0.5 (Target Profile), then
+    transitions the project to 'ready' for chunk selection. Layers 1-3 run
+    per-chunk in run_migration_generation() (triggered by POST /select-chunk);
+    Layer 4 runs on demand via POST /validate-schema once chunks are approved.
+
+    Fails the project (status='failed') if Layer 0 finds zero migratable
+    chunks — a silent "ready" state with nothing to migrate would look like
+    success while there is nothing for the human to review.
 
     Never raises — all exceptions are caught, the project transitions to
     'failed', and a pipeline_failed WebSocket event is broadcast.
@@ -182,6 +195,23 @@ async def run_pipeline(project: Project) -> None:
             lvl = chunk.risk_level
             risk_summary[lvl] = risk_summary.get(lvl, 0) + 1
         project.risk_summary = risk_summary
+
+        if project.chunk_count == 0:
+            error_msg = (
+                "No migratable code was found in the uploaded files. Check that "
+                "the files match the selected source language and contain "
+                "recognisable COBOL paragraphs/sections, Java methods, VB6 "
+                "Subs/Functions, or SQL CREATE TABLE statements."
+            )
+            logger.error(
+                "Project %s: Layer 0 produced zero chunks from %d file(s) — failing pipeline",
+                project.id, len(project.files),
+            )
+            await _transition(project, "failed")
+            project.error = error_msg
+            project.completed_at = datetime.utcnow()
+            await ws_manager.emit(project.id, "pipeline_failed", error=error_msg)
+            return
 
         # Emit events the frontend already handles (layer0.run() serialises
         # rules and graph onto the project before returning).
@@ -233,21 +263,11 @@ async def run_pipeline(project: Project) -> None:
             )
             # Non-fatal — pipeline continues with generic prompts.
 
-        # ── LAYER 1: Static analysis ───────────────────────────────────────
-        # TODO: implement core/layer1.py
-        # await layer1.run(project)
-
-        # ── LAYER 2: AI semantic review ────────────────────────────────────
-        # TODO: implement core/layer2.py
-        # await layer2.run(project)
-
-        # ── LAYER 3: Test generation ───────────────────────────────────────
-        # TODO: implement core/layer3.py
-        # await layer3.run(project)
-
-        # ── LAYER 4: Schema validation ─────────────────────────────────────
-        # TODO: implement core/layer4.py
-        # await layer4.run(project)
+        # Layers 1-3 do not run here — they run per-chunk in
+        # run_migration_generation() once a human selects and confirms a
+        # chunk via POST /select-chunk (see below in this module).
+        # Layer 4 runs on demand via POST /validate-schema once at least one
+        # chunk is approved (see api/main.py:validate_schema).
 
     except Exception as e:
         logger.error(
@@ -341,6 +361,25 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
 
         # Persist on project
         project.current_migration = dataclasses.asdict(result)
+
+        if not (result.migrated_code or "").strip():
+            # generate_migration() never raises — an empty result means the
+            # LLM call itself failed (not configured, upstream error, etc.).
+            # Surface that honestly instead of pushing empty code through
+            # Layer 1-3 and presenting it to the reviewer as if it were real.
+            logger.error(
+                "Migration generation returned no code for chunk %s: %s",
+                chunk_id, result.explanation,
+            )
+            await ws_manager.emit_error(
+                project.id,
+                "migration",
+                f"Migration generation failed for '{chunk_dict.get('name', chunk_id)}': "
+                f"{result.explanation}",
+                recoverable=True,
+            )
+            await _transition(project, "ready")
+            return
 
         await ws_manager.emit(
             project.id,
@@ -1158,7 +1197,8 @@ class MigrationPipeline:
         the pipeline indefinitely. Use asyncio.wait_for() with a configurable
         timeout (e.g. 30 minutes for production, 30 seconds for demos).
         """
-        if AUTO_APPROVE:
+        auto_approve = os.getenv("AUTO_APPROVE", "false").lower() == "true"
+        if auto_approve:
             console.print(
                 f"[dim]AUTO_APPROVE: auto-approving chunk {chunk_id}[/dim]"
             )
