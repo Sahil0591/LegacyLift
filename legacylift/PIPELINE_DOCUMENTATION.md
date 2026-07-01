@@ -23,42 +23,42 @@ LegacyLift consists of four runtime surfaces:
 
 ```mermaid
 flowchart TD
-    A[Authenticated user in Next.js workbench] --> B[POST /project]
-    B --> C[POST /project/{id}/upload]
-    C --> D[POST /project/{id}/start]
-    D --> E[Layer 0: parse, rules, graph, risk]
-    E --> F[Layer 0.5: target profile]
-    F --> G[Project status: ready]
-    G --> H[Human confirms or reassigns business rule]
-    H --> I[POST /project/{id}/select-chunk/{chunk_id}]
-    I --> J[Generate migrated Python]
-    J --> K[Layer 1: static analysis]
-    K --> L[Layer 2: AI semantic review]
-    L --> M[Layer 3: generate and execute tests]
-    M --> N[Chunk ready for approval]
+    A["Authenticated user in Next.js workbench"] --> B["POST /project"]
+    B --> C["POST /project/{id}/upload"]
+    C --> D["POST /project/{id}/start"]
+    D --> E["Layer 0: parse, rules, graph, risk"]
+    E --> F["Layer 0.5: target profile"]
+    F --> G["Project status: ready"]
+    G --> H["Human confirms or reassigns business rule"]
+    H --> I["POST /project/{id}/select-chunk/{chunk_id}"]
+    I --> J["Generate migrated Python"]
+    J --> K["Layer 1: static analysis"]
+    K --> L["Layer 2: AI semantic review"]
+    L --> M["Layer 3: generate and execute tests"]
+    M --> N["Chunk ready for approval"]
     N --> O{Human decision}
     O -->|Approve| P[Snapshot chunk migration]
     O -->|Reject| G
     P --> Q{All chunks approved?}
     Q -->|No| G
     Q -->|Yes| R[Project complete]
-    P --> S[Optional POST /validate-schema]
-    S --> T[Layer 4 schema coverage result]
+    P --> S["Optional POST /validate-schema"]
+    S --> T["Layer 4 schema coverage result"]
 ```
 
 ### GitHub Overlay Flow
 
 ```mermaid
 flowchart TD
-    A[GitHub App webhook] --> B[POST /github/webhook]
-    B --> C[Verify X-Hub-Signature-256]
-    C --> D[Persist repository, PR, changed file, hunk data]
-    D --> E[Layer 0 records persisted as code chunks and criteria]
-    F[Chromium extension on GitHub] --> G[GET /github/overlay]
-    G --> H[Query repository/ref/PR/path annotations]
-    H --> I[Render ownership badges and guidance]
-    I --> J[PATCH /github/overlay/annotation/{id}]
-    J --> K[Persist review or approval transition]
+    A["GitHub App webhook"] --> B["POST /github/webhook"]
+    B --> C["Verify X-Hub-Signature-256"]
+    C --> D["Persist repository, PR, changed file, hunk data"]
+    D --> E["Layer 0 records persisted as code chunks and criteria"]
+    F["Chromium extension on GitHub"] --> G["GET /github/overlay"]
+    G --> H["Query repository/ref/PR/path annotations"]
+    H --> I["Render ownership badges and guidance"]
+    I --> J["PATCH /github/overlay/annotation/{id}"]
+    J --> K["Persist review or approval transition"]
 ```
 
 ### State Model

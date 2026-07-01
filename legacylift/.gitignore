@@ -107,6 +107,7 @@ docker-compose.override.yml
 tmp/
 temp/
 legacylift_tests/
+legacylift_data.json
 *.tmp
 *.bak
 *.orig
