@@ -704,3 +704,31 @@ def _parse_sql(
             logger.debug("SQL table extraction error in %s: %s", filename, e)
 
     return chunks, data_items, extra_deps
+
+
+class CodeParser:
+    """Compatibility facade used by older pipeline components and tests."""
+
+    def __init__(self, language: str = "cobol"):
+        self.language = language.lower()
+
+    def parse(self, source: str) -> list[CodeChunk]:
+        filename = f"snippet.{self._extension()}"
+        parsed = parse_file(filename, source)
+        return parsed.chunks
+
+    def split_into_chunks(self, source: str) -> list[tuple[str, str, int, int]]:
+        return [
+            (chunk.name, chunk.source, chunk.start_line, chunk.end_line)
+            for chunk in self.parse(source)
+        ]
+
+    def extract_literals(self, source: str) -> list[str]:
+        return list(dict.fromkeys(re.findall(r"'[^']*'|\"[^\"]*\"|\b\d+(?:\.\d+)?\b", source)))
+
+    def _extension(self) -> str:
+        if self.language == "java":
+            return "java"
+        if self.language == "sql":
+            return "sql"
+        return "cbl"

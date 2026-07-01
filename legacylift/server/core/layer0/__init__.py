@@ -735,6 +735,31 @@ async def run(project: Project) -> Layer0Result:
         logger.error("Layer0 result persistence failed: %s", exc)
 
     # ------------------------------------------------------------------
+    # Persist durable overlay records
+    # ------------------------------------------------------------------
+    try:
+        from db.repositories import persist_layer0_analysis  # noqa: PLC0415
+        from db.session import get_session, init_db  # noqa: PLC0415
+
+        await init_db()
+        async with get_session() as session:
+            summary = await persist_layer0_analysis(
+                session,
+                project,
+                chunks,
+                business_rules,
+            )
+        logger.info(
+            "Layer0 DB persistence: repo=%s commit=%s chunks=%d criteria=%d",
+            summary.repository_id,
+            summary.commit_sha,
+            summary.chunk_count,
+            summary.criterion_count,
+        )
+    except Exception as exc:
+        logger.error("Layer0 DB persistence failed: %s", exc, exc_info=True)
+
+    # ------------------------------------------------------------------
     # WebSocket event
     # ------------------------------------------------------------------
     try:

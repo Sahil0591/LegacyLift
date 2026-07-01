@@ -20,8 +20,11 @@ import { RISK_RANK } from "@/components/workbench/shared";
 import type { AnalyzeResult } from "@/lib/analyze";
 import type {
   BusinessRule,
+  ApprovalState,
   DependencyGraph,
   MigrationChunk,
+  OwnershipAuditEntry,
+  OwnershipReviewState,
   PipelineLayer,
   PipelineState,
   RiskLevel,
@@ -97,6 +100,24 @@ function isRiskLevel(value: unknown): value is RiskLevel {
   );
 }
 
+function reviewStateFromRaw(value: unknown): OwnershipReviewState {
+  return value === "Confirmed" ||
+    value === "Reassigned" ||
+    value === "Flagged" ||
+    value === "Inferred"
+    ? value
+    : "Inferred";
+}
+
+function approvalStateFromRaw(value: unknown): ApprovalState {
+  return value === "Approval requested" ||
+    value === "Approved" ||
+    value === "Waived" ||
+    value === "Approval needed"
+    ? value
+    : "Approval needed";
+}
+
 function normalizeBusinessRule(raw: unknown): BusinessRule {
   const r = raw as Record<string, unknown>;
   const chunkId = typeof r.chunk_id === "string" ? r.chunk_id : undefined;
@@ -152,6 +173,25 @@ function normalizeBusinessRule(raw: unknown): BusinessRule {
           : "Inferred by backend Layer 0.",
     ownership_confidence: "Low",
     ownership_detail: null,
+    original_inferred_owner:
+      typeof r.original_owner === "string"
+        ? (r.original_owner as BusinessRule["ownership_category"])
+        : typeof r.original_inferred_owner === "string"
+          ? (r.original_inferred_owner as BusinessRule["ownership_category"])
+          : undefined,
+    current_owner:
+      typeof r.current_owner === "string"
+        ? (r.current_owner as BusinessRule["ownership_category"])
+        : undefined,
+    review_state: reviewStateFromRaw(r.review_state ?? r.review_status),
+    approval_state: approvalStateFromRaw(r.approval_state ?? r.approval_status),
+    change_guidance:
+      r.change_guidance && typeof r.change_guidance === "object"
+        ? (r.change_guidance as BusinessRule["change_guidance"])
+        : null,
+    audit_trail: Array.isArray(r.audit_trail)
+      ? (r.audit_trail as OwnershipAuditEntry[])
+      : [],
   };
 }
 

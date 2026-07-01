@@ -1,0 +1,334 @@
+:root {
+  --ll-surface: #ffffff;
+  --ll-surface-strong: #f6f8fa;
+  --ll-text: #24292f;
+  --ll-muted: #57606a;
+  --ll-border: #d0d7de;
+  --ll-accent: #0969da;
+  --ll-danger: #cf222e;
+  --ll-success: #1a7f37;
+  --ll-shadow: 0 12px 32px rgba(31, 35, 40, 0.18);
+}
+
+.ll-overlay-badge {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  width: 30px;
+  min-width: 30px;
+  max-width: 30px;
+  margin: 0 10px 0 0;
+  padding: 3px 8px;
+  border: 1px solid rgba(9, 105, 218, 0.35);
+  border-radius: 6px;
+  background: #ddf4ff;
+  color: #0550ae;
+  font: 600 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.ll-overlay-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.ll-overlay-badge:hover {
+  background: #b6e3ff;
+  border-color: rgba(9, 105, 218, 0.6);
+}
+
+.ll-overlay-badge-prefix {
+  color: #0969da;
+  font-weight: 600;
+}
+
+.ll-overlay-badge-owner {
+  overflow: hidden;
+  color: #0550ae;
+  font-weight: 700;
+  text-overflow: ellipsis;
+}
+
+.ll-overlay-rail {
+  position: fixed;
+  top: 286px;
+  right: 24px;
+  z-index: 2147483645;
+  width: min(260px, calc(100vw - 48px));
+  padding: 10px;
+  border: 1px solid rgba(9, 105, 218, 0.26);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--ll-text);
+  box-shadow: var(--ll-shadow);
+  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ll-overlay-rail h2 {
+  margin: 0 0 8px;
+  color: var(--ll-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ll-overlay-rail-item {
+  appearance: none;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 1px solid rgba(9, 105, 218, 0.35);
+  border-radius: 6px;
+  background: #ddf4ff;
+  color: #0550ae;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ll-overlay-rail-item:hover,
+.ll-overlay-rail-item.ll-overlay-focused {
+  border-color: rgba(9, 105, 218, 0.7);
+  background: #b6e3ff;
+}
+
+.ll-overlay-rail-owner {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ll-overlay-rail-meta {
+  color: var(--ll-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ll-overlay-panel {
+  position: fixed;
+  top: 72px;
+  right: 24px;
+  z-index: 2147483646;
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  border: 1px solid var(--ll-border);
+  border-radius: 8px;
+  background: var(--ll-surface);
+  color: var(--ll-text);
+  box-shadow: var(--ll-shadow);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ll-overlay-panel-header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ll-border);
+  background: var(--ll-surface);
+}
+
+.ll-overlay-panel h2,
+.ll-overlay-panel h3,
+.ll-overlay-panel p {
+  margin: 0;
+}
+
+.ll-overlay-panel h2 {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ll-overlay-panel h3 {
+  margin-bottom: 6px;
+  color: var(--ll-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.ll-overlay-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ll-border);
+}
+
+.ll-overlay-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.ll-overlay-key-values {
+  display: grid;
+  grid-template-columns: minmax(108px, max-content) 1fr;
+  gap: 8px 14px;
+  margin: 0;
+}
+
+.ll-overlay-key-values dt,
+.ll-overlay-key-values dd {
+  margin: 0;
+}
+
+.ll-overlay-key-values dt {
+  color: var(--ll-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ll-overlay-key-values dd {
+  min-width: 0;
+  font-weight: 600;
+}
+
+.ll-overlay-actions {
+  display: block;
+}
+
+.ll-overlay-action-group + .ll-overlay-action-group {
+  margin-top: 12px;
+}
+
+.ll-overlay-action-group h4 {
+  margin: 0 0 6px;
+  color: var(--ll-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ll-overlay-action-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.ll-overlay-action,
+.ll-overlay-icon-button {
+  appearance: none;
+  border: 1px solid var(--ll-border);
+  border-radius: 6px;
+  background: var(--ll-surface-strong);
+  color: var(--ll-text);
+  font: 600 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.ll-overlay-action {
+  min-height: 34px;
+  padding: 7px 10px;
+  text-align: center;
+}
+
+.ll-overlay-icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+.ll-overlay-action:hover,
+.ll-overlay-icon-button:hover {
+  border-color: var(--ll-accent);
+  color: var(--ll-accent);
+}
+
+.ll-overlay-action-primary {
+  border-color: rgba(9, 105, 218, 0.7);
+  background: var(--ll-accent);
+  color: #ffffff;
+}
+
+.ll-overlay-action-primary:hover {
+  border-color: #0550ae;
+  background: #0550ae;
+  color: #ffffff;
+}
+
+.ll-overlay-action-danger {
+  color: var(--ll-danger);
+}
+
+.ll-overlay-action-danger:hover {
+  border-color: var(--ll-danger);
+  color: var(--ll-danger);
+}
+
+.ll-overlay-action[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ll-overlay-state {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 2147483646;
+  max-width: min(380px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--ll-border);
+  border-radius: 8px;
+  background: var(--ll-surface);
+  color: var(--ll-text);
+  box-shadow: var(--ll-shadow);
+  font: 600 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button.ll-overlay-state {
+  appearance: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+button.ll-overlay-state:hover {
+  border-color: var(--ll-accent);
+  color: var(--ll-accent);
+}
+
+.ll-overlay-badge.ll-overlay-focused {
+  outline: 2px solid rgba(9, 105, 218, 0.55);
+  outline-offset: 2px;
+}
+
+.ll-overlay-state-ready {
+  border-color: rgba(26, 127, 55, 0.4);
+  color: var(--ll-success);
+}
+
+.ll-overlay-state-unauthorized,
+.ll-overlay-state-error,
+.ll-overlay-state-unavailable {
+  border-color: rgba(207, 34, 46, 0.4);
+  color: var(--ll-danger);
+}
+
+@media (max-width: 640px) {
+  .ll-overlay-panel {
+    inset: auto 12px 12px 12px;
+    width: auto;
+    max-height: 70vh;
+  }
+
+  .ll-overlay-state {
+    right: 12px;
+    bottom: 12px;
+  }
+
+  .ll-overlay-rail {
+    top: auto;
+    right: 12px;
+    bottom: 64px;
+    width: min(320px, calc(100vw - 24px));
+  }
+}

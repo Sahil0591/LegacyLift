@@ -3,20 +3,33 @@ api/main.py — FastAPI application entry point and route definitions.
 
 Routes:
     GET    /health                        — health check
+    GET    /github/overlay                — GitHub code overlay annotations
+    PATCH  /github/overlay/annotation/{id} — mutate overlay review/approval state
+    POST   /github/webhook                — GitHub App webhook ingestion
     POST   /project                       — create a new project
     POST   /project/{id}/upload           — upload source files
     POST   /project/{id}/start            — kick off the pipeline
     POST   /project/{id}/approve/{chunk_id}  — approve a migration chunk
     POST   /project/{id}/reject/{chunk_id}   — reject a migration chunk
+    POST   /project/{id}/validate-schema   — Layer 4 schema coverage check
+    POST   /project/{id}/confirm-rule/{chunk_id} — confirm/reassign/flag a business rule
+    POST   /project/{id}/select-chunk/{chunk_id} — select a chunk for migration
     GET    /project/{id}/status           — get project status
     GET    /project/{id}/rules            — get extracted business rules
     GET    /project/{id}/graph            — get dependency graph
+    GET    /project/{id}/target-profile   — get Layer 0.5 target profile
+    GET    /projects                      — list projects for the authenticated user
+    GET    /user/limits                   — get quota/usage for the authenticated user
+    POST   /llm/migrate                   — on-demand migration for a single unit
+    POST   /llm/review                    — on-demand AI review for a single unit
+    POST   /llm/tests                     — on-demand test generation for a single unit
     WS     /ws/{project_id}              — WebSocket stream for a project
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -27,17 +40,32 @@ from dotenv import find_dotenv, load_dotenv
 
 load_dotenv(find_dotenv(usecwd=True))
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
+from sqlalchemy import text
 
 from api.auth import get_current_user_id, verify_ws_token
+from api.github_overlay import router as github_overlay_router
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition
 from core.storage import storage
+from db.session import get_session, init_db
+from integrations.github_app import GitHubAppSettings, verify_webhook_signature
+from integrations.github_ingestion import process_github_webhook
 from models.project import Project, SourceLanguage, UploadedFile
+from ownership.review_workflow import (
+    REVIEW_FLAGGED,
+    ReviewWorkflowError,
+    ReviewWorkflowState,
+    WORKBENCH_SURFACE,
+    apply_review_transition,
+    approval_state_label,
+    review_state_label,
+    transition_payload,
+)
 from utils.llm_client import DEMO_RESPONSE, LLMClient
 from utils.migration_prompts import (
     build_migration_prompt,
@@ -86,6 +114,7 @@ async def lifespan(app: FastAPI):
     print(f"  AUTO_APPROVE: {os.getenv('AUTO_APPROVE', 'false')}")
     print("=" * 60)
     await storage.load()
+    await init_db()
     yield
     await storage.persist()
     print("LegacyLift API shutting down...")
@@ -105,7 +134,10 @@ app = FastAPI(
 # CORS — specific origins for production safety
 _allow_origins = [
     "http://localhost:3000",          # Next.js dev
+    "http://127.0.0.1:3000",          # Next.js dev via IPv4 loopback
+    "https://github.com",             # Chromium extension content script origin
     "https://legacy-lift-six.vercel.app",  # production
+    "https://legacylift.vercel.app",  # production
 ]
 if os.getenv("FRONTEND_URL"):
     _allow_origins.append(os.environ["FRONTEND_URL"])
@@ -115,10 +147,13 @@ if os.getenv("FRONTEND_HOST"):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allow_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(github_overlay_router)
 
 
 # ---------------------------------------------------------------------------
@@ -147,13 +182,133 @@ class RejectChunkRequest(BaseModel):
     feedback: Optional[str] = Field(None, max_length=2_000)
 
 
+class RuleReviewRequest(BaseModel):
+    action: str = "confirm_owner"
+    owner: Optional[str] = None
+    reason: Optional[str] = None
+    reviewer_identity: Optional[str] = None
+    allow_unknown_owner: bool = False
+    source_surface: str = WORKBENCH_SURFACE
+
+
 # ---------------------------------------------------------------------------
 # GET /health
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "version": "0.1.0"}
+    try:
+        async with get_session() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as exc:
+        logger.exception("health_check database=unavailable")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "version": "0.1.0",
+                "database": {"status": "unavailable", "error": str(exc)},
+            },
+        )
+
+    return {"status": "ok", "version": "0.1.0", "database": {"status": "ok"}}
+
+
+# ---------------------------------------------------------------------------
+# POST /github/webhook
+# ---------------------------------------------------------------------------
+
+@app.post("/github/webhook", status_code=202)
+async def github_webhook(
+    request: Request,
+    x_github_event: str = Header(..., alias="X-GitHub-Event"),
+    x_github_delivery: str = Header(..., alias="X-GitHub-Delivery"),
+    x_hub_signature_256: str | None = Header(None, alias="X-Hub-Signature-256"),
+):
+    settings = GitHubAppSettings.from_env()
+    body = await request.body()
+    if not verify_webhook_signature(body, x_hub_signature_256, settings.webhook_secret):
+        _log_webhook_outcome(
+            event=x_github_event,
+            delivery_id=x_github_delivery,
+            repository="unknown",
+            outcome="invalid_signature",
+        )
+        raise HTTPException(status_code=401, detail="Invalid GitHub webhook signature")
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        _log_webhook_outcome(
+            event=x_github_event,
+            delivery_id=x_github_delivery,
+            repository="unknown",
+            outcome="invalid_json",
+        )
+        raise HTTPException(status_code=400, detail="Invalid GitHub webhook JSON") from exc
+
+    async with get_session() as session:
+        result = await process_github_webhook(
+            session,
+            event=x_github_event,
+            delivery_id=x_github_delivery,
+            payload=payload,
+            raw_body=body,
+        )
+
+    repository = _github_payload_repository(payload)
+    outcome = str(result.get("status", "unknown"))
+    _log_webhook_outcome(
+        event=x_github_event,
+        delivery_id=x_github_delivery,
+        repository=repository,
+        outcome=outcome,
+    )
+    if outcome == "duplicate":
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "Duplicate GitHub webhook delivery",
+                "delivery_id": x_github_delivery,
+            },
+        )
+
+    return JSONResponse(status_code=202, content=result)
+
+
+def _github_payload_repository(payload: dict) -> str:
+    repository = payload.get("repository")
+    if isinstance(repository, dict):
+        full_name = repository.get("full_name")
+        if full_name:
+            return str(full_name)
+
+    repositories = payload.get("repositories")
+    if isinstance(repositories, list) and repositories:
+        first = repositories[0]
+        if isinstance(first, dict) and first.get("full_name"):
+            count = len(repositories)
+            suffix = f" (+{count - 1})" if count > 1 else ""
+            return f"{first['full_name']}{suffix}"
+
+    return "unknown"
+
+
+def _log_webhook_outcome(
+    *,
+    event: str,
+    delivery_id: str,
+    repository: str,
+    outcome: str,
+) -> None:
+    log = logger.warning if outcome in {"duplicate", "invalid_signature", "invalid_json"} else logger.info
+    log(
+        "github_webhook event=%s delivery_id=%s repository=%s outcome=%s",
+        event,
+        delivery_id,
+        repository,
+        outcome,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -523,14 +678,22 @@ async def validate_schema(project_id: str, user_id: str = Depends(get_current_us
 # ---------------------------------------------------------------------------
 
 @app.post("/project/{project_id}/confirm-rule/{chunk_id}", status_code=200)
-async def confirm_rule(project_id: str, chunk_id: str, user_id: str = Depends(get_current_user_id)):
+async def confirm_rule(
+    project_id: str,
+    chunk_id: str,
+    body: RuleReviewRequest | None = None,
+    user_id: str = Depends(get_current_user_id),
+):
     """
-    Mark the business rule for a chunk as Confirmed by a domain expert.
+    Apply an ownership review transition (confirm/reassign/flag) to a chunk's
+    business rule.
 
     Must be called before select-chunk — the chunk selection endpoint rejects
-    requests where the rule has not been confirmed.
+    requests where the rule has not been confirmed (or reassigned) and rejects
+    chunks whose rule is currently flagged.
     """
     project = _get_project(project_id, user_id)
+    request_body = body or RuleReviewRequest()
 
     chunk_dict = next(
         (c for c in project.layer0_chunks if c["id"] == chunk_id), None
@@ -538,12 +701,62 @@ async def confirm_rule(project_id: str, chunk_id: str, user_id: str = Depends(ge
     if chunk_dict is None:
         raise HTTPException(status_code=404, detail=f"Chunk '{chunk_id}' not found")
 
-    project.chunk_rule_statuses[chunk_id] = "Confirmed"
+    rule_dict = _rule_for_chunk(project, chunk_id)
+    existing = project.chunk_rule_reviews.get(chunk_id)
+    inferred_owner = _inferred_rule_owner(rule_dict)
+    state = ReviewWorkflowState(
+        original_owner_name=str(existing.get("original_owner", inferred_owner)) if existing else inferred_owner,
+        current_owner_name=str(existing.get("current_owner", inferred_owner)) if existing else inferred_owner,
+        review_state=str(existing.get("review_state", "inferred")) if existing else "inferred",
+        approval_state=str(existing.get("approval_state", "needed")) if existing else "needed",
+    )
 
+    try:
+        transition = apply_review_transition(
+            state,
+            action=request_body.action,
+            owner=request_body.owner,
+            reason=request_body.reason,
+            reviewer_identity=request_body.reviewer_identity,
+            source_surface=request_body.source_surface or WORKBENCH_SURFACE,
+            allow_unknown_owner=request_body.allow_unknown_owner,
+        )
+    except ReviewWorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    audit_trail = list(existing.get("audit_trail", [])) if existing else []
+    audit_trail.append(transition_payload(transition))
+    project.chunk_rule_reviews[chunk_id] = {
+        "original_owner": transition.original_owner_name,
+        "current_owner": transition.current_owner_name,
+        "review_state": transition.review_state,
+        "approval_state": transition.approval_state,
+        "reviewed_at": transition.reviewed_at.isoformat(),
+        "approval_timestamp": transition.approval_timestamp.isoformat()
+        if transition.approval_timestamp is not None
+        else (existing or {}).get("approval_timestamp"),
+        "audit_trail": audit_trail,
+    }
+
+    project.chunk_rule_statuses[chunk_id] = review_state_label(transition.review_state)
+
+    asyncio.ensure_future(storage.persist())
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
-        "rule_status": "Confirmed",
+        "rule_status": review_state_label(transition.review_state),
+        "review_state": review_state_label(transition.review_state),
+        "approval_state": approval_state_label(transition.approval_state),
+        "original_owner": transition.original_owner_name,
+        "current_owner": transition.current_owner_name,
+        "reviewer_identity": transition.reviewer_identity,
+        "reviewed_at": transition.reviewed_at.isoformat(),
+        "approval_timestamp": transition.approval_timestamp.isoformat()
+        if transition.approval_timestamp is not None
+        else None,
+        "reason": transition.reason,
+        "source_surface": transition.source_surface,
+        "audit_trail": audit_trail,
     }
 
 
@@ -559,7 +772,8 @@ async def select_chunk(project_id: str, chunk_id: str, user_id: str = Depends(ge
     Validates:
       - Project is in 'ready' state (Layer 0 complete)
       - chunk_id exists in Layer 0 output
-      - Business rule for this chunk has been Confirmed by a domain expert
+      - Business rule for this chunk has been Confirmed (or Reassigned) by a
+        domain expert, and is not currently Flagged
 
     On success:
       - Transitions project to 'migrating'
@@ -589,8 +803,15 @@ async def select_chunk(project_id: str, chunk_id: str, user_id: str = Depends(ge
                 status_code=409, detail=f"Chunk '{chunk_id}' is already approved"
             )
 
+        review = project.chunk_rule_reviews.get(chunk_id, {})
+        if review.get("review_state") == REVIEW_FLAGGED or project.chunk_rule_statuses.get(chunk_id) == "Flagged":
+            raise HTTPException(
+                status_code=400,
+                detail="Business rule is flagged and must be resolved before migration can begin",
+            )
+
         rule_status = project.chunk_rule_statuses.get(chunk_id, "Pending")
-        if rule_status != "Confirmed":
+        if rule_status not in ("Confirmed", "Reassigned"):
             raise HTTPException(
                 status_code=400,
                 detail="Business rule must be confirmed before migration can begin",
@@ -1051,6 +1272,25 @@ def _get_project(project_id: str, user_id: str) -> Project:
     if project.owner_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
     return project
+
+
+def _rule_for_chunk(project: Project, chunk_id: str) -> dict | None:
+    return next((r for r in project.layer0_rules if r.get("chunk_id") == chunk_id), None)
+
+
+def _inferred_rule_owner(rule: dict | None) -> str:
+    if not rule:
+        return "Unknown"
+    for key in ("ownership_category", "owner", "current_owner"):
+        value = rule.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    detail = rule.get("ownership_detail")
+    if isinstance(detail, dict):
+        owner = detail.get("primary_owner")
+        if isinstance(owner, str) and owner.strip():
+            return owner.strip()
+    return "Unknown"
 
 
 def _status_str(project: Project) -> str:
