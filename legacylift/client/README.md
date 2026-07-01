@@ -5,12 +5,11 @@
 
 ---
 
-## Quick start (Windows)
+## Quick Start
 
-```bat
-cd legacylift\frontend
-setup.bat
-# Fill in .env.local (copy from .env.local.example)
+```bash
+cd legacylift/client
+npm install
 npm run dev
 ```
 
@@ -123,10 +122,12 @@ The frontend runs **fully in demo mode** without the backend:
 3. Project page (`/project/anything`) — all panels render with placeholder data
 
 To see the live pipeline, run the backend:
-```bat
-cd legacylift
-pip install -r requirements.txt
-uvicorn api.main:app --port 8000
+```bash
+cd legacylift/server
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m uvicorn api.main:app --port 8000
 ```
 
 Then re-run the demo flow.

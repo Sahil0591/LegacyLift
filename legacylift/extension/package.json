@@ -1,0 +1,13 @@
+{
+  "name": "legacylift-github-overlay-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chromium MV3 extension that renders LegacyLift decision ownership overlays on GitHub.",
+  "scripts": {
+    "type-check": "node ../client/node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

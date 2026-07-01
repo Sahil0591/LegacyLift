@@ -13,26 +13,15 @@ import asyncio
 import dataclasses
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-import aiohttp
-
 from utils.code_parser import parse_file, ParsedFile, CodeChunk
+from utils.llm_client import LLMClient
 from models.project import Project
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Environment variables (read once at module load)
-# ---------------------------------------------------------------------------
-
-VENICE_BASE_URL = os.getenv("VENICE_BASE_URL", "https://api.venice.ai/api/v1")
-VENICE_API_KEY  = os.getenv("VENICE_API_KEY", "")
-VENICE_MODEL    = os.getenv("VENICE_MODEL", "openai-gpt-52-codex")
-DEMO_MODE       = os.getenv("DEMO_MODE", "false").lower() == "true"
 
 
 # ---------------------------------------------------------------------------
@@ -337,31 +326,19 @@ def _strip_fences(text: str) -> str:
 
 
 async def _extract_rule(
-    session: aiohttp.ClientSession,
+    client: LLMClient,
     sem: asyncio.Semaphore,
     chunk: CodeChunk,
-    project_id: str,
 ) -> BusinessRule:
-    """Call Venice AI to extract a single BusinessRule. Never raises."""
+    """Call the LLM to extract a single BusinessRule. Never raises."""
     async with sem:
         try:
-            payload = {
-                "model": VENICE_MODEL,
-                "messages": [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": _build_user_prompt(chunk)},
-                ],
-            }
-            async with session.post(
-                f"{VENICE_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {VENICE_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            ) as resp:
-                data = await resp.json()
-                content = data["choices"][0]["message"]["content"]
+            content = await client.complete(
+                system=_SYSTEM_PROMPT,
+                user=_build_user_prompt(chunk),
+                temperature=0.2,
+                json_response=True,
+            )
 
             parsed = json.loads(_strip_fences(content))
 
@@ -496,18 +473,38 @@ async def run(project: Project) -> Layer0Result:
     business_rules: list[BusinessRule] = []
 
     try:
-        if DEMO_MODE:
+        llm_client = LLMClient()
+
+        if llm_client.demo_mode:
             business_rules = [_demo_rule(chunk) for chunk in all_chunks]
+        elif not llm_client.is_configured():
+            # Fail fast and honestly instead of firing N doomed LLM calls
+            # (each of which would raise and get caught below anyway).
+            logger.error(
+                "Layer0 0b: LLM not configured — skipping business rule "
+                "extraction for %d chunk(s)",
+                len(all_chunks),
+            )
+            business_rules = [
+                BusinessRule(
+                    id=f"rule_{chunk.id}",
+                    chunk_id=chunk.id,
+                    rule="Business rule extraction unavailable — LLM is not configured",
+                    confidence=0.0,
+                    owner="Unknown",
+                    owner_reasoning="",
+                    needs_review=True,
+                    extraction_error="LLM not configured",
+                )
+                for chunk in all_chunks
+            ]
         else:
             sem = asyncio.Semaphore(5)
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as session:
-                tasks = [
-                    _extract_rule(session, sem, chunk, project.id)
-                    for chunk in all_chunks
-                ]
-                business_rules = list(await asyncio.gather(*tasks))
+            tasks = [
+                _extract_rule(llm_client, sem, chunk)
+                for chunk in all_chunks
+            ]
+            business_rules = list(await asyncio.gather(*tasks))
 
         needs_review_count = sum(1 for r in business_rules if r.needs_review)
         logger.info(
@@ -733,6 +730,31 @@ async def run(project: Project) -> Layer0Result:
         }
     except Exception as exc:
         logger.error("Layer0 result persistence failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Persist durable overlay records
+    # ------------------------------------------------------------------
+    try:
+        from db.repositories import persist_layer0_analysis  # noqa: PLC0415
+        from db.session import get_session, init_db  # noqa: PLC0415
+
+        await init_db()
+        async with get_session() as session:
+            summary = await persist_layer0_analysis(
+                session,
+                project,
+                chunks,
+                business_rules,
+            )
+        logger.info(
+            "Layer0 DB persistence: repo=%s commit=%s chunks=%d criteria=%d",
+            summary.repository_id,
+            summary.commit_sha,
+            summary.chunk_count,
+            summary.criterion_count,
+        )
+    except Exception as exc:
+        logger.error("Layer0 DB persistence failed: %s", exc, exc_info=True)
 
     # ------------------------------------------------------------------
     # WebSocket event

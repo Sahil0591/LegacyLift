@@ -89,12 +89,14 @@ def _make_chunk_id(filename: str, name: str) -> str:
 
 def _detect_language(ext: str) -> str:
     ext = ext.lower()
-    if ext in (".cbl", ".cob", ".cobol"):
+    if ext in (".cbl", ".cob", ".cobol", ".cpy"):
         return "cobol"
     if ext == ".java":
         return "java"
-    if ext == ".sql":
+    if ext in (".sql", ".ddl"):
         return "sql"
+    if ext in (".vb", ".bas", ".frm", ".cls"):
+        return "vb6"
     return "unknown"
 
 
@@ -124,6 +126,8 @@ def parse_file(filename: str, source: str) -> ParsedFile:
             chunks, data_items = _parse_cobol(filename, source)
         elif language == "java":
             chunks, data_items = _parse_java(filename, source)
+        elif language == "vb6":
+            chunks, data_items = _parse_vb6(filename, source)
         else:  # sql
             chunks, data_items, extra_deps = _parse_sql(filename, source)
 
@@ -155,51 +159,6 @@ def parse_file(filename: str, source: str) -> ParsedFile:
         return ParsedFile(filename=filename, language="unknown",
                           chunks=[], dependencies=[], data_items=[],
                           raw_lines=[])
-
-
-class CodeParser:
-    """
-    Backward-compatible object API for older pipeline code and tests.
-
-    Newer Layer 0 code uses parse_file(filename, source) directly. This wrapper
-    keeps the original parser shape available without duplicating parsing logic.
-    """
-
-    def __init__(self, language: str = "cobol", filename: str | None = None) -> None:
-        self.language = language.lower()
-        self.filename = filename or self._default_filename(self.language)
-
-    def parse(self, source: str) -> list[CodeChunk]:
-        """Parse source and return structural chunks."""
-        return parse_file(self.filename, source).chunks
-
-    def extract_literals(self, source: str) -> list[str]:
-        """Extract simple quoted and numeric literals from source."""
-        quoted = re.findall(r"'([^']*)'|\"([^\"]*)\"", source)
-        literals = [single or double for single, double in quoted]
-        literals.extend(
-            m.group(0)
-            for m in re.finditer(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", source)
-        )
-        return literals
-
-    def split_into_chunks(self, source: str) -> list[tuple[str, str, int, int]]:
-        """Return legacy tuple chunks: (name, source, start_line, end_line)."""
-        parsed = parse_file(self.filename, source)
-        return [
-            (chunk.name, chunk.source, chunk.start_line, chunk.end_line)
-            for chunk in parsed.chunks
-        ]
-
-    @staticmethod
-    def _default_filename(language: str) -> str:
-        if language == "java":
-            return "input.java"
-        if language == "sql":
-            return "input.sql"
-        if language == "cobol":
-            return "input.cbl"
-        return "input.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +581,91 @@ def _parse_java_regex(
 
 
 # ---------------------------------------------------------------------------
+# VB6 parsing (regex only — no tree-sitter grammar available for VB6)
+# ---------------------------------------------------------------------------
+
+# Matches the start of a Sub / Function / Property procedure, e.g.:
+#   Public Sub CalcInterest(ByVal balance As Currency)
+#   Private Function GetRate() As Double
+#   Public Property Get Balance() As Currency
+_VB6_PROC_START_RE = re.compile(
+    r"^\s*(?:(?:Public|Private|Friend|Static)\s+)*"
+    r"(Sub|Function|Property\s+(?:Get|Let|Set))\s+"
+    r"(\w+)\s*\(",
+    re.IGNORECASE | re.MULTILINE,
+)
+_VB6_PROC_END_RE = re.compile(
+    r"^\s*End\s+(Sub|Function|Property)\b", re.IGNORECASE | re.MULTILINE
+)
+_VB6_DIM_RE = re.compile(
+    r"^\s*(?:Public|Private|Global|Dim)\s+(\w+)\s+As\s+([\w.]+)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_VB6_MODULE_NAME_RE = re.compile(
+    r'^\s*Attribute\s+VB_Name\s*=\s*"([^"]+)"', re.IGNORECASE | re.MULTILINE
+)
+_VB6_CALL_RE = re.compile(r"\bCall\s+(\w+)", re.IGNORECASE)
+_VB6_BARE_CALL_RE = re.compile(r"\b(\w+)\s*\(")
+_VB6_KEYWORDS = frozenset({
+    "if", "then", "else", "elseif", "end", "for", "next", "while", "wend",
+    "do", "loop", "until", "select", "case", "dim", "as", "sub", "function",
+    "property", "get", "let", "set", "call", "exit", "return", "byval",
+    "byref", "optional", "new", "with", "redim", "static", "public",
+    "private", "friend", "global", "true", "false", "nothing", "and", "or",
+    "not", "is", "like", "mod", "to", "step", "on", "error", "goto", "resume",
+})
+
+
+def _parse_vb6(
+    filename: str, source: str
+) -> tuple[list[CodeChunk], list[DataItem]]:
+    chunks: list[CodeChunk] = []
+    data_items: list[DataItem] = []
+
+    module_m = _VB6_MODULE_NAME_RE.search(source)
+    if module_m:
+        data_items.append(DataItem(name=module_m.group(1), kind="table", detail="module"))
+
+    for m in _VB6_DIM_RE.finditer(source):
+        data_items.append(DataItem(name=m.group(1), kind="variable", detail=m.group(2)))
+
+    starts = list(_VB6_PROC_START_RE.finditer(source))
+    ends = list(_VB6_PROC_END_RE.finditer(source))
+
+    for idx, start_m in enumerate(starts):
+        try:
+            proc_name = start_m.group(2)
+            # Find the first "End Sub/Function/Property" that begins after this start.
+            end_m = next((e for e in ends if e.start() > start_m.start()), None)
+            end_pos = end_m.end() if end_m else len(source)
+
+            proc_source = source[start_m.start():end_pos]
+            start_line = source[: start_m.start()].count("\n") + 1
+            end_line = source[:end_pos].count("\n") + 1
+
+            calls = [c.group(1) for c in _VB6_CALL_RE.finditer(proc_source)]
+            calls += [
+                c.group(1)
+                for c in _VB6_BARE_CALL_RE.finditer(proc_source)
+                if c.group(1).lower() not in _VB6_KEYWORDS and c.group(1) != proc_name
+            ]
+
+            chunks.append(CodeChunk(
+                id=_make_chunk_id(filename, proc_name),
+                name=proc_name,
+                language="vb6",
+                source=proc_source,
+                start_line=start_line,
+                end_line=end_line,
+                calls=list(dict.fromkeys(calls)),
+            ))
+        except Exception as e:
+            logger.debug("VB6 procedure extraction error in %s: %s", filename, e)
+
+    return chunks, data_items
+
+
+# ---------------------------------------------------------------------------
 # SQL parsing (regex only — no tree-sitter needed)
 # ---------------------------------------------------------------------------
 
@@ -704,3 +748,31 @@ def _parse_sql(
             logger.debug("SQL table extraction error in %s: %s", filename, e)
 
     return chunks, data_items, extra_deps
+
+
+class CodeParser:
+    """Compatibility facade used by older pipeline components and tests."""
+
+    def __init__(self, language: str = "cobol"):
+        self.language = language.lower()
+
+    def parse(self, source: str) -> list[CodeChunk]:
+        filename = f"snippet.{self._extension()}"
+        parsed = parse_file(filename, source)
+        return parsed.chunks
+
+    def split_into_chunks(self, source: str) -> list[tuple[str, str, int, int]]:
+        return [
+            (chunk.name, chunk.source, chunk.start_line, chunk.end_line)
+            for chunk in self.parse(source)
+        ]
+
+    def extract_literals(self, source: str) -> list[str]:
+        return list(dict.fromkeys(re.findall(r"'[^']*'|\"[^\"]*\"|\b\d+(?:\.\d+)?\b", source)))
+
+    def _extension(self) -> str:
+        if self.language == "java":
+            return "java"
+        if self.language == "sql":
+            return "sql"
+        return "cbl"

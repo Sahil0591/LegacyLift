@@ -262,11 +262,33 @@ export async function getProjectFiles(
 export async function updateBusinessRule(
   projectId: string,
   ruleIdOrChunkId: string,
-  patch: { status: RuleStatus },
+  patch: {
+    status?: RuleStatus;
+    action?: string;
+    owner?: string;
+    reason?: string;
+    allow_unknown_owner?: boolean;
+  },
 ): Promise<void> {
-  if (patch.status !== "Confirmed") {
+  if (!patch.action && patch.status !== "Confirmed" && patch.status !== "Flagged") {
     return;
   }
 
-  await confirmBusinessRule(projectId, toBackendChunkId(ruleIdOrChunkId));
+  await request<unknown>(
+    `/project/${encodeURIComponent(projectId)}/confirm-rule/${encodeURIComponent(
+      toBackendChunkId(ruleIdOrChunkId),
+    )}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        action:
+          patch.action ??
+          (patch.status === "Flagged" ? "flag" : "confirm_owner"),
+        owner: patch.owner,
+        reason: patch.reason,
+        allow_unknown_owner: patch.allow_unknown_owner ?? false,
+        source_surface: "LegacyLift workbench",
+      }),
+    },
+  );
 }

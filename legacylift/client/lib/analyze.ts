@@ -392,7 +392,8 @@ export function analyzeFiles(
           : [],
         status: "Pending",
         ownership_category: ownerFor(unit.source),
-        ownership_evidence: "Inferred from static code signals.",
+        ownership_evidence:
+          "Low-confidence static/offline inference. Backend classifier is canonical for persisted overlay ownership.",
         ownership_confidence: "Low",
         ownership_detail: null,
       });

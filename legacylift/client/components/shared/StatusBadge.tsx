@@ -5,12 +5,20 @@
 
 import type {
   ChunkStatus,
+  ApprovalState,
   OwnershipCategory,
+  OwnershipReviewState,
   RiskLevel,
   RuleStatus,
 } from "@/types/legacylift";
 
-type BadgeVariant = RuleStatus | ChunkStatus | RiskLevel | OwnershipCategory;
+type BadgeVariant =
+  | RuleStatus
+  | ChunkStatus
+  | RiskLevel
+  | OwnershipCategory
+  | OwnershipReviewState
+  | ApprovalState;
 
 const COLOUR_MAP: Record<string, string> = {
   // RuleStatus
@@ -18,6 +26,11 @@ const COLOUR_MAP: Record<string, string> = {
   Confirmed: "bg-[#00C48C]/20 text-[#00C48C]",
   Edited: "bg-[#F59E0B]/20 text-[#F59E0B]",
   Flagged: "bg-[#EF4444]/20 text-[#EF4444]",
+  Inferred: "bg-[#222222] text-[#888888]",
+  Reassigned: "bg-[#2563EB]/20 text-[#2563EB]",
+  "Approval needed": "bg-[#F59E0B]/20 text-[#F59E0B]",
+  "Approval requested": "bg-[#2563EB]/20 text-[#2563EB]",
+  Waived: "bg-[#888888]/20 text-[#888888]",
 
   // ChunkStatus
   Running: "bg-[#2563EB]/20 text-[#2563EB] animate-pulse",

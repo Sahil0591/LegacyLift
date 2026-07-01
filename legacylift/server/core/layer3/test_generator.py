@@ -533,6 +533,11 @@ async def generate_and_run_tests(inp: TestGenerationInput) -> TestGenerationResu
         # Tests are returned as "manual verification required" so reviewers
         # can inspect them; execution can be re-enabled once a locked-down
         # sandbox (no network, read-only FS, non-root, ephemeral) is in place.
+        #
+        # This is NOT a test failure — passed=False/failed=0 here means "not
+        # run", not "ran and failed". Downstream consumers must not report
+        # these as failing tests; retry_recommended stays False because there
+        # is no test-quality signal to react to.
         exec_start = time.monotonic()
         test_results: list[TestResult] = [
             TestResult(
@@ -546,32 +551,19 @@ async def generate_and_run_tests(inp: TestGenerationInput) -> TestGenerationResu
         execution_time = time.monotonic() - exec_start
 
         # ── Assemble result ────────────────────────────────────────────────
-        total  = len(test_results)
-        passed = sum(1 for r in test_results if r.passed)
-        failed = total - passed
-
-        if total == 0:
-            summary = "No tests were executed"
-        elif failed == 0:
-            summary = f"{passed}/{total} tests passed, migration verified against business rule"
-        else:
-            failing_cats = {
-                g.category
-                for r in test_results if not r.passed
-                for g in tests_generated if g.name == r.test_name
-            }
-            cats = " and ".join(sorted(failing_cats)) or "unknown"
-            summary = (
-                f"{passed}/{total} tests passed. "
-                f"{failed} failure(s) in {cats} categories — retry recommended"
-            )
+        total = len(test_results)
+        summary = (
+            f"{total} test(s) generated — execution is disabled in this "
+            "environment (no sandbox available). Manual verification required "
+            "before approval."
+        )
 
         return TestGenerationResult(
             tests_generated=tests_generated,
             test_results=test_results,
-            total=total, passed=passed, failed=failed,
-            all_passed=(failed == 0),
-            retry_recommended=(failed > 0),
+            total=total, passed=0, failed=0,
+            all_passed=False,
+            retry_recommended=False,
             summary=summary,
             generation_time_seconds=generation_time,
             execution_time_seconds=execution_time,

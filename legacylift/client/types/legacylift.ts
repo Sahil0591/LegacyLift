@@ -10,6 +10,10 @@ export type RuleConfidence = "High" | "Medium" | "Low";
 
 export type RuleStatus = "Pending" | "Confirmed" | "Edited" | "Flagged";
 
+export type OwnershipReviewState = "Inferred" | "Confirmed" | "Reassigned" | "Flagged";
+
+export type ApprovalState = "Approval needed" | "Approval requested" | "Approved" | "Waived";
+
 export type OwnershipCategory =
   | "Finance"
   | "Compliance"
@@ -17,7 +21,8 @@ export type OwnershipCategory =
   | "Risk"
   | "Ops"
   | "Engineering"
-  | "Unknown";
+  | "Unknown"
+  | (string & {});
 
 export type OwnershipConfidence = "High" | "Medium" | "Low";
 
@@ -38,7 +43,32 @@ export interface OwnershipResult {
   secondary_owners: OwnershipCategory[];
   confidence: OwnershipConfidence;
   evidence: string;
+  matched_signals: string[];
+  review_status: string;
   actual_person: string | null;
+}
+
+export interface ChangeGuidanceResult {
+  risk_summary: string;
+  primary_approval_group: OwnershipCategory;
+  secondary_groups: OwnershipCategory[];
+  approval_checklist: string[];
+  suggested_tests: string[];
+  suggested_message: string;
+  merge_risk: "Low" | "Medium" | "High" | "Unknown" | (string & {});
+}
+
+export interface OwnershipAuditEntry {
+  action: string;
+  original_owner: OwnershipCategory;
+  current_owner: OwnershipCategory;
+  review_state: OwnershipReviewState;
+  approval_state: ApprovalState;
+  reviewer_identity: string | null;
+  reviewed_at: string | null;
+  approval_timestamp: string | null;
+  reason: string | null;
+  source_surface: "GitHub overlay" | "LegacyLift workbench" | (string & {});
 }
 
 // ---------------------------------------------------------------------------
@@ -60,6 +90,12 @@ export interface BusinessRule {
   ownership_evidence: string;
   ownership_confidence: OwnershipConfidence;
   ownership_detail: OwnershipResult | null;
+  original_inferred_owner?: OwnershipCategory;
+  current_owner?: OwnershipCategory;
+  review_state?: OwnershipReviewState;
+  approval_state?: ApprovalState;
+  change_guidance?: ChangeGuidanceResult | null;
+  audit_trail?: OwnershipAuditEntry[];
 }
 
 // ---------------------------------------------------------------------------

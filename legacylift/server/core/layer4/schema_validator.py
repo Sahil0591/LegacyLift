@@ -127,19 +127,25 @@ class SchemaValidator:
         TODO (implementer):
           - Scan project.files for files with .sql extension.
           - Support multiple schema files (parse and merge them).
-          - Fall back to DEMO_SCHEMA_PATH when running with demo data.
         """
         # Check uploaded files for SQL
         for f in project.files:
             if f.filename.lower().endswith(".sql") and f.content:
                 return self._parser.parse_text(f.content, source_file=f.filename)
 
-        # Fall back to demo schema file
-        if DEMO_SCHEMA_PATH.exists():
-            return self._parser.parse_file(str(DEMO_SCHEMA_PATH))
+        # DEMO_MODE only: fall back to the bundled demo schema so the demo
+        # flow works without requiring a .sql upload. In production, a
+        # project with no uploaded schema has nothing to validate against —
+        # substituting an unrelated canned schema here would silently
+        # report bogus "MISSING TABLE" results for tables the project never
+        # had. validate() already treats an empty SchemaInfo as "nothing to
+        # check" and reports that honestly.
+        if DEMO_MODE:
+            if DEMO_SCHEMA_PATH.exists():
+                return self._parser.parse_file(str(DEMO_SCHEMA_PATH))
+            return self._parser._demo_schema("legacy_bank.sql")
 
-        # Return demo schema from stub
-        return self._parser._demo_schema("legacy_bank.sql")
+        return SchemaInfo(source_file="")
 
     def _check_table_coverage(
         self, table: TableInfo, all_code: str

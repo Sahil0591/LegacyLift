@@ -115,7 +115,14 @@ export function FileUpload({ onSubmit, loading }: FileUploadProps) {
   const handleSubmit = async () => {
     if (demoMode) {
       const demoBlob = new Blob(
-        ["       IDENTIFICATION DIVISION.\n       PROGRAM-ID. PAYROLL.\n"],
+        [
+          "       IDENTIFICATION DIVISION.\n" +
+            "       PROGRAM-ID. PAYROLL.\n" +
+            "       PROCEDURE DIVISION.\n" +
+            "       0000-MAIN-PARA.\n" +
+            "           DISPLAY 'PROCESS PAYROLL'.\n" +
+            "           STOP RUN.\n",
+        ],
         { type: "text/plain" },
       );
       const demoFile = new File([demoBlob], "PAYROLL.cbl", {
@@ -188,14 +195,14 @@ export function FileUpload({ onSubmit, loading }: FileUploadProps) {
             <span className="font-medium text-[#7C3AED]">browse</span>
           </p>
           <p className="mt-1 text-xs text-sub/70">
-            Supports .cbl .cob .java .vb .bas
+            Supports .cbl .cob .cpy .java .vb .bas .frm .cls
           </p>
           <input
             ref={sourceInputRef}
             type="file"
             multiple
             className="sr-only"
-            accept=".cbl,.cob,.java,.vb,.bas,.txt"
+            accept=".cbl,.cob,.cpy,.java,.vb,.bas,.frm,.cls"
             onChange={(e) => {
               addSourceFiles(Array.from(e.target.files ?? []));
               e.currentTarget.value = "";

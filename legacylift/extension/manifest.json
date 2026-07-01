@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "LegacyLift GitHub Decision Overlay",
+  "version": "0.1.0",
+  "description": "Render LegacyLift decision ownership and approval guidance inside GitHub code views.",
+  "permissions": ["storage", "clipboardWrite"],
+  "host_permissions": ["http://localhost:*/*", "http://127.0.0.1:*/*", "https://github.com/*"],
+  "action": {
+    "default_title": "LegacyLift Overlay",
+    "default_popup": "options.html"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://github.com/*/*/pull/*/files*",
+        "https://github.com/*/*/pull/*/changes*",
+        "https://github.com/*/*/blob/*"
+      ],
+      "js": [
+        "src/config.js",
+        "src/githubUrl.js",
+        "src/githubDom.js",
+        "src/apiClient.js",
+        "src/renderer.js",
+        "src/contentScript.js"
+      ],
+      "css": ["src/styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
