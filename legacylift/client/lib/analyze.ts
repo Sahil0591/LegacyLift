@@ -37,11 +37,15 @@ export interface AnalyzeResult {
     units: number;
     avgRisk: number;
     byLevel: Record<RiskLevel, number>;
+    /** Filenames dropped entirely because MAX_UNITS was reached — empty in the common case. */
+    filesSkipped: string[];
   };
 }
 
-// Caps so a huge repo can't blow up the response / the UI.
-const MAX_UNITS = 80;
+// Caps so a pathologically huge repo can't blow up the response / the UI.
+// High enough that a normal multi-file COBOL project (dozens of paragraphs
+// per program) never gets anywhere near it in practice.
+const MAX_UNITS = 2000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Language + unit splitting
@@ -160,20 +164,31 @@ function extractCalls(src: string): string[] {
   return [...new Set(calls)];
 }
 
-function splitFiles(files: InputFile[]): CodeUnit[] {
+function splitFiles(files: InputFile[]): { units: CodeUnit[]; skipped: string[] } {
   const units: CodeUnit[] = [];
+  const skipped: string[] = [];
   for (const f of files) {
-    if (detectLanguage(f.filename) === "cobol") {
-      const cobolUnits = splitCobol(f.filename, f.content);
-      // If splitting found nothing usable, fall back to whole-file unit.
-      if (cobolUnits.length > 0) units.push(...cobolUnits);
-      else units.push(wholeFileUnit(f));
-    } else {
-      units.push(wholeFileUnit(f));
+    const fileUnits =
+      detectLanguage(f.filename) === "cobol"
+        ? (() => {
+            const cobolUnits = splitCobol(f.filename, f.content);
+            // If splitting found nothing usable, fall back to whole-file unit.
+            return cobolUnits.length > 0 ? cobolUnits : [wholeFileUnit(f)];
+          })()
+        : [wholeFileUnit(f)];
+
+    // Never split a single file's units across the cap boundary — slicing
+    // mid-file silently drops paragraphs from whichever file happens to
+    // cross the line, making it look like that file legitimately has only
+    // a couple of chunks. Drop the whole file instead so it's visibly
+    // absent (via `skipped`) rather than silently incomplete.
+    if (units.length + fileUnits.length > MAX_UNITS) {
+      skipped.push(f.filename);
+      continue;
     }
-    if (units.length >= MAX_UNITS) break;
+    units.push(...fileUnits);
   }
-  return units.slice(0, MAX_UNITS);
+  return { units, skipped };
 }
 
 function wholeFileUnit(f: InputFile): CodeUnit {
@@ -333,7 +348,12 @@ export function analyzeFiles(
   meta: { projectName: string; source: string },
 ): AnalyzeResult {
   const usable = files.filter((f) => f.content && f.content.trim().length > 0);
-  const units = splitFiles(usable);
+  const { units, skipped: filesSkipped } = splitFiles(usable);
+  if (filesSkipped.length > 0) {
+    console.warn(
+      `analyzeFiles: MAX_UNITS (${MAX_UNITS}) reached — skipped entirely: ${filesSkipped.join(", ")}`,
+    );
+  }
 
   // Fan-in: how many units call each unit name.
   const byName = new Map<string, CodeUnit>();
@@ -442,6 +462,7 @@ export function analyzeFiles(
       units: units.length,
       avgRisk: Number(avgRisk.toFixed(3)),
       byLevel,
+      filesSkipped,
     },
   };
 }

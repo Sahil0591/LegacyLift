@@ -20,7 +20,6 @@ import {
   saveProgress,
   updateProjectProgress,
 } from "@/lib/projectStore";
-import { RISK_RANK } from "@/components/workbench/shared";
 import type { AnalyzeResult } from "@/lib/analyze";
 import type { Lesson } from "@/lib/lessons";
 import type {
@@ -84,9 +83,11 @@ function stateFromAnalysis(
   projectId: string,
   a: AnalyzeResult,
 ): PipelineState {
-  // Highest-attention units first so the review opens on what matters most.
+  // File order, then position within the file — mirrors reading the source
+  // top to bottom instead of jumping around by severity.
   const chunks = [...a.chunks].sort(
-    (x, y) => RISK_RANK[y.risk_level] - RISK_RANK[x.risk_level],
+    (x, y) =>
+      x.source_file.localeCompare(y.source_file) || x.start_line - y.start_line,
   );
   return {
     projectId,
@@ -305,7 +306,19 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
       if (progress) {
         const chunks = base.chunks.map((c) => {
           const saved = progress[c.id];
-          return saved ? { ...c, status: saved.status as typeof c.status, migrated_code: saved.migrated_code } : c;
+          if (!saved) return c;
+          // Entries saved before static_analysis/ai_review/test_results were
+          // added to ChunkProgressEntry won't have those keys — fall back to
+          // the freshly-computed chunk's defaults instead of overwriting with
+          // undefined (which crashed ChunkReview's `test_results.filter(...)`).
+          return {
+            ...c,
+            status: saved.status as typeof c.status,
+            migrated_code: saved.migrated_code,
+            static_analysis: saved.static_analysis ?? c.static_analysis,
+            ai_review: saved.ai_review ?? c.ai_review,
+            test_results: saved.test_results ?? c.test_results,
+          };
         });
         const allApproved = chunks.every((c) => c.status === "Approved");
         setState({

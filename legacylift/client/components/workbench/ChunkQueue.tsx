@@ -101,18 +101,15 @@ export function ChunkQueue({ chunks, selectedId, onSelect }: ChunkQueueProps) {
       list.push(c);
       byFile.set(key, list);
     }
+    const byLine = (a: MigrationChunk, b: MigrationChunk) => a.start_line - b.start_line;
     return [...byFile.entries()]
       .map(([filename, all]) => ({
         filename,
-        all,
-        filtered: all.filter(matches),
+        all: [...all].sort(byLine),
+        filtered: all.filter(matches).sort(byLine),
       }))
       .filter((f) => f.filtered.length > 0)
-      .sort(
-        (a, b) =>
-          RISK_RANK[worstRisk(b.all)] - RISK_RANK[worstRisk(a.all)] ||
-          a.filename.localeCompare(b.filename),
-      );
+      .sort((a, b) => a.filename.localeCompare(b.filename));
   }, [chunks, search, riskFilter, minComplexity]);
 
   return (

@@ -22,8 +22,10 @@ from the environment (loaded by python-dotenv in main.py at startup).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import time
+from collections import OrderedDict
 from typing import AsyncGenerator, Optional
 
 from rich.console import Console
@@ -63,6 +65,47 @@ class LLMRequestFailedError(RuntimeError):
     """Raised in non-demo mode when the upstream Venice call fails."""
 
 
+class _ResponseCache:
+    """
+    Tiny in-memory cache for identical completion requests.
+
+    The auto-fix loop (regenerate → review → tests, up to MAX_REGENS rounds)
+    re-sends the exact same prompt whenever nothing about the chunk changed
+    (e.g. a re-run of "Run checks" against code that already passed, or a
+    duplicate submit) — each of those is a full priced round trip to Venice
+    for a response we already have. Keying on every input that affects the
+    output means a genuinely different retry (new instructions/previous
+    attempt) always misses, so this never masks a real regeneration.
+    """
+
+    def __init__(self, max_entries: int = 200, ttl_seconds: float = 1800.0) -> None:
+        self._max_entries = max_entries
+        self._ttl_seconds = ttl_seconds
+        self._store: OrderedDict[str, tuple[float, str]] = OrderedDict()
+
+    @staticmethod
+    def make_key(**parts: object) -> str:
+        raw = "\x1f".join(f"{k}={v}" for k, v in sorted(parts.items()))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def get(self, key: str) -> Optional[str]:
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        cached_at, content = entry
+        if time.monotonic() - cached_at > self._ttl_seconds:
+            del self._store[key]
+            return None
+        self._store.move_to_end(key)
+        return content
+
+    def set(self, key: str, content: str) -> None:
+        self._store[key] = (time.monotonic(), content)
+        self._store.move_to_end(key)
+        while len(self._store) > self._max_entries:
+            self._store.popitem(last=False)
+
+
 class LLMClient:
     """
     Async wrapper around the OpenAI Chat Completions API.
@@ -85,6 +128,7 @@ class LLMClient:
         self.demo_mode: bool = os.getenv("DEMO_MODE", "true").lower() == "true"
         self.max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
         self.retry_delay: float = float(os.getenv("LLM_RETRY_DELAY", "2"))
+        self._cache = _ResponseCache()
 
         # Instantiate client only if a real-looking key is available. Guards
         # against both the unfilled-in .env.example placeholder and any
@@ -158,6 +202,20 @@ class LLMClient:
                 "VENICE_MODEL) in the environment."
             )
 
+        cache_key = _ResponseCache.make_key(
+            system=system,
+            user=user,
+            model=resolved_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_response=json_response,
+        )
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            if self.demo_mode:
+                console.print("[dim]LLMClient: cache hit — skipping Venice call[/dim]")
+            return cached
+
         try:
             response = await self._complete_with_retry(
                 system=system,
@@ -169,6 +227,7 @@ class LLMClient:
             )
             content = response.choices[0].message.content or ""
             self._log_response(content)
+            self._cache.set(cache_key, content)
             return content
 
         except Exception as exc:

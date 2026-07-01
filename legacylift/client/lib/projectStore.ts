@@ -9,6 +9,11 @@
 
 import type { AnalyzeResult } from "@/lib/analyze";
 import type { Lesson } from "@/lib/lessons";
+import type {
+  AIReviewResult,
+  StaticAnalysisResult,
+  TestResult,
+} from "@/types/legacylift";
 
 const ANALYSIS_PREFIX = "legacylift:analysis:";
 const PROGRESS_PREFIX = "legacylift:progress:";
@@ -129,6 +134,11 @@ export function deleteProject(id: string): void {
 export interface ChunkProgressEntry {
   status: string;
   migrated_code: string;
+  // Checks-panel results — without these, a refresh mid-review wipes static
+  // analysis/AI review/test results and forces re-running checks from scratch.
+  static_analysis: StaticAnalysisResult | null;
+  ai_review: AIReviewResult | null;
+  test_results: TestResult[];
 }
 
 /**
@@ -137,12 +147,25 @@ export interface ChunkProgressEntry {
  */
 export function saveProgress(
   projectId: string,
-  chunks: Array<{ id: string; status: string; migrated_code: string }>,
+  chunks: Array<{
+    id: string;
+    status: string;
+    migrated_code: string;
+    static_analysis: StaticAnalysisResult | null;
+    ai_review: AIReviewResult | null;
+    test_results: TestResult[];
+  }>,
 ): void {
   try {
     const map: Record<string, ChunkProgressEntry> = {};
     for (const c of chunks) {
-      map[c.id] = { status: c.status, migrated_code: c.migrated_code };
+      map[c.id] = {
+        status: c.status,
+        migrated_code: c.migrated_code,
+        static_analysis: c.static_analysis,
+        ai_review: c.ai_review,
+        test_results: c.test_results,
+      };
     }
     localStorage.setItem(PROGRESS_PREFIX + projectId, JSON.stringify(map));
   } catch {}

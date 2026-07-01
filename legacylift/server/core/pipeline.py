@@ -34,6 +34,7 @@ import dataclasses
 import logging
 import os
 import time
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -59,6 +60,7 @@ from core.layer1.static_analyser    import StaticAnalyser
 from core.layer2.ai_reviewer        import AIReviewer
 from core.layer3.test_generator     import TestGenerator
 from core.layer4.schema_validator   import SchemaValidator, SchemaValidationResult
+from core.storage                   import storage
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -334,6 +336,51 @@ def _build_project_manifest(project: Project, current_filename: str) -> str:
     return "\n".join(lines)
 
 
+def _add_lesson(
+    project: Project,
+    source: str,
+    text: str,
+    source_file: str = "",
+    chunk_name: str = "",
+) -> None:
+    """Append one lesson to the project's durable feedback loop.
+
+    Mirrors client/lib/lessons.ts's makeLesson() for the authenticated
+    pipeline, since that in-context learning loop previously only existed
+    client-side (in localStorage) and never reached the server.
+    """
+    project.lessons.append({
+        "id": f"lesson-{uuid.uuid4().hex[:10]}",
+        "source": source,
+        "source_file": source_file or None,
+        "chunk_name": chunk_name or None,
+        "text": text,
+        "created_at": datetime.utcnow().isoformat(),
+    })
+
+
+def _select_relevant_lessons(project: Project, filename: str, limit: int = 12) -> list[dict]:
+    """Prioritise lessons tied to this file, then project-wide, most recent first.
+
+    Mirrors client/lib/lessons.ts's selectRelevantLessons().
+    """
+    lessons = project.lessons or []
+    for_file = [l for l in lessons if l.get("source_file") == filename]
+    project_wide = [l for l in lessons if not l.get("source_file")]
+    by_recency = lambda l: l.get("created_at", "")  # noqa: E731
+    ordered = sorted(for_file, key=by_recency, reverse=True) + sorted(
+        project_wide, key=by_recency, reverse=True
+    )
+    return ordered[:limit]
+
+
+def _format_lessons_block(lessons: list[dict]) -> str:
+    """Mirrors client/lib/lessons.ts's formatLessonsBlock()."""
+    if not lessons:
+        return ""
+    return "\n".join(f"- ({l.get('source', 'unknown')}) {l.get('text', '')}" for l in lessons)
+
+
 # ---------------------------------------------------------------------------
 # Step 5+6: background task triggered by POST /select-chunk
 # ---------------------------------------------------------------------------
@@ -398,6 +445,9 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         chunk_filename = chunk_dict.get("filename", "")
         file_context = project.uploaded_files.get(chunk_filename, "")
         project_manifest = _build_project_manifest(project, chunk_filename)
+        lessons_learned = _format_lessons_block(
+            _select_relevant_lessons(project, chunk_filename)
+        )
 
         migration_input = MigrationInput(
             chunk_id=chunk_id,
@@ -412,6 +462,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             related_chunks=related_chunks,
             file_context=file_context,
             project_manifest=project_manifest,
+            lessons_learned=lessons_learned,
         )
 
         result = await generate_migration(migration_input)
@@ -436,6 +487,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
                 recoverable=True,
             )
             await _transition(project, "ready")
+            asyncio.ensure_future(storage.persist())
             return
 
         await ws_manager.emit(
@@ -460,6 +512,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
 
         static_analyser = StaticAnalyser()
         static_result = await static_analyser.analyse(pydantic_chunk)
+        project.chunk_static_analysis[chunk_id] = dataclasses.asdict(static_result)
 
         await ws_manager.emit(
             project.id,
@@ -500,6 +553,16 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         )
 
         ai_result = await _ai_review(_ai_review_input)
+        project.chunk_ai_reviews[chunk_id] = dataclasses.asdict(ai_result)
+        for issue in ai_result.issues:
+            if issue.severity in ("critical", "moderate"):
+                _add_lesson(
+                    project,
+                    source="ai_review",
+                    text=issue.description,
+                    source_file=chunk_filename,
+                    chunk_name=chunk_dict.get("name", chunk_id),
+                )
 
         await ws_manager.emit(
             project.id,
@@ -532,6 +595,9 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         )
 
         layer3_result = await generate_and_run_tests(_test_gen_input)
+        project.chunk_test_results[chunk_id] = [
+            dataclasses.asdict(tr) for tr in layer3_result.test_results
+        ]
 
         for tr in layer3_result.test_results:
             await ws_manager.emit(
@@ -576,6 +642,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             layer3_result.passed,
             layer3_result.total,
         )
+        asyncio.ensure_future(storage.persist())
 
     except Exception as exc:
         logger.error(
@@ -594,6 +661,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         current = project.status if isinstance(project.status, str) else project.status.value
         if current == "migrating":
             await _transition(project, "ready")
+        asyncio.ensure_future(storage.persist())
 
 
 # ---------------------------------------------------------------------------

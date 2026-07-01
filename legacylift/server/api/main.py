@@ -17,6 +17,7 @@ Routes:
     POST   /project/{id}/select-chunk/{chunk_id} — select a chunk for migration
     GET    /project/{id}/status           — get project status
     GET    /project/{id}/rules            — get extracted business rules
+    GET    /project/{id}/lessons          — get accumulated AI review/rejection feedback
     GET    /project/{id}/graph            — get dependency graph
     GET    /project/{id}/target-profile   — get Layer 0.5 target profile
     GET    /projects                      — list projects for the authenticated user
@@ -51,7 +52,7 @@ from sqlalchemy import text
 from api.auth import get_current_user_id, verify_ws_token
 from api.github_overlay import router as github_overlay_router
 from api.websocket_manager import manager as ws_manager
-from core.pipeline import run_pipeline, run_migration_generation, _transition
+from core.pipeline import run_pipeline, run_migration_generation, _transition, _add_lesson
 from core.storage import storage
 from db.session import get_session, init_db
 from integrations.github_app import GitHubAppSettings, verify_webhook_signature
@@ -616,11 +617,25 @@ async def reject_chunk(
     project = _get_project(project_id, user_id)
     project.chunk_approvals[chunk_id] = "rejected"
     await _transition(project, "ready")
+
+    feedback = body.feedback or body.comment
+    if feedback:
+        chunk_dict = next(
+            (c for c in project.layer0_chunks if c["id"] == chunk_id), None
+        )
+        _add_lesson(
+            project,
+            source="rejection",
+            text=feedback,
+            source_file=chunk_dict.get("filename", "") if chunk_dict else "",
+            chunk_name=chunk_dict.get("name", chunk_id) if chunk_dict else chunk_id,
+        )
+
     await ws_manager.emit(
         project.id,
         "chunk_rejected",
         chunk_id=chunk_id,
-        feedback=body.feedback or body.comment,
+        feedback=feedback,
     )
 
     asyncio.ensure_future(storage.persist())
@@ -933,6 +948,21 @@ async def get_business_rules(project_id: str, user_id: str = Depends(get_current
         "status":     _status_str(project),
         "rule_count": len(rules),
         "rules":      rules,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /project/{id}/lessons
+# ---------------------------------------------------------------------------
+
+@app.get("/project/{project_id}/lessons")
+async def get_lessons(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """The project's accumulated in-context feedback loop (AI review findings + rejections)."""
+    project = _get_project(project_id, user_id)
+    return {
+        "project_id":   project_id,
+        "lesson_count": len(project.lessons),
+        "lessons":      project.lessons,
     }
 
 

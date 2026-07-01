@@ -42,6 +42,7 @@ class MigrationInput:
     related_chunks: list[dict]  # [{"name": str, "source": str, "rule": str}, ...]
     file_context: str = ""      # full content of the file this chunk belongs to
     project_manifest: str = ""  # lightweight cross-file manifest (deps + rules)
+    lessons_learned: str = ""   # past rejection reasons / AI review findings for this project
 
 
 @dataclass
@@ -130,6 +131,14 @@ def _build_user_prompt(inp: MigrationInput) -> str:
         lines += [
             "### Project Manifest (other files, dependencies, extracted rules)",
             inp.project_manifest[:4_000],
+            "",
+        ]
+
+    if inp.lessons_learned:
+        lines += [
+            "### Lessons Learned (past rejections / AI review findings on this project)",
+            "Avoid repeating these mistakes:",
+            inp.lessons_learned[:4_000],
             "",
         ]
 

@@ -179,6 +179,19 @@ class Project(BaseModel):
     current_migration: Optional[dict] = None
     """Serialised MigrationResult from core/migration/generator.py (latest run)."""
 
+    # --- Per-chunk check results (populated by run_migration_generation) ---
+    # Keyed by chunk_id so a chunk still in review survives a server restart
+    # with its full Checks panel state intact, instead of only the most
+    # recently generated chunk's data (which is all `current_migration` holds).
+    chunk_static_analysis: dict[str, dict] = Field(default_factory=dict)
+    """chunk_id -> serialised StaticAnalysisResult (Layer 1)."""
+
+    chunk_ai_reviews: dict[str, dict] = Field(default_factory=dict)
+    """chunk_id -> serialised AIReviewResult (Layer 2)."""
+
+    chunk_test_results: dict[str, list] = Field(default_factory=dict)
+    """chunk_id -> list of serialised TestResult dicts (Layer 3)."""
+
     # --- Layer 0 chunk storage (populated by run_pipeline after Layer 0) ---
     layer0_chunks: list[dict] = Field(default_factory=list)
     """
@@ -200,6 +213,17 @@ class Project(BaseModel):
 
     error_log: list[str] = Field(default_factory=list)
     """Chronological list of error messages accumulated during the pipeline."""
+
+    # --- Reinforced-learning-lite feedback loop (populated by run_migration_generation
+    # and POST /reject) ---
+    lessons: list[dict] = Field(default_factory=list)
+    """
+    In-context learning memory: every AI review finding and rejection reason,
+    re-injected into future migration prompts for this project. Mirrors the
+    client-side demo flow's localStorage lessons (client/lib/lessons.ts) but
+    durable server-side so the authenticated pipeline gets the same feedback
+    loop. Each entry: {id, source, source_file, chunk_name, text, created_at}.
+    """
 
     class Config:
         use_enum_values = True

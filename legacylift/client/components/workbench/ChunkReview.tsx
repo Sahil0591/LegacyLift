@@ -85,12 +85,23 @@ function CheckRow({
   );
 }
 
-function FixWithAIButton({ onClick }: { onClick: () => void }) {
+function FixWithAIButton({
+  onClick,
+  disabled = false,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+}) {
   return (
     <button
       onClick={onClick}
-      title="Fix with AI — regenerate this chunk using this finding as guidance"
-      className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-[#7C3AED]/30 px-1.5 py-0.5 text-[10px] font-semibold text-[#7C3AED] transition-colors hover:bg-[#7C3AED]/10"
+      disabled={disabled}
+      title={
+        disabled
+          ? "Checks are already running"
+          : "Fix with AI — regenerate this chunk using this finding as guidance"
+      }
+      className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-[#7C3AED]/30 px-1.5 py-0.5 text-[10px] font-semibold text-[#7C3AED] transition-colors hover:bg-[#7C3AED]/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
     >
       <Wrench className="h-2.5 w-2.5" />
       Fix with AI
@@ -204,29 +215,25 @@ function Checks({
                   </span>
                   <button
                     onClick={fixSelected}
-                    className="inline-flex items-center gap-1 rounded-full bg-[#7C3AED] px-2 py-0.5 text-[10px] font-semibold text-white transition-colors hover:bg-[#6D28D9]"
+                    disabled={regenerating}
+                    title={regenerating ? "Checks are already running" : undefined}
+                    className="inline-flex items-center gap-1 rounded-full bg-[#7C3AED] px-2 py-0.5 text-[10px] font-semibold text-white transition-colors hover:bg-[#6D28D9] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#7C3AED]"
                   >
                     <Wrench className="h-2.5 w-2.5" />
                     Fix {selected.size} with AI
                   </button>
                 </div>
               )}
+              {/* Critical issues have no per-issue Fix button — the regenerate
+                  loop (page.tsx handleRegenerate) already auto-retries on
+                  every critical finding, so a manual button here is redundant. */}
               {ai.critical_issues.map((c) => (
                 <div
                   key={c}
                   className="flex items-start gap-2 text-xs text-[#DC2626]"
                 >
-                  {onFixIssue && (
-                    <input
-                      type="checkbox"
-                      checked={selected.has(c)}
-                      onChange={() => toggle(c)}
-                      className="mt-0.5 h-3 w-3 shrink-0 accent-[#7C3AED]"
-                    />
-                  )}
                   <AlertOctagon className="mt-0.5 h-3 w-3 shrink-0" />
                   <span className="flex-1">{c}</span>
-                  {onFixIssue && <FixWithAIButton onClick={() => onFixIssue(c)} />}
                 </div>
               ))}
               {ai.warnings.map((w) => (
@@ -244,7 +251,9 @@ function Checks({
                   )}
                   <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-[#F59E0B]" />
                   <span className="flex-1">{w}</span>
-                  {onFixIssue && <FixWithAIButton onClick={() => onFixIssue(w)} />}
+                  {onFixIssue && (
+                    <FixWithAIButton onClick={() => onFixIssue(w)} disabled={regenerating} />
+                  )}
                 </div>
               ))}
               {ai.suggestions.map((s) => (
@@ -262,7 +271,9 @@ function Checks({
                   )}
                   <CornerDownRight className="mt-0.5 h-3 w-3 shrink-0" />
                   <span className="flex-1">{s}</span>
-                  {onFixIssue && <FixWithAIButton onClick={() => onFixIssue(s)} />}
+                  {onFixIssue && (
+                    <FixWithAIButton onClick={() => onFixIssue(s)} disabled={regenerating} />
+                  )}
                 </div>
               ))}
             </div>
