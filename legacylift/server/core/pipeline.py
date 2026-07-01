@@ -63,9 +63,9 @@ from core.layer4.schema_validator   import SchemaValidator, SchemaValidationResu
 console = Console()
 logger = logging.getLogger(__name__)
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
-# NOT cached at import time like DEMO_MODE above: await_approval() reads this
-# fresh on every call (see _auto_approve_enabled()) so toggling AUTO_APPROVE
-# actually takes effect without reimporting this module.
+# AUTO_APPROVE is intentionally NOT cached as a module constant like DEMO_MODE
+# above: MigrationPipeline.await_approval() reads os.getenv() fresh on every
+# call, so toggling it actually takes effect without reimporting this module.
 
 # ---------------------------------------------------------------------------
 # State machine

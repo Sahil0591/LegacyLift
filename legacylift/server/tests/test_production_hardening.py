@@ -256,3 +256,35 @@ class TestSqlitePersistenceReload:
             assert store2.get_limits("user_persist").projects_used == 3
         finally:
             await store2.close()
+
+
+# ===========================================================================
+# Layer 4 — no silent substitution of an unrelated demo schema in production
+# ===========================================================================
+
+class TestLayer4NoSilentSchemaFallback:
+    @pytest.mark.asyncio
+    async def test_no_sql_uploaded_skips_honestly_in_production(self, monkeypatch):
+        """A project with no .sql upload must not be validated against the
+        bundled demo schema (ACCT_MSTR/TXNS) — that would report bogus
+        MISSING TABLE issues for tables the project never had."""
+        monkeypatch.setattr("core.layer4.schema_validator.DEMO_MODE", False)
+        from core.layer4.schema_validator import SchemaValidator
+
+        project = _make_project(name="No Schema Project")
+        result = await SchemaValidator().validate(project, [])
+
+        assert result.passed is True
+        assert result.tables_checked == 0
+        assert not any("ACCT_MSTR" in issue for issue in result.issues)
+
+    @pytest.mark.asyncio
+    async def test_demo_mode_still_uses_bundled_demo_schema(self, monkeypatch):
+        """DEMO_MODE=true must keep the existing demo UX (no upload required)."""
+        monkeypatch.setattr("core.layer4.schema_validator.DEMO_MODE", True)
+        from core.layer4.schema_validator import SchemaValidator
+
+        project = _make_project(name="Demo Schema Project")
+        result = await SchemaValidator().validate(project, [])
+
+        assert result.tables_checked > 0
