@@ -13,8 +13,24 @@ const API_BASE_URL =
     : process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 interface ApiErrorBody {
-  detail?: string;
+  detail?: string | Array<{ loc?: Array<string | number>; msg?: string }>;
   message?: string;
+}
+
+function formatApiError(body: ApiErrorBody, fallback: string): string {
+  if (typeof body.detail === "string") {
+    return body.detail;
+  }
+  if (Array.isArray(body.detail) && body.detail.length > 0) {
+    return body.detail
+      .map((item) => {
+        const path = item.loc?.join(".");
+        return path ? `${path}: ${item.msg ?? "Invalid value"}` : item.msg;
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  return body.message ?? fallback;
 }
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -50,7 +66,7 @@ async function request<T>(
     let message = `${response.status} ${response.statusText}`;
     try {
       const body = (await response.json()) as ApiErrorBody;
-      message = body.detail ?? body.message ?? message;
+      message = formatApiError(body, message);
     } catch {
       // Keep the HTTP status message when the response is not JSON.
     }
