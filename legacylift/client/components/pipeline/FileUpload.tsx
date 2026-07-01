@@ -188,14 +188,14 @@ export function FileUpload({ onSubmit, loading }: FileUploadProps) {
             <span className="font-medium text-[#7C3AED]">browse</span>
           </p>
           <p className="mt-1 text-xs text-sub/70">
-            Supports .cbl .cob .java .vb .bas
+            Supports .cbl .cob .cpy .java .vb .bas .frm .cls
           </p>
           <input
             ref={sourceInputRef}
             type="file"
             multiple
             className="sr-only"
-            accept=".cbl,.cob,.java,.vb,.bas,.txt"
+            accept=".cbl,.cob,.cpy,.java,.vb,.bas,.frm,.cls"
             onChange={(e) => {
               addSourceFiles(Array.from(e.target.files ?? []));
               e.currentTarget.value = "";

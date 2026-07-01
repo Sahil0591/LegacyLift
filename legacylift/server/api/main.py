@@ -3,6 +3,7 @@ api/main.py — FastAPI application entry point and route definitions.
 
 Routes:
     GET    /health                        — health check
+    GET    /health/ready                  — readiness probe (LLM/persistence config)
     GET    /github/overlay                — GitHub code overlay annotations
     PATCH  /github/overlay/annotation/{id} — mutate overlay review/approval state
     POST   /github/webhook                — GitHub App webhook ingestion
@@ -66,7 +67,12 @@ from ownership.review_workflow import (
     review_state_label,
     transition_payload,
 )
-from utils.llm_client import DEMO_RESPONSE, LLMClient
+from utils.llm_client import (
+    DEMO_RESPONSE,
+    LLMClient,
+    LLMNotConfiguredError,
+    LLMRequestFailedError,
+)
 from utils.migration_prompts import (
     build_migration_prompt,
     build_review_prompt,
@@ -84,9 +90,15 @@ _project_locks: dict[str, asyncio.Lock] = {}
 _MAX_UPLOAD_FILES = int(os.getenv("MAX_UPLOAD_FILES", "25"))
 _MAX_FILE_BYTES   = int(os.getenv("MAX_FILE_SIZE_MB", "5")) * 1024 * 1024
 _MAX_TOTAL_BYTES  = _MAX_UPLOAD_FILES * _MAX_FILE_BYTES
+# Kept in sync with the languages utils/code_parser.py can actually parse
+# (and with client/components/pipeline/FileUpload.tsx's `accept` attribute).
+# Every extension here maps to a real chunker — accepting anything else would
+# let a file through that Layer 0 can only ever return zero chunks for.
 _ALLOWED_EXTENSIONS = {
-    ".cbl", ".cob", ".cobol", ".jcl", ".txt", ".sql",
-    ".py", ".java", ".js", ".ts", ".cpy", ".pco",
+    ".cbl", ".cob", ".cobol", ".cpy",   # COBOL
+    ".java",                            # Java
+    ".sql", ".ddl",                     # SQL schema
+    ".vb", ".bas", ".frm", ".cls",      # VB6
 }
 
 
@@ -94,6 +106,30 @@ def _get_project_lock(project_id: str) -> asyncio.Lock:
     if project_id not in _project_locks:
         _project_locks[project_id] = asyncio.Lock()
     return _project_locks[project_id]
+
+
+# Env vars a DEMO_MODE=false deployment cannot function without. Checked at
+# startup so a misconfigured production deploy fails loudly instead of
+# silently serving demo/stub behaviour or rejecting every request with 401s.
+_REQUIRED_PRODUCTION_ENV_VARS = (
+    "VENICE_API_KEY",
+    "VENICE_MODEL",
+    "VENICE_BASE_URL",
+    "CLERK_JWKS_URL",
+)
+
+
+def _validate_production_env() -> None:
+    """Raise RuntimeError listing any required env var missing when DEMO_MODE=false."""
+    if os.getenv("DEMO_MODE", "true").lower() == "true":
+        return
+    missing = [v for v in _REQUIRED_PRODUCTION_ENV_VARS if not os.getenv(v)]
+    if missing:
+        raise RuntimeError(
+            "DEMO_MODE=false but required environment variable(s) are missing: "
+            + ", ".join(missing)
+            + ". Set them before starting the server — see server/.env.example."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -113,10 +149,12 @@ async def lifespan(app: FastAPI):
     print(f"  LLM MODEL:    {os.getenv('VENICE_MODEL', 'openai-gpt-52-codex')}")
     print(f"  AUTO_APPROVE: {os.getenv('AUTO_APPROVE', 'false')}")
     print("=" * 60)
+    _validate_production_env()
     await storage.load()
     await init_db()
     yield
     await storage.persist()
+    await storage.close()
     print("LegacyLift API shutting down...")
 
 
@@ -308,6 +346,35 @@ def _log_webhook_outcome(
         delivery_id,
         repository,
         outcome,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /health/ready — deeper readiness probe
+# ---------------------------------------------------------------------------
+
+@app.get("/health/ready")
+async def readiness_check():
+    """
+    Report whether this instance is actually able to do real work, not just
+    whether the process is up. Useful for catching a DEMO_MODE=false deploy
+    that started but has no working LLM key or persistence backend.
+    """
+    demo_mode = os.getenv("DEMO_MODE", "true").lower() == "true"
+    llm_configured = _get_llm().is_configured()
+    missing_env = [v for v in _REQUIRED_PRODUCTION_ENV_VARS if not os.getenv(v)]
+
+    ready = demo_mode or (llm_configured and not missing_env)
+
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "ready": ready,
+            "demo_mode": demo_mode,
+            "llm_configured": llm_configured,
+            "storage_mode": "json_file" if demo_mode else "sqlite",
+            "missing_env": missing_env,
+        },
     )
 
 
@@ -1075,8 +1142,10 @@ def _require_configured(llm: LLMClient) -> None:
 def _ensure_real_output(content: str) -> str:
     """Reject the DEMO/error sentinel so we never return placeholder junk.
 
-    LLMClient.complete() swallows Venice errors and returns DEMO_RESPONSE; treat
-    that (and empty output) as a sanitized upstream failure.
+    In DEMO_MODE=true, LLMClient.complete() can still hand back DEMO_RESPONSE
+    (no key configured); treat that (and empty output) as a sanitized upstream
+    failure. In DEMO_MODE=false, complete() raises instead of returning this
+    sentinel — see _safe_complete().
     """
     if not content or not content.strip() or content.strip() == DEMO_RESPONSE.strip():
         raise HTTPException(
@@ -1084,6 +1153,28 @@ def _ensure_real_output(content: str) -> str:
             detail="The AI service is temporarily unavailable. Please try again.",
         )
     return content
+
+
+async def _safe_complete(llm: LLMClient, **kwargs) -> str:
+    """Call llm.complete() and translate non-demo-mode failures into clean HTTP errors.
+
+    Ensures a raw Venice/network exception never leaks to the client — only the
+    two well-known LLMClient exception types are caught and mapped; anything
+    else propagates as an unhandled 500 (a genuine bug, not an upstream failure).
+    """
+    try:
+        return await llm.complete(**kwargs)
+    except LLMNotConfiguredError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail="AI code generation is not configured on the server.",
+        ) from exc
+    except LLMRequestFailedError as exc:
+        logger.error("LLM request failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="The AI service is temporarily unavailable. Please try again.",
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -1111,7 +1202,7 @@ async def llm_migrate(
         target_profile=body.target_profile.model_dump() if body.target_profile else None,
         instructions=body.instructions,
     )
-    content = await llm.complete(system=system, user=user, temperature=0.1, max_tokens=8000)
+    content = await _safe_complete(llm, system=system, user=user, temperature=0.1, max_tokens=8000)
     content = _ensure_real_output(content)
     storage.increment_migrations_today(user_id)
     return {"migrated_code": strip_code_fence(content), "model": llm.model}
@@ -1140,7 +1231,8 @@ async def llm_review(
         source_code=body.source_code,
         migrated_code=body.migrated_code,
     )
-    content = await llm.complete(
+    content = await _safe_complete(
+        llm,
         system=system,
         user=user,
         temperature=0.1,
@@ -1203,7 +1295,8 @@ async def llm_tests(
         migrated_code=body.migrated_code,
         target_lang=body.target_lang,
     )
-    content = await llm.complete(
+    content = await _safe_complete(
+        llm,
         system=system,
         user=user,
         temperature=0.2,

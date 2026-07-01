@@ -55,6 +55,14 @@ DEMO_RESPONSE = (
 )
 
 
+class LLMNotConfiguredError(RuntimeError):
+    """Raised in non-demo mode when no Venice API key/client is available."""
+
+
+class LLMRequestFailedError(RuntimeError):
+    """Raised in non-demo mode when the upstream Venice call fails."""
+
+
 class LLMClient:
     """
     Async wrapper around the OpenAI Chat Completions API.
@@ -78,11 +86,17 @@ class LLMClient:
         self.max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
         self.retry_delay: float = float(os.getenv("LLM_RETRY_DELAY", "2"))
 
-        # Instantiate client only if key is available
-        if OPENAI_AVAILABLE and self.api_key and self.api_key != "your-venice-api-key":
+        # Instantiate client only if a real-looking key is available. Guards
+        # against both the unfilled-in .env.example placeholder and any
+        # accidental "your-..." stand-in — a strict equality check here
+        # previously missed "your-venice-api-key-here" (the actual
+        # .env.example value, which differs from the string it compared
+        # against) and let real, doomed network calls through in demo mode.
+        if OPENAI_AVAILABLE and self.api_key and not self.api_key.startswith("your-"):
             self._client = AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
+                timeout=30.0,
             )
         else:
             self._client = None
@@ -126,16 +140,23 @@ class LLMClient:
         Returns:
             The assistant's reply as a plain string.
 
-        TODO (implementer):
-            The skeleton returns a dummy string in DEMO_MODE.
-            For real behaviour the call is already wired — just ensure
-            VENICE_API_KEY is set in .env.
+        Raises:
+            LLMNotConfiguredError: DEMO_MODE=false and no Venice API key is set.
+            LLMRequestFailedError: DEMO_MODE=false and the upstream call failed
+                after retries.
+            In DEMO_MODE=true, neither is raised — callers get a canned
+            response instead so demos never depend on network access.
         """
         resolved_model = model or self.model
         self._log_prompt(system, user, resolved_model)
 
         if self._client is None:
-            return self._demo_complete(system, user)
+            if self.demo_mode:
+                return self._demo_complete(system, user)
+            raise LLMNotConfiguredError(
+                "LLM is not configured: set VENICE_API_KEY (and VENICE_BASE_URL / "
+                "VENICE_MODEL) in the environment."
+            )
 
         try:
             response = await self._complete_with_retry(
@@ -152,7 +173,9 @@ class LLMClient:
 
         except Exception as exc:
             self._log_error(exc)
-            return DEMO_RESPONSE
+            if self.demo_mode:
+                return DEMO_RESPONSE
+            raise LLMRequestFailedError(str(exc)) from exc
 
     async def stream(
         self,
@@ -179,15 +202,18 @@ class LLMClient:
         Yields:
             Incremental string deltas from the LLM.
 
-        TODO (implementer):
-            Wire the yielded chunks to the WebSocket manager so the UI shows
-            a live code generation feed. See websocket_manager.py for how to
-            broadcast events.
+        Raises:
+            LLMNotConfiguredError: DEMO_MODE=false and no Venice API key is set.
+            LLMRequestFailedError: DEMO_MODE=false and the upstream call failed.
         """
         resolved_model = model or self.model
         self._log_prompt(system, user, resolved_model, streaming=True)
 
         if self._client is None:
+            if not self.demo_mode:
+                raise LLMNotConfiguredError(
+                    "LLM is not configured: set VENICE_API_KEY in the environment."
+                )
             # In demo mode, yield the dummy response word by word to simulate streaming
             for word in DEMO_RESPONSE.split():
                 yield word + " "
@@ -212,7 +238,10 @@ class LLMClient:
 
         except Exception as exc:
             self._log_error(exc)
-            yield DEMO_RESPONSE
+            if self.demo_mode:
+                yield DEMO_RESPONSE
+                return
+            raise LLMRequestFailedError(str(exc)) from exc
 
     # -----------------------------------------------------------------------
     # Internal helpers

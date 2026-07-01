@@ -498,6 +498,27 @@ async def run(project: Project) -> Layer0Result:
     try:
         if DEMO_MODE:
             business_rules = [_demo_rule(chunk) for chunk in all_chunks]
+        elif not VENICE_API_KEY:
+            # Fail fast and honestly instead of firing N doomed HTTP calls
+            # (each of which would 401 and get caught below anyway).
+            logger.error(
+                "Layer0 0b: VENICE_API_KEY not set — skipping business rule "
+                "extraction for %d chunk(s)",
+                len(all_chunks),
+            )
+            business_rules = [
+                BusinessRule(
+                    id=f"rule_{chunk.id}",
+                    chunk_id=chunk.id,
+                    rule="Business rule extraction unavailable — LLM is not configured",
+                    confidence=0.0,
+                    owner="Unknown",
+                    owner_reasoning="",
+                    needs_review=True,
+                    extraction_error="VENICE_API_KEY not set",
+                )
+                for chunk in all_chunks
+            ]
         else:
             sem = asyncio.Semaphore(5)
             async with aiohttp.ClientSession(

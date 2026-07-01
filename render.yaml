@@ -18,6 +18,16 @@ services:
         value: openai-gpt-52-codex
       - key: VENICE_API_KEY
         sync: false
+      # Required for Clerk JWT verification — see server/.env.example.
+      - key: CLERK_JWKS_URL
+        sync: false
+      # DEMO_MODE=false persists projects to SQLite at this path. The `free`
+      # plan has no attached Disk, so this file lives on the container's
+      # ephemeral filesystem: it survives simple restarts but is wiped on
+      # every redeploy. For real durability, add a Render Disk (paid plan)
+      # mounted at e.g. /var/data and point this at /var/data/legacylift.db.
+      - key: SQLITE_DB_PATH
+        value: legacylift.db
       - key: FRONTEND_HOST
         fromService:
           type: web
