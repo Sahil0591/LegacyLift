@@ -18,6 +18,8 @@ Routes:
     GET    /project/{id}/status           — get project status
     GET    /project/{id}/rules            — get extracted business rules
     GET    /project/{id}/lessons          — get accumulated AI review/rejection feedback
+    POST   /project/{id}/lessons          — manually add a lesson
+    DELETE /project/{id}/lessons/{id}     — remove a lesson
     GET    /project/{id}/graph            — get dependency graph
     GET    /project/{id}/target-profile   — get Layer 0.5 target profile
     GET    /projects                      — list projects for the authenticated user
@@ -54,7 +56,7 @@ from api.github_overlay import router as github_overlay_router
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition, _add_lesson
 from core.storage import storage
-from db.session import get_session, init_db
+from db.session import get_database_url, get_session, init_db, validate_database_url
 from integrations.github_app import GitHubAppSettings, verify_webhook_signature
 from integrations.github_ingestion import process_github_webhook
 from models.project import Project, SourceLanguage, UploadedFile
@@ -118,6 +120,7 @@ _REQUIRED_PRODUCTION_ENV_VARS = (
     "VENICE_MODEL",
     "VENICE_BASE_URL",
     "CLERK_JWKS_URL",
+    "DATABASE_URL",
 )
 
 
@@ -132,6 +135,9 @@ def _validate_production_env() -> None:
             + ", ".join(missing)
             + ". Set them before starting the server — see server/.env.example."
         )
+    # Also catch a present-but-malformed DATABASE_URL (missing check above
+    # only catches it being entirely absent).
+    validate_database_url(os.getenv("DATABASE_URL", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -368,13 +374,20 @@ async def readiness_check():
 
     ready = demo_mode or (llm_configured and not missing_env)
 
+    if demo_mode:
+        storage_mode = "json_file"
+    elif get_database_url().startswith("postgresql"):
+        storage_mode = "postgres"
+    else:
+        storage_mode = "sqlite"
+
     return JSONResponse(
         status_code=200 if ready else 503,
         content={
             "ready": ready,
             "demo_mode": demo_mode,
             "llm_configured": llm_configured,
-            "storage_mode": "json_file" if demo_mode else "sqlite",
+            "storage_mode": storage_mode,
             "missing_env": missing_env,
         },
     )
@@ -963,6 +976,48 @@ async def get_lessons(project_id: str, user_id: str = Depends(get_current_user_i
         "project_id":   project_id,
         "lesson_count": len(project.lessons),
         "lessons":      project.lessons,
+    }
+
+
+class AddLessonRequest(BaseModel):
+    source: str = Field(..., min_length=1, max_length=120)
+    text: str = Field(..., min_length=1, max_length=4_000)
+    source_file: Optional[str] = Field(None, max_length=1024)
+    chunk_name: Optional[str] = Field(None, max_length=255)
+
+
+@app.post("/project/{project_id}/lessons", status_code=201)
+async def add_lesson(project_id: str, body: AddLessonRequest, user_id: str = Depends(get_current_user_id)):
+    """Manually add a lesson to the project's feedback loop."""
+    project = _get_project(project_id, user_id)
+    _add_lesson(
+        project,
+        source=body.source,
+        text=body.text,
+        source_file=body.source_file or "",
+        chunk_name=body.chunk_name or "",
+    )
+    asyncio.ensure_future(storage.persist())
+    return {
+        "project_id":   project_id,
+        "lesson":       project.lessons[-1],
+        "lesson_count": len(project.lessons),
+    }
+
+
+@app.delete("/project/{project_id}/lessons/{lesson_id}")
+async def delete_lesson(project_id: str, lesson_id: str, user_id: str = Depends(get_current_user_id)):
+    """Remove a lesson from the project's feedback loop."""
+    project = _get_project(project_id, user_id)
+    before = len(project.lessons)
+    project.lessons = [l for l in project.lessons if l.get("id") != lesson_id]
+    if len(project.lessons) == before:
+        raise HTTPException(status_code=404, detail=f"Lesson '{lesson_id}' not found")
+    asyncio.ensure_future(storage.persist())
+    return {
+        "project_id":   project_id,
+        "lesson_id":    lesson_id,
+        "lesson_count": len(project.lessons),
     }
 
 

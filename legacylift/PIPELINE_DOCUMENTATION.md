@@ -17,7 +17,7 @@ LegacyLift consists of four runtime surfaces:
 | FastAPI server | `legacylift/server` | Python 3.12, Uvicorn | Pipeline orchestration, persistence, auth, LLM proxying, GitHub ingestion, overlay API |
 | Next.js workbench | `legacylift/client` | Node.js 20+, Next.js 14 | Project creation, upload, review UI, WebSocket event rendering, chunk approval |
 | Chromium extension | `legacylift/extension` | Manifest V3 JavaScript | Renders ownership and approval annotations inside GitHub PR and blob views |
-| Database/storage | JSON, SQLite, or SQLAlchemy DB | File-backed SQLite by default | Project state, quotas, GitHub overlay state, ownership review audit data |
+| Database/storage | JSON file (demo mode) or one shared SQLAlchemy `DATABASE_URL` (non-demo) | File-backed JSON by default; Postgres/Neon recommended in production | Project state, quotas, lessons, GitHub overlay state, ownership review audit data — all normalized under `workbench_*`/overlay tables in the same database when `DEMO_MODE=false` |
 
 ### Main Workbench Flow
 
@@ -85,7 +85,7 @@ The workbench project state machine is defined in `core/pipeline.py`:
 | Python | 3.12 |
 | Node.js | 20+ |
 | Browser | Chromium or Chrome for the extension |
-| Database | SQLite for local development; PostgreSQL is supported for SQLAlchemy overlay persistence through `DATABASE_URL` |
+| Database | SQLite for local development; PostgreSQL (Neon recommended) via `DATABASE_URL` for both workbench project persistence and SQLAlchemy overlay persistence in production (`DEMO_MODE=false`) |
 | Network access | Required for Clerk JWKS lookup, Venice API calls, GitHub App webhooks/API calls, and deployment builds |
 | OS tools | Docker optional for server container deployment |
 
@@ -140,10 +140,11 @@ Declared in `legacylift/client/package.json`.
 
 | Component | Inputs | Outputs | Responsibility |
 |---|---|---|---|
-| `core/storage.py` | `Project` and `UserLimit` objects | JSON file or SQLite records | Workbench project persistence and quotas |
-| `db/session.py` | `DATABASE_URL` | Async SQLAlchemy engine/session | Overlay database setup and health checks |
-| `db/models.py` | SQLAlchemy metadata | Tables for repositories, commits, PRs, chunks, criteria, ownership, reviews, guidance, annotations | Persistent GitHub overlay schema |
+| `core/storage.py` | `Project` and `UserLimit` objects | JSON file (demo mode) or normalized Postgres/SQLite tables via `db/workbench_repositories.py` (non-demo) | Workbench project persistence and quotas |
+| `db/session.py` | `DATABASE_URL` | Async SQLAlchemy engine/session | Shared database setup, Neon pooling config, and health checks — used by both workbench and overlay persistence |
+| `db/models.py` | SQLAlchemy metadata | Tables for repositories, commits, PRs, chunks, criteria, ownership, reviews, guidance, annotations, and workbench projects/files/chunk-progress/lessons/user-limits | Persistent GitHub overlay + workbench schema |
 | `db/repositories.py` | Parsed project/GitHub data | Upserted database records | Repository functions for ingestion, layer persistence, review audit data |
+| `db/workbench_repositories.py` | `Project`, `UserLimit` objects | Upserted `workbench_*` table records | Non-demo workbench persistence, mirrors `db/repositories.py`'s upsert pattern |
 
 ### Pipeline Core
 
@@ -228,7 +229,7 @@ Server variables are read from `legacylift/server/.env` when present.
 | `LLM_ROUTE_RATE_LIMIT` | `20` | No | Per-user or per-IP request limit per 60 seconds for `/llm/*` routes |
 | `LLM_DAILY_MIGRATION_LIMIT` | `1000` | No | Daily per-user migration/review/test quota |
 | `CLERK_JWKS_URL` | empty | Yes for authenticated routes and `DEMO_MODE=false` startup | JWKS endpoint used to validate Clerk JWTs |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./.data/legacylift.db` | No | SQLAlchemy database for overlay persistence and health checks |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./.data/legacylift.db` | Yes when `DEMO_MODE=false` | SQLAlchemy database for workbench project/lesson/user-limit persistence, GitHub overlay persistence, and health checks — Neon Postgres recommended in production |
 | `GITHUB_APP_ID` | empty | For GitHub App usage | GitHub App identifier |
 | `GITHUB_PRIVATE_KEY` | empty | For GitHub App usage | GitHub App private key |
 | `GITHUB_WEBHOOK_SECRET` | empty | For webhook signature verification | Shared webhook secret |
@@ -239,7 +240,6 @@ Server variables are read from `legacylift/server/.env` when present.
 | `OVERLAY_ALLOWED_REPOS_BY_USER` | empty | No | JSON map of reviewer identity to allowed repository patterns |
 | `OVERLAY_RATE_LIMIT_PER_MINUTE` | `120` | No | Per-reviewer overlay API rate limit; `0` disables locally |
 | `STORAGE_FILE` | `legacylift_data.json` | No | JSON project store path when `DEMO_MODE=true` |
-| `SQLITE_DB_PATH` | `legacylift.db` | No | Project store SQLite path when `DEMO_MODE=false` |
 | `MAX_UPLOAD_FILES` | `25` | No | Maximum files accepted per upload |
 | `MAX_FILE_SIZE_MB` | `5` | No | Maximum size for each uploaded file |
 | `TEST_EXECUTION_TIMEOUT` | `5` | No | Per-test timeout budget multiplier for Layer 3 subprocess execution |
@@ -367,7 +367,7 @@ The root `render.yaml` defines:
 | `legacylift-api` | Docker | Builds `legacylift/server/Dockerfile`, checks `/health` |
 | `legacylift-client` | Node | `npm ci && npm run build`, then `npm run start -- -p $PORT` |
 
-Render free-tier API storage is ephemeral unless a disk is attached. For durable non-demo project storage, mount a persistent disk and set `SQLITE_DB_PATH` to that mount. For durable overlay persistence, use a persistent `DATABASE_URL`, preferably PostgreSQL for production-like operation.
+Render free-tier API storage is ephemeral unless a disk is attached. Set `DATABASE_URL` to a managed Postgres instance (Neon recommended) — this now backs both workbench project persistence and GitHub overlay persistence through the same SQLAlchemy engine, so a single durable database covers both. A persistent disk is only needed if `DATABASE_URL` is deliberately left pointed at a local SQLite file instead.
 
 ### Production Configuration Checklist
 
@@ -375,18 +375,17 @@ Render free-tier API storage is ephemeral unless a disk is attached. For durable
 2. Set `VENICE_API_KEY`, `VENICE_BASE_URL`, and `VENICE_MODEL`.
 3. Set `CLERK_JWKS_URL` on the server.
 4. Set Clerk client variables in the Next.js environment.
-5. Set `DATABASE_URL` to durable storage for overlay data.
-6. Set `SQLITE_DB_PATH` to durable storage if using the built-in project SQLite store.
-7. Configure CORS with `FRONTEND_URL` or `FRONTEND_HOST`.
-8. Configure GitHub App secrets if using overlay ingestion.
-9. Set overlay auth policy with `OVERLAY_DEV_AUTH_TOKEN`, `OVERLAY_REQUIRE_AUTH`, and `OVERLAY_ALLOWED_REPOS_BY_USER` as needed.
-10. Run server tests, client type checks, and extension tests before promoting.
+5. Set `DATABASE_URL` to a durable Postgres database (Neon recommended) — this backs both workbench project/user-limit storage and GitHub overlay persistence.
+6. Configure CORS with `FRONTEND_URL` or `FRONTEND_HOST`.
+7. Configure GitHub App secrets if using overlay ingestion.
+8. Set overlay auth policy with `OVERLAY_DEV_AUTH_TOKEN`, `OVERLAY_REQUIRE_AUTH`, and `OVERLAY_ALLOWED_REPOS_BY_USER` as needed.
+9. Run server tests, client type checks, and extension tests before promoting.
 
 ## Troubleshooting & Common Failure Points
 
 | Symptom | Likely Cause | Recovery |
 |---|---|---|
-| Server refuses to start with missing env error | `DEMO_MODE=false` without `VENICE_API_KEY`, `VENICE_MODEL`, `VENICE_BASE_URL`, or `CLERK_JWKS_URL` | Set required variables or use `DEMO_MODE=true` for local demo |
+| Server refuses to start with missing env error | `DEMO_MODE=false` without `VENICE_API_KEY`, `VENICE_MODEL`, `VENICE_BASE_URL`, `CLERK_JWKS_URL`, or `DATABASE_URL` (or `DATABASE_URL` is set but malformed) | Set required variables or use `DEMO_MODE=true` for local demo |
 | `/health` returns `503` | SQLAlchemy `DATABASE_URL` is unavailable or SQLite path is not writable | Check database URL, credentials, network, and filesystem permissions |
 | Authenticated routes return `401` | Missing/expired Clerk token, invalid `CLERK_JWKS_URL`, or client not sending Authorization header | Confirm Clerk environment, browser session, and server logs |
 | WebSocket closes with code `4001` | Missing or invalid `?token=` query parameter | Ensure `useWebSocket` can retrieve a Clerk session token |
@@ -409,12 +408,12 @@ Render free-tier API storage is ephemeral unless a disk is attached. For durable
 | Extension shows repo not indexed or PR not synced | GitHub webhook has not run or ingestion failed | Check webhook delivery logs, signature secret, GitHub App installation, and database records |
 | Webhook returns `401` | Invalid `X-Hub-Signature-256` | Ensure GitHub webhook secret matches `GITHUB_WEBHOOK_SECRET` exactly |
 | Webhook returns `409` | Duplicate GitHub delivery ID | Usually safe; delivery replay was rejected intentionally |
-| Data disappears after redeploy | SQLite/JSON files are on ephemeral storage | Attach persistent storage or use managed PostgreSQL and durable project store paths |
+| Data disappears after redeploy | `DEMO_MODE=false` with `DATABASE_URL` left pointed at ephemeral local storage | Set `DATABASE_URL` to a managed Postgres instance (Neon recommended) |
 
 ### Operational Notes
 
 - The server currently uses in-memory dictionaries for active project state and WebSocket connections. Run one worker per instance unless that state is moved to a shared backend.
-- `core/storage.py` persists workbench projects separately from SQLAlchemy overlay persistence. Both must be considered during backup and restore planning.
+- In `DEMO_MODE=false`, `core/storage.py` persists workbench projects through the same `DATABASE_URL`/engine as the SQLAlchemy overlay tables — backup/restore is unified under one Postgres database for that mode. `DEMO_MODE=true`'s JSON-file storage remains a separate backup concern.
 - `DEMO_MODE=true` avoids real LLM dependency for many flows, but it can mask production configuration errors. Always test `/health/ready` with `DEMO_MODE=false` before release.
 - Layer 3 executes generated Python in a subprocess with temporary files. Treat generated code as untrusted and keep this isolation boundary intact.
 - The pipeline catches most layer exceptions and emits recoverable WebSocket errors. A visible UI error does not always mean the server process crashed; inspect project status and event logs before restarting.

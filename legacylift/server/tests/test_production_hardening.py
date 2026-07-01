@@ -27,6 +27,7 @@ os.environ.setdefault(
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import db.session as db_session_module
 from api.auth import get_current_user_id
 from api.main import app, _ALLOWED_EXTENSIONS
 from core.storage import ProjectStorage
@@ -237,25 +238,33 @@ class TestSqlitePersistenceReload:
     async def test_project_and_limits_survive_reload(self, tmp_path, monkeypatch):
         db_path = tmp_path / "hardening_test.db"
         monkeypatch.setenv("DEMO_MODE", "false")
-        monkeypatch.setenv("SQLITE_DB_PATH", str(db_path))
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+        db_session_module._engine = None
+        db_session_module._session_factory = None
 
-        store1 = ProjectStorage()
-        await store1.load()
-        project = _make_project(name="Persisted Project", owner_id="user_persist")
-        store1.put(project)
-        store1.get_limits("user_persist").projects_used = 3
-        await store1.persist()
-        await store1.close()
-
-        store2 = ProjectStorage()
-        await store2.load()
         try:
-            reloaded = store2.get(project.id)
-            assert reloaded is not None
-            assert reloaded.name == "Persisted Project"
-            assert store2.get_limits("user_persist").projects_used == 3
+            store1 = ProjectStorage()
+            await store1.load()
+            project = _make_project(name="Persisted Project", owner_id="user_persist")
+            store1.put(project)
+            store1.get_limits("user_persist").projects_used = 3
+            await store1.persist()
+            await store1.close()
+
+            store2 = ProjectStorage()
+            await store2.load()
+            try:
+                reloaded = store2.get(project.id)
+                assert reloaded is not None
+                assert reloaded.name == "Persisted Project"
+                assert store2.get_limits("user_persist").projects_used == 3
+            finally:
+                await store2.close()
         finally:
-            await store2.close()
+            engine = db_session_module.get_engine()
+            await engine.dispose()
+            db_session_module._engine = None
+            db_session_module._session_factory = None
 
 
 # ===========================================================================

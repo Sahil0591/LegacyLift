@@ -3,17 +3,20 @@ core/storage.py — Project persistence layer.
 
 DEMO_MODE=true  → in-memory dict backed by a JSON file (legacylift_data.json).
                    Survives server restarts; no external dependencies.
-DEMO_MODE=false → in-memory dict backed by SQLite (via aiosqlite). Every
-                   mutation still lives in memory for O(1) reads exactly like
-                   demo mode; persist() upserts the changed rows to disk so a
+DEMO_MODE=false → in-memory dict backed by the shared SQLAlchemy engine from
+                   db/session.py (DATABASE_URL — Postgres/Neon in production,
+                   SQLite in local dev), normalized across the workbench_*
+                   tables in db/models.py. Every mutation still lives in
+                   memory for O(1) reads exactly like demo mode; persist()
+                   flushes the full in-memory state to those tables so a
                    process restart reloads all projects, user limits, uploaded
                    file content, pipeline outputs, approvals, and migrations.
 
                    Note: on hosts with an ephemeral filesystem (e.g. Render
-                   free-tier web services without an attached Disk), the
-                   SQLite file does not survive a redeploy — attach a
-                   persistent disk and point SQLITE_DB_PATH at it for real
-                   durability.
+                   free-tier web services without an attached Disk) and
+                   DATABASE_URL left pointed at local SQLite, data does not
+                   survive a redeploy — point DATABASE_URL at a managed
+                   Postgres instance (Neon recommended) for real durability.
 
 Usage:
     from core.storage import storage
@@ -31,12 +34,17 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import aiosqlite
-
+from db.session import get_session, init_db as db_init_db
+from db.workbench_repositories import (
+    delete_workbench_project,
+    load_all_projects,
+    load_all_user_limits,
+    persist_project,
+    upsert_workbench_user_limit,
+)
 from models.limits import UserLimit
 from models.project import Project
 
@@ -59,19 +67,21 @@ class ProjectStorage:
         self._data_file: Path = Path(
             os.getenv("STORAGE_FILE", "legacylift_data.json")
         )
-        self._db_path: Path = Path(os.getenv("SQLITE_DB_PATH", "legacylift.db"))
-        self._db: Optional[aiosqlite.Connection] = None
+        # Project ids removed via delete() since the last persist() flush —
+        # applied to the DB on the next flush (delete() itself stays sync).
+        self._pending_deletes: set[str] = set()
 
     # ------------------------------------------------------------------
     # Startup / teardown
     # ------------------------------------------------------------------
 
     async def load(self) -> None:
-        """Load persisted state from disk (JSON file in demo mode, SQLite otherwise)."""
+        """Load persisted state from disk (JSON file in demo mode, the shared
+        SQLAlchemy DATABASE_URL otherwise)."""
         if self._demo_mode:
             await self._load_json_file()
         else:
-            await self._load_sqlite()
+            await self._load_db()
 
     async def _load_json_file(self) -> None:
         if not self._data_file.exists():
@@ -89,55 +99,26 @@ class ProjectStorage:
         except Exception as exc:
             logger.warning("Could not load storage file: %s — starting fresh", exc)
 
-    async def _load_sqlite(self) -> None:
-        self._db = await aiosqlite.connect(str(self._db_path))
-        await self._db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS projects (
-                id         TEXT PRIMARY KEY,
-                owner_id   TEXT NOT NULL,
-                data       TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        await self._db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_limits (
-                user_id TEXT PRIMARY KEY,
-                data    TEXT NOT NULL
-            )
-            """
-        )
-        await self._db.commit()
-
+    async def _load_db(self) -> None:
         try:
-            async with self._db.execute("SELECT id, data FROM projects") as cur:
-                async for pid, data in cur:
-                    try:
-                        self._projects[pid] = Project(**json.loads(data))
-                    except Exception as exc:
-                        logger.error("Failed to load project %s from SQLite: %s", pid, exc)
-
-            async with self._db.execute("SELECT user_id, data FROM user_limits") as cur:
-                async for uid, data in cur:
-                    try:
-                        self._limits[uid] = UserLimit(**json.loads(data))
-                    except Exception as exc:
-                        logger.error("Failed to load limits for %s from SQLite: %s", uid, exc)
+            await db_init_db()
+            async with get_session() as session:
+                self._projects = await load_all_projects(session)
+                self._limits = await load_all_user_limits(session)
         except Exception as exc:
-            logger.error("Failed to load storage from SQLite (%s): %s", self._db_path, exc)
+            logger.error("Failed to load storage from DATABASE_URL: %s", exc)
 
         logger.info(
-            "Loaded %d project(s) and %d user limit record(s) from SQLite (%s)",
-            len(self._projects), len(self._limits), self._db_path,
+            "Loaded %d project(s) and %d user limit record(s) from DATABASE_URL",
+            len(self._projects), len(self._limits),
         )
 
     async def close(self) -> None:
-        """Close the SQLite connection (no-op in demo mode). Call on shutdown."""
-        if self._db is not None:
-            await self._db.close()
-            self._db = None
+        """No-op in the DATABASE_URL-backed path: the underlying SQLAlchemy
+        engine (db/session.py) is shared with the GitHub-overlay tables and
+        must not be disposed here. Kept for API stability — callers (e.g.
+        lifespan()'s shutdown sequence) still call storage.close()."""
+        return None
 
     # ------------------------------------------------------------------
     # Persistence
@@ -149,7 +130,7 @@ class ProjectStorage:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._write_json_file)
         else:
-            await self._write_sqlite()
+            await self._write_db()
 
     def _write_json_file(self) -> None:
         try:
@@ -168,36 +149,34 @@ class ProjectStorage:
         except Exception as exc:
             logger.error("Failed to persist storage: %s", exc)
 
-    async def _write_sqlite(self) -> None:
-        if self._db is None:
-            # persist() can be scheduled before load() finishes on the very
-            # first request in rare interleavings; nothing to do yet.
-            return
+    async def _write_db(self) -> None:
         try:
-            now = datetime.now(timezone.utc).isoformat()
-            for pid, p in list(self._projects.items()):
-                await self._db.execute(
-                    """
-                    INSERT INTO projects (id, owner_id, data, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        owner_id=excluded.owner_id,
-                        data=excluded.data,
-                        updated_at=excluded.updated_at
-                    """,
-                    (pid, p.owner_id, p.json(), now),
-                )
-            for uid, lim in list(self._limits.items()):
-                await self._db.execute(
-                    """
-                    INSERT INTO user_limits (user_id, data) VALUES (?, ?)
-                    ON CONFLICT(user_id) DO UPDATE SET data=excluded.data
-                    """,
-                    (uid, lim.json()),
-                )
-            await self._db.commit()
+            async with get_session() as session:
+                for project_id in list(self._pending_deletes):
+                    try:
+                        async with session.begin_nested():
+                            await delete_workbench_project(session, project_id)
+                        self._pending_deletes.discard(project_id)
+                    except Exception as exc:
+                        logger.error("Failed to delete project %s: %s", project_id, exc)
+                for pid, p in list(self._projects.items()):
+                    try:
+                        # SAVEPOINT per project: one bad project shouldn't
+                        # roll back or block every other user's save —
+                        # persist() runs fire-and-forget after nearly every
+                        # mutating route, so isolate failures per project.
+                        async with session.begin_nested():
+                            await persist_project(session, p)
+                    except Exception as exc:
+                        logger.error("Failed to persist project %s: %s", pid, exc)
+                for uid, lim in list(self._limits.items()):
+                    try:
+                        async with session.begin_nested():
+                            await upsert_workbench_user_limit(session, limit=lim)
+                    except Exception as exc:
+                        logger.error("Failed to persist user limits for %s: %s", uid, exc)
         except Exception as exc:
-            logger.error("Failed to persist storage to SQLite: %s", exc)
+            logger.error("Failed to persist storage to DATABASE_URL: %s", exc)
 
     # ------------------------------------------------------------------
     # Project CRUD
@@ -211,6 +190,7 @@ class ProjectStorage:
 
     def delete(self, project_id: str) -> None:
         self._projects.pop(project_id, None)
+        self._pending_deletes.add(project_id)
 
     def list_for_user(self, user_id: str) -> list[Project]:
         results = [p for p in self._projects.values() if p.owner_id == user_id]

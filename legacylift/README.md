@@ -29,7 +29,7 @@ Server environment is read from `legacylift/server/.env` when present.
 | `DEMO_MODE` | `true` | Enables local demo defaults and stubbed LLM behavior. |
 | `AUTO_APPROVE` | `false` | Skips manual approval gates for demo runs. |
 | `OPENAI_API_KEY` | empty | Required only when demo mode is disabled and LLM calls are used. |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./.data/legacylift.db` | Async SQLAlchemy database URL. |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./.data/legacylift.db` | Async SQLAlchemy database URL — also backs workbench project/lesson/user-limit storage when `DEMO_MODE=false` (see Database Setup). Required when `DEMO_MODE=false`. |
 | `GITHUB_APP_ID` | empty | GitHub App ID for installation-token flows. |
 | `GITHUB_PRIVATE_KEY` | empty | GitHub App private key. Keep real keys out of git. |
 | `GITHUB_WEBHOOK_SECRET` | empty | Required for `X-Hub-Signature-256` webhook verification. |
@@ -56,7 +56,32 @@ To use PostgreSQL, set `DATABASE_URL` before starting the server:
 export DATABASE_URL='postgresql+asyncpg://legacylift:legacylift@localhost:5432/legacylift'
 ```
 
-The FastAPI lifespan creates tables on startup through SQLAlchemy metadata. The `/health` endpoint runs a database `SELECT 1` and returns `503` if the database is unavailable.
+The FastAPI lifespan creates tables on startup through SQLAlchemy metadata (no Alembic migrations directory exists yet — schema evolution is `Base.metadata.create_all` plus a SQLite-only column-repair shim). The `/health` endpoint runs a database `SELECT 1` and returns `503` if the database is unavailable.
+
+When `DEMO_MODE=false`, this same `DATABASE_URL` also backs workbench project, uploaded-file, chunk-progress, lesson, and user-limit persistence (`db/workbench_repositories.py`, tables prefixed `workbench_*`) — one database, no separate config for "project storage" vs. "overlay storage" anymore.
+
+### Neon Postgres (recommended for production / `DEMO_MODE=false`)
+
+1. Sign up at [neon.tech](https://neon.tech) and create a project.
+2. Copy the connection string from the Neon dashboard and set it as `DATABASE_URL`, using the `postgresql+asyncpg://` scheme:
+
+   ```bash
+   export DATABASE_URL='postgresql+asyncpg://user:password@ep-xxxxxxxx.neon.tech/dbname'
+   ```
+
+3. Prefer Neon's **direct** (non-pooled) connection string. If you only have the pooled (pgbouncer transaction-mode) connection string, `db/session.py`'s `create_engine()` automatically disables asyncpg's server-side prepared-statement cache for any `postgresql://` URL, so pooled connections work too — just with marginally lower query-plan caching.
+4. Set `DEMO_MODE=false` and `CLERK_JWKS_URL` (see Environment above) — both are required alongside `DATABASE_URL` when running in non-demo mode; the server validates all of them at startup and refuses to start if any are missing or malformed.
+5. To import existing local data (`legacylift_data.json`, or an old local SQLite project store) into Neon, run the migration script from `legacylift/server`:
+
+   ```bash
+   python -m scripts.migrate_to_neon --source-json legacylift_data.json --target-database-url "$DATABASE_URL" --dry-run
+   # once the reported counts look right, drop --dry-run to actually import
+   python -m scripts.migrate_to_neon --source-json legacylift_data.json --target-database-url "$DATABASE_URL"
+   ```
+
+   The script is idempotent (safe to re-run), never modifies or deletes the source file, and never logs the raw `DATABASE_URL` (credentials are redacted). Verify data landed with `psql "$DATABASE_URL" -c 'select count(*) from workbench_projects;'`.
+
+**The browser never talks to Neon directly.** Only the FastAPI server holds `DATABASE_URL`; the client only ever calls FastAPI endpoints over HTTPS with a Clerk session token, and every row is scoped by `owner_id` derived from that verified JWT's `sub` claim — never from client-submitted data.
 
 ## Server Setup
 

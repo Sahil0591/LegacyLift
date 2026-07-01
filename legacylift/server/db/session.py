@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -53,11 +54,41 @@ def ensure_sqlite_directory(database_url: str) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
+_VALID_DATABASE_URL_PREFIXES = ("postgresql+asyncpg://", "postgresql://", "sqlite+aiosqlite://")
+
+
+def validate_database_url(url: str) -> None:
+    """Raise RuntimeError if url is missing or doesn't use a supported scheme."""
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL is not set. Expected one of: " + ", ".join(_VALID_DATABASE_URL_PREFIXES)
+        )
+    if not url.startswith(_VALID_DATABASE_URL_PREFIXES):
+        raise RuntimeError(
+            f"DATABASE_URL has an unsupported scheme ({redact_database_url(url)!r}). "
+            "Expected one of: " + ", ".join(_VALID_DATABASE_URL_PREFIXES)
+        )
+
+
+def redact_database_url(url: str) -> str:
+    """Strip user:pass@ credentials before a DATABASE_URL is ever logged or printed."""
+    return re.sub(r"://[^/@]+@", "://***@", url)
+
+
 def create_engine(database_url: str | None = None) -> AsyncEngine:
     url = database_url or get_database_url()
     ensure_sqlite_directory(url)
 
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    if url.startswith("sqlite"):
+        connect_args = {"check_same_thread": False}
+    elif url.startswith("postgresql"):
+        # Neon's pooled (pgbouncer transaction-mode) connection string breaks
+        # asyncpg's server-side prepared-statement cache. Disabling it is a
+        # safe no-op against Neon's direct/non-pooled connection string too,
+        # so apply it unconditionally for any postgresql URL.
+        connect_args = {"statement_cache_size": 0}
+    else:
+        connect_args = {}
     return create_async_engine(url, future=True, connect_args=connect_args)
 
 
