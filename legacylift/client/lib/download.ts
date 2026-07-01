@@ -5,6 +5,16 @@
 
 import type { MigrationChunk } from "@/types/legacylift";
 
+interface SaveFilePickerWindow extends Window {
+  showSaveFilePicker?: (options?: {
+    suggestedName?: string;
+    types?: Array<{
+      description?: string;
+      accept: Record<string, string[]>;
+    }>;
+  }) => Promise<FileSystemFileHandle>;
+}
+
 export function buildMigratedFile(
   projectName: string,
   chunks: MigrationChunk[],
@@ -37,19 +47,49 @@ export function buildMigratedFile(
   return header + body + "\n";
 }
 
-export function downloadMigration(
-  projectName: string,
-  chunks: MigrationChunk[],
-): void {
-  const text = buildMigratedFile(projectName, chunks);
-  const safe = projectName.replace(/[^\w.-]+/g, "_") || "migration";
-  const blob = new Blob([text], { type: "text/x-python;charset=utf-8" });
+function fallbackDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${safe}_migrated.py`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+export async function downloadMigration(
+  projectName: string,
+  chunks: MigrationChunk[],
+): Promise<void> {
+  const text = buildMigratedFile(projectName, chunks);
+  const safe = projectName.replace(/[^\w.-]+/g, "_") || "migration";
+  const filename = `${safe}_migrated.py`;
+  const blob = new Blob([text], { type: "text/x-python;charset=utf-8" });
+
+  const savePicker = (window as SaveFilePickerWindow).showSaveFilePicker;
+  if (!savePicker) {
+    fallbackDownload(blob, filename);
+    return;
+  }
+
+  try {
+    const handle = await savePicker({
+      suggestedName: filename,
+      types: [
+        {
+          description: "Python file",
+          accept: { "text/x-python": [".py"] },
+        },
+      ],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      return;
+    }
+    fallbackDownload(blob, filename);
+  }
 }
