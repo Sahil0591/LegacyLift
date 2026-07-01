@@ -158,6 +158,9 @@ const RISK_SCORES: Record<string, number> = {
 const TARGET_PROFILE: TargetProfile = {
   language: "Python",
   version: "3.12",
+  recommended_libraries: [],
+  deprecated_patterns: [],
+  gotchas: [],
   style_guide: "PEP 8 · formatted with Black",
   type_system: "Full type hints · mypy --strict",
   async_model: "Synchronous (nightly batch jobs)",
