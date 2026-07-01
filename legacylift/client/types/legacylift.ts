@@ -165,23 +165,35 @@ export interface DependencyGraph {
 // Layer 0.5 — Target profile and migration intelligence
 // ---------------------------------------------------------------------------
 
-export interface DeprecationEntry {
-  legacy_construct: string;
+export interface RecommendedLibrary {
+  name: string;
+  purpose: string;
+  import: string;
+  docs_url: string;
+}
+
+export interface DeprecatedPattern {
+  cobol_pattern: string;
   python_equivalent: string;
+  risk: "Low" | "Medium" | "High" | "Critical";
   notes: string;
 }
 
-export interface GotchaEntry {
+export interface Gotcha {
   id: string;
   title: string;
   description: string;
-  severity: "low" | "medium" | "high";
-  affected_constructs: string[];
+  cobol_example: string;
+  python_fix: string;
+  severity: "Low" | "Medium" | "High" | "Critical";
 }
 
 export interface TargetProfile {
   language: string;
   version: string;
+  recommended_libraries: RecommendedLibrary[];
+  deprecated_patterns: DeprecatedPattern[];
+  gotchas: Gotcha[];
   style_guide: string;
   type_system: string;
   async_model: string;
@@ -289,7 +301,7 @@ export interface WSEventDocsFetched extends WSEventBase {
 
 export interface WSEventTargetProfileReady extends WSEventBase {
   event: "target_profile_ready";
-  profile: TargetProfile;
+  target_profile: TargetProfile;
 }
 
 export interface WSEventChunkSelected extends WSEventBase {

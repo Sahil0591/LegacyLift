@@ -349,10 +349,13 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
 
     unsubs.push(
       subscribe("target_profile_ready", (e) => {
+        // New pipeline emits target_profile=; class-based pipeline emits profile=
+        const payload = e as unknown as Record<string, unknown>;
+        const tp = (payload.target_profile ?? payload.profile ?? null) as TargetProfile | null;
         setState((prev) => ({
           ...prev,
           currentLayer: 0.5,
-          targetProfile: e.profile as unknown as TargetProfile,
+          targetProfile: tp,
         }));
       }),
     );

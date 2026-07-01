@@ -666,6 +666,31 @@ async def get_dependency_graph(project_id: str, user_id: str = Depends(get_curre
 
 
 # ---------------------------------------------------------------------------
+# GET /project/{id}/target-profile
+# ---------------------------------------------------------------------------
+
+@app.get("/project/{project_id}/target-profile")
+async def get_target_profile(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """
+    Return the Layer 0.5 TargetProfile for the project.
+
+    HTTP 202 if Layer 0.5 has not yet completed (project.target_profile is None).
+    HTTP 404 if the project does not exist.
+    HTTP 200 with the full unified TargetProfile schema on success.
+    """
+    project = _get_project(project_id, user_id)
+    if project.target_profile is None:
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "pending",
+                "message": "Layer 0.5 not yet complete",
+            },
+        )
+    return project.target_profile
+
+
+# ---------------------------------------------------------------------------
 # GET /projects
 # ---------------------------------------------------------------------------
 

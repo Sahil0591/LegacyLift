@@ -95,6 +95,52 @@ async def _transition(project: Project, new_status: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Layer 0.5 helper — shared by run_pipeline and any future callers
+# ---------------------------------------------------------------------------
+
+async def _build_target_profile(project: Project) -> "TargetProfile":
+    """
+    Build a TargetProfile for the given project.  Never raises — returns a
+    minimal default profile if anything goes wrong so the pipeline is non-fatal.
+    """
+    try:
+        src_lang = (
+            project.source_language.value
+            if hasattr(project.source_language, "value")
+            else str(project.source_language)
+        )
+
+        fetcher = DocFetcher()
+        docs = await fetcher.fetch(project.target_language)
+
+        mapper = DeprecationMapper()
+        deprecated = await mapper.map(src_lang, project.target_language)
+
+        registry = GotchaRegistry()
+        gotchas = await registry.get_gotchas(src_lang, project.target_language)
+
+        return TargetProfile(
+            language=project.target_language,
+            version=docs.get("version", "3.12"),
+            deprecated_patterns=deprecated,
+            gotchas=gotchas,
+            recommended_libraries=docs.get("libraries", []),
+        )
+    except Exception as exc:
+        logger.error(
+            "_build_target_profile failed for project %s: %s",
+            project.id, exc, exc_info=True,
+        )
+        return TargetProfile(
+            language=getattr(project, "target_language", "Python"),
+            version="3.12",
+            deprecated_patterns=[],
+            gotchas=[],
+            recommended_libraries=[],
+        )
+
+
+# ---------------------------------------------------------------------------
 # Primary pipeline entry point (called by api/main.py via asyncio.create_task)
 # ---------------------------------------------------------------------------
 
@@ -164,9 +210,28 @@ async def run_pipeline(project: Project) -> None:
             needs_review_count=project.needs_review_count,
         )
 
-        # ── LAYER 0.5: Target language profiling ───────────────────────────
-        # TODO: implement core/layer0_5.py
-        # await layer0_5.run(project)
+        # ── LAYER 0.5: Target Language Profiling ──────────────────────────
+        logger.info("Project %s: starting Layer 0.5", project.id)
+        try:
+            target_profile = await _build_target_profile(project)
+            project.target_profile = target_profile.to_dict()
+
+            await ws_manager.emit(
+                project.id,
+                "target_profile_ready",
+                target_profile=target_profile.to_dict(),
+            )
+            logger.info(
+                "Project %s: Layer 0.5 complete — %d gotchas, %d libraries",
+                project.id,
+                len(target_profile.gotchas),
+                len(target_profile.recommended_libraries),
+            )
+        except Exception as e:
+            logger.error(
+                "Layer 0.5 failed for project %s: %s", project.id, e, exc_info=True
+            )
+            # Non-fatal — pipeline continues with generic prompts.
 
         # ── LAYER 1: Static analysis ───────────────────────────────────────
         # TODO: implement core/layer1.py
@@ -452,28 +517,129 @@ class Layer0Result:
 
 
 class TargetProfile:
-    """Output of Layer 0.5 — target language compatibility profile."""
+    """Output of Layer 0.5 — target language compatibility profile.
+
+    Accepts either plain strings (legacy) or structured dicts for the list
+    fields.  to_dict() always returns the unified schema consumed by the API
+    and frontend.
+    """
+
     def __init__(
         self,
         language: str,
         version: str,
-        deprecated_patterns: list[str],
-        gotchas: list[str],
-        recommended_libraries: list[str],
+        deprecated_patterns: list,
+        gotchas: list,
+        recommended_libraries: list,
+        style_guide: str = "PEP 8 with Black formatter",
+        type_system: str = (
+            "Use Decimal (not float) for all financial values. "
+            "Type-annotate all functions. Run mypy in strict mode."
+        ),
+        async_model: str = (
+            "asyncio with async/await throughout. "
+            "No synchronous I/O in the migration layer."
+        ),
+        test_framework: str = (
+            "pytest with pytest-asyncio. One test per business rule. "
+            "Use Decimal-aware assertions."
+        ),
+        notes: str = (
+            "COBOL fixed-format strings must be stripped before comparison. "
+            "All PIC V implicit decimals must become Decimal objects."
+        ),
     ) -> None:
         self.language = language
         self.version = version
         self.deprecated_patterns = deprecated_patterns
         self.gotchas = gotchas
         self.recommended_libraries = recommended_libraries
+        self.style_guide = style_guide
+        self.type_system = type_system
+        self.async_model = async_model
+        self.test_framework = test_framework
+        self.notes = notes
+
+    # ------------------------------------------------------------------
+    # Normalisation helpers — convert plain strings to structured dicts
+    # ------------------------------------------------------------------
+
+    _LIBRARY_META: dict = {
+        "decimal":     ("Replaces COBOL packed decimal arithmetic",       "from decimal import Decimal, ROUND_HALF_UP", "https://docs.python.org/3/library/decimal.html"),
+        "datetime":    ("Replaces YYYYMMDD integer date storage",         "from datetime import date, datetime",         "https://docs.python.org/3/library/datetime.html"),
+        "dataclasses": ("Replaces COBOL data structures and copybooks",   "from dataclasses import dataclass, field",    "https://docs.python.org/3/library/dataclasses.html"),
+        "enum":        ("Replaces COBOL 88-level condition names",        "from enum import Enum",                       "https://docs.python.org/3/library/enum.html"),
+        "pathlib":     ("Replaces COBOL file section I/O",                "from pathlib import Path",                    "https://docs.python.org/3/library/pathlib.html"),
+        "logging":     ("Replaces COBOL DISPLAY statements",              "import logging",                              "https://docs.python.org/3/library/logging.html"),
+    }
+
+    @classmethod
+    def _norm_library(cls, item: object) -> dict:
+        if isinstance(item, dict):
+            return item
+        name = str(item)
+        purpose, imp, url = cls._LIBRARY_META.get(
+            name,
+            (f"Python standard library: {name}", f"import {name}", f"https://docs.python.org/3/library/{name}.html"),
+        )
+        return {"name": name, "purpose": purpose, "import": imp, "docs_url": url}
+
+    @staticmethod
+    def _norm_deprecated(item: object) -> dict:
+        if isinstance(item, dict):
+            return item
+        s = str(item)
+        if " → " in s:
+            cobol_pattern, python_equivalent = s.split(" → ", 1)
+            cobol_pattern = cobol_pattern.strip()
+            python_equivalent = python_equivalent.strip()
+        else:
+            cobol_pattern = s
+            python_equivalent = ""
+        risk = (
+            "Critical"
+            if any(w in s.lower() for w in ["never float", "financial", "regulatory"])
+            else "High"
+        )
+        return {
+            "cobol_pattern": cobol_pattern,
+            "python_equivalent": python_equivalent,
+            "risk": risk,
+            "notes": "",
+        }
+
+    @staticmethod
+    def _norm_gotcha(item: object, idx: int = 0) -> dict:
+        if isinstance(item, dict):
+            return item
+        s = str(item)
+        if ": " in s:
+            title, description = s.split(": ", 1)
+        else:
+            title = s[:40]
+            description = s
+        severity = "Critical" if ("NEVER" in s or "financial" in s.lower()) else "High"
+        return {
+            "id": f"G-{idx + 1:03d}",
+            "title": title.strip().title(),
+            "description": description.strip(),
+            "cobol_example": "",
+            "python_fix": "",
+            "severity": severity,
+        }
 
     def to_dict(self) -> dict:
         return {
             "language": self.language,
             "version": self.version,
-            "deprecated_patterns": self.deprecated_patterns,
-            "gotchas": self.gotchas,
-            "recommended_libraries": self.recommended_libraries,
+            "recommended_libraries": [self._norm_library(lib) for lib in self.recommended_libraries],
+            "deprecated_patterns":   [self._norm_deprecated(p) for p in self.deprecated_patterns],
+            "gotchas":               [self._norm_gotcha(g, i) for i, g in enumerate(self.gotchas)],
+            "style_guide":           self.style_guide,
+            "type_system":           self.type_system,
+            "async_model":           self.async_model,
+            "test_framework":        self.test_framework,
+            "notes":                 self.notes,
         }
 
 
