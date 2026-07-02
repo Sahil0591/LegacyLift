@@ -225,5 +225,22 @@ class Project(BaseModel):
     loop. Each entry: {id, source, source_file, chunk_name, text, created_at}.
     """
 
+    # --- Client-driven ("cloud") workbench persistence ---
+    # Set for projects created by the browser New Migration flow (id prefix
+    # "cloud-") when the user is signed in. The whole workbench state is
+    # computed client-side (rule-based analysis + on-demand /llm/* calls), so
+    # rather than re-deriving it server-side we persist the client's own blobs
+    # here — a durable, owner-scoped mirror of what the offline flow keeps in
+    # localStorage (client/lib/projectStore.ts). Round-tripped via
+    # workbench_projects.pipeline_state_json (see db/workbench_repositories.py).
+    client_analysis: Optional[dict] = None
+    """Full immutable AnalyzeResult blob (chunks, rules, graph, files, profile)."""
+
+    client_progress: Optional[dict] = None
+    """chunk_id -> {status, migrated_code, static_analysis, ai_review, test_results}."""
+
+    client_file_status: Optional[dict] = None
+    """filename -> true, for files the human has finalized."""
+
     class Config:
         use_enum_values = True

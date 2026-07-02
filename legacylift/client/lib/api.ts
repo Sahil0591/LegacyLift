@@ -206,6 +206,8 @@ export interface ServerProject {
   project_id: string;
   name: string;
   status: string;
+  /** Original analysis source ("upload" | "github:owner/repo") for cloud projects; null otherwise. */
+  source: string | null;
   source_language: string;
   target_language: string;
   chunk_count: number;
@@ -233,6 +235,80 @@ export async function listServerProjects(): Promise<ServerProject[]> {
   } catch {
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cloud (DB-backed) workbench persistence — the signed-in New Migration flow.
+// Mirrors client/lib/projectStore.ts's localStorage API, but every blob is
+// stored server-side against the authenticated user via the /project/import,
+// /progress, and /workbench endpoints.
+// ---------------------------------------------------------------------------
+
+export interface ImportProjectResponse {
+  project_id: string;
+  name: string;
+  status: string;
+  created_at: string;
+}
+
+/** Persist a browser-computed AnalyzeResult as a new cloud project. Returns the
+ *  minted "cloud-" project id. Requires the user to be signed in (Clerk token). */
+export async function importAnalysis(
+  analysis: unknown,
+  sourceLanguage?: string,
+): Promise<ImportProjectResponse> {
+  return await request<ImportProjectResponse>("/project/import", {
+    method: "POST",
+    body: JSON.stringify({ analysis, source_language: sourceLanguage }),
+  });
+}
+
+export interface WorkbenchProgressChunk {
+  id: string;
+  status: string;
+  migrated_code: string;
+  static_analysis: unknown | null;
+  ai_review: unknown | null;
+  test_results: unknown[];
+}
+
+/** Save the full workbench progress (code, checks, tests, status, finalized
+ *  files) for a cloud project. */
+export async function saveWorkbenchProgress(
+  projectId: string,
+  chunks: WorkbenchProgressChunk[],
+  finalizedFiles: Record<string, boolean>,
+): Promise<void> {
+  await request<unknown>(`/project/${encodeURIComponent(projectId)}/progress`, {
+    method: "PUT",
+    body: JSON.stringify({ chunks, finalized_files: finalizedFiles }),
+  });
+}
+
+export interface WorkbenchSnapshot {
+  project_id: string;
+  analysis: unknown;
+  progress: Record<string, WorkbenchProgressChunk & Record<string, unknown>>;
+  file_status: Record<string, boolean>;
+}
+
+/** Fetch a cloud project's stored analysis + progress for rehydration.
+ *  Returns undefined when the project has no stored workbench (404). */
+export async function getWorkbench(
+  projectId: string,
+): Promise<WorkbenchSnapshot | undefined> {
+  return await request<WorkbenchSnapshot | undefined>(
+    `/project/${encodeURIComponent(projectId)}/workbench`,
+    {},
+    { ignoreNotFound: true },
+  );
+}
+
+/** Delete a DB-backed project the user owns (cloud or pipeline). */
+export async function deleteServerProject(projectId: string): Promise<void> {
+  await request<unknown>(`/project/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function getUserLimits(): Promise<UserLimits | null> {

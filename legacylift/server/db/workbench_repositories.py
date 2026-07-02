@@ -51,6 +51,11 @@ _RESIDUAL_FIELDS = (
     "risk_summary",
     "needs_review_count",
     "business_rules",
+    # Client-driven ("cloud") workbench blobs — persisted verbatim so the
+    # browser can rehydrate the exact state it computed (see models/project.py).
+    "client_analysis",
+    "client_progress",
+    "client_file_status",
 )
 
 

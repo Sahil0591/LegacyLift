@@ -19,6 +19,7 @@ import {
   saveLessons,
   saveProgress,
   updateProjectProgress,
+  type ChunkProgressEntry,
 } from "@/lib/projectStore";
 import type { AnalyzeResult } from "@/lib/analyze";
 import type { Lesson } from "@/lib/lessons";
@@ -36,7 +37,13 @@ import type {
   RuleConfidence,
   TargetProfile,
 } from "@/types/legacylift";
-import { addProjectLesson, getProjectFiles, getProjectLessons } from "@/lib/api";
+import {
+  addProjectLesson,
+  getProjectFiles,
+  getProjectLessons,
+  getWorkbench,
+  saveWorkbenchProgress,
+} from "@/lib/api";
 
 const INITIAL_STATE: PipelineState = {
   projectId: null,
@@ -101,6 +108,46 @@ function stateFromAnalysis(
     files: a.files ?? [],
     migrationComplete: false,
     error: null,
+  };
+}
+
+// Merge an immutable analysis blob with saved per-chunk progress into a ready
+// PipelineState. Shared by the localStorage (isLocal) and DB (isCloud) load
+// paths so both restore identically.
+function hydrateState(
+  projectId: string,
+  analysis: AnalyzeResult,
+  progress: Record<string, ChunkProgressEntry> | null,
+): PipelineState {
+  const base = stateFromAnalysis(projectId, analysis);
+  if (!progress) return base;
+
+  const chunks = base.chunks.map((c) => {
+    const saved = progress[c.id];
+    if (!saved) return c;
+    // Entries saved before static_analysis/ai_review/test_results were added
+    // to the progress shape won't have those keys — fall back to the
+    // freshly-computed chunk's defaults instead of overwriting with undefined.
+    return {
+      ...c,
+      status: saved.status as typeof c.status,
+      migrated_code: saved.migrated_code,
+      static_analysis: saved.static_analysis ?? c.static_analysis,
+      ai_review: saved.ai_review ?? c.ai_review,
+      test_results: saved.test_results ?? c.test_results,
+    };
+  });
+  const allApproved = chunks.length > 0 && chunks.every((c) => c.status === "Approved");
+  return {
+    ...base,
+    chunks,
+    currentChunk:
+      chunks.find((c) => c.status === "Review") ??
+      chunks.find((c) => c.status === "Pending") ??
+      chunks[0] ??
+      null,
+    migrationComplete: allApproved,
+    currentLayer: allApproved ? 4 : base.currentLayer,
   };
 }
 
@@ -271,8 +318,14 @@ function chunkFromGraphNode(node: Record<string, unknown>): MigrationChunk {
 export function usePipeline(projectId: string | null): UsePipelineReturn {
   const demo = isDemoProject(projectId);
   const isLocal = !!projectId && projectId.startsWith("local");
-  const offline = demo || isLocal;
-  // Demo + locally-analysed projects don't open a real socket.
+  // Cloud projects ("cloud-" prefix) are computed client-side exactly like the
+  // offline flow, but every mutation is persisted to the DB instead of
+  // localStorage. They therefore drive the LLM/approval logic locally (offline
+  // === true) while hydrating + saving over the network.
+  const isCloud = !!projectId && projectId.startsWith("cloud-");
+  const offline = demo || isLocal || isCloud;
+  // Demo, locally-analysed, and cloud projects don't open a real socket — the
+  // browser owns the pipeline; there are no server-pushed events to stream.
   const { status: wsStatus, subscribe } = useWebSocket(
     offline ? null : projectId,
   );
@@ -306,42 +359,48 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
         setState({ ...INITIAL_STATE, projectId });
         return;
       }
-      const base = stateFromAnalysis(projectId, analysis);
-      const progress = loadProgress(projectId);
-      if (progress) {
-        const chunks = base.chunks.map((c) => {
-          const saved = progress[c.id];
-          if (!saved) return c;
-          // Entries saved before static_analysis/ai_review/test_results were
-          // added to ChunkProgressEntry won't have those keys — fall back to
-          // the freshly-computed chunk's defaults instead of overwriting with
-          // undefined (which crashed ChunkReview's `test_results.filter(...)`).
-          return {
-            ...c,
-            status: saved.status as typeof c.status,
-            migrated_code: saved.migrated_code,
-            static_analysis: saved.static_analysis ?? c.static_analysis,
-            ai_review: saved.ai_review ?? c.ai_review,
-            test_results: saved.test_results ?? c.test_results,
-          };
-        });
-        const allApproved = chunks.every((c) => c.status === "Approved");
-        setState({
-          ...base,
-          chunks,
-          currentChunk: chunks.find((c) => c.status === "Review") ?? chunks.find((c) => c.status === "Pending") ?? chunks[0] ?? null,
-          migrationComplete: allApproved,
-          currentLayer: allApproved ? 4 : base.currentLayer,
-        });
-      } else {
-        setState(base);
-      }
+      setState(hydrateState(projectId, analysis, loadProgress(projectId)));
       return;
+    }
+    if (isCloud && projectId) {
+      // DB-backed: fetch the stored analysis blob + progress + lessons and
+      // rehydrate exactly as the local path does, just over the network.
+      let cancelled = false;
+      setState({ ...INITIAL_STATE, projectId });
+      setFinalizedFiles({});
+      setLessons([]);
+      (async () => {
+        const [snapshot, loadedLessons] = await Promise.all([
+          getWorkbench(projectId).catch(() => undefined),
+          getProjectLessons(projectId).catch(() => []),
+        ]);
+        if (cancelled) return;
+        if (snapshot?.analysis) {
+          setState(
+            hydrateState(
+              projectId,
+              snapshot.analysis as AnalyzeResult,
+              (snapshot.progress as Record<string, ChunkProgressEntry>) ?? null,
+            ),
+          );
+          setFinalizedFiles(
+            Object.fromEntries(
+              Object.entries(snapshot.file_status ?? {})
+                .filter(([, v]) => v)
+                .map(([k]) => [k, true as const]),
+            ),
+          );
+        }
+        setLessons(loadedLessons);
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
     setFinalizedFiles({});
     setLessons([]);
     setState({ ...INITIAL_STATE, projectId });
-  }, [projectId, demo, isLocal]);
+  }, [projectId, demo, isLocal, isCloud]);
 
   // Backend projects keep lessons in the shared project record so the
   // feedback loop follows the authenticated user across devices.
@@ -735,6 +794,34 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
   }, [state.chunks, state.migrationComplete, isLocal, projectId]);
 
   // ------------------------------------------------------------------
+  // Auto-save progress for cloud (DB-backed) projects.
+  // Debounced so a burst of chunk edits (auto-fix rounds, running checks)
+  // collapses into one PUT instead of hammering the backend.
+  // ------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!isCloud || !projectId || state.chunks.length === 0) return;
+    const timer = setTimeout(() => {
+      saveWorkbenchProgress(
+        projectId,
+        state.chunks.map((c) => ({
+          id: c.id,
+          status: c.status,
+          migrated_code: c.migrated_code,
+          static_analysis: c.static_analysis,
+          ai_review: c.ai_review,
+          test_results: c.test_results,
+        })),
+        finalizedFiles,
+      ).catch(() => {
+        // Best-effort — the in-memory state is authoritative until the next
+        // successful save; a later edit re-attempts persistence.
+      });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [state.chunks, state.migrationComplete, finalizedFiles, isCloud, projectId]);
+
+  // ------------------------------------------------------------------
   // Optimistic UI helpers
   // ------------------------------------------------------------------
 
@@ -846,7 +933,9 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
         return;
       }
 
-      if (!offline && projectId) {
+      // Cloud + pipeline projects both persist lessons server-side (isLocal
+      // already returned above; only demo has no durable store).
+      if (!demo && projectId) {
         addProjectLesson(projectId, lesson)
           .then((savedLesson) => {
             setLessons((prev) =>
@@ -861,7 +950,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
           });
       }
     },
-    [isLocal, offline, projectId],
+    [isLocal, demo, projectId],
   );
 
   return {

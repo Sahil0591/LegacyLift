@@ -36,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -235,6 +236,38 @@ class RuleReviewRequest(BaseModel):
     reviewer_identity: Optional[str] = None
     allow_unknown_owner: bool = False
     source_surface: str = WORKBENCH_SURFACE
+
+
+class ImportProjectRequest(BaseModel):
+    """A browser-computed AnalyzeResult to persist as a client-driven ("cloud")
+    project. `analysis` is stored verbatim; only a few summary fields are lifted
+    out so the projects list / status endpoints stay accurate without parsing
+    the blob."""
+
+    analysis: dict
+    source_language: SourceLanguage = SourceLanguage.COBOL
+    name: Optional[str] = Field(None, max_length=120)
+
+    @field_validator("source_language", mode="before")
+    @classmethod
+    def normalise_source_language(cls, value):
+        if isinstance(value, str) and value.lower() == "cobol":
+            return SourceLanguage.COBOL
+        return value
+
+
+class _ProgressChunkIn(BaseModel):
+    id: str = Field(..., min_length=1, max_length=255)
+    status: str = Field("Pending", max_length=32)
+    migrated_code: str = Field("", max_length=200_000)
+    static_analysis: Optional[dict] = None
+    ai_review: Optional[dict] = None
+    test_results: list[dict] = Field(default_factory=list, max_length=64)
+
+
+class SaveProgressRequest(BaseModel):
+    chunks: list[_ProgressChunkIn] = Field(default_factory=list, max_length=4_000)
+    finalized_files: dict[str, bool] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1114,6 +1147,7 @@ async def list_projects(user_id: str = Depends(get_current_user_id)):
                 "project_id":   p.id,
                 "name":         p.name,
                 "status":       _status_str(p),
+                "source":       (p.client_analysis or {}).get("source") if p.client_analysis else None,
                 "source_language": p.source_language if isinstance(p.source_language, str) else p.source_language.value,
                 "target_language": p.target_language,
                 "chunk_count":  p.chunk_count,
@@ -1124,6 +1158,162 @@ async def list_projects(user_id: str = Depends(get_current_user_id)):
             for p in projects
         ]
     }
+
+
+# ===========================================================================
+# Client-driven ("cloud") workbench persistence.
+#
+# The browser New Migration flow computes the whole analysis itself and, when
+# the user is signed in, persists it here instead of localStorage. These
+# projects carry a "cloud-" id prefix so the client keeps driving the LLM /
+# approval logic (like the offline flow) while every mutation is durably saved
+# to DATABASE_URL via storage.persist() -> workbench_* tables.
+# ===========================================================================
+
+def _detect_source_language(analysis: dict, fallback: SourceLanguage) -> SourceLanguage:
+    """Best-effort language pick from the first chunk's source; defaults to the
+    caller-provided fallback (COBOL unless the client said otherwise)."""
+    chunks = analysis.get("chunks") or []
+    src = (chunks[0].get("source_code") if chunks and isinstance(chunks[0], dict) else "") or ""
+    if "IDENTIFICATION DIVISION" in src.upper() or "PROCEDURE DIVISION" in src.upper():
+        return SourceLanguage.COBOL
+    if "public class" in src or "import java." in src:
+        return SourceLanguage.JAVA
+    if "Dim " in src and " As " in src:
+        return SourceLanguage.VB6
+    return fallback
+
+
+@app.post("/project/import", status_code=201)
+async def import_project(body: ImportProjectRequest, user_id: str = Depends(get_current_user_id)):
+    """Persist a browser-computed AnalyzeResult as a new cloud project owned by
+    the authenticated user. Returns the minted project id."""
+    if not storage.can_create_project(user_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Project limit reached. Delete an existing project to create a new one.",
+        )
+
+    analysis = body.analysis or {}
+    chunks = analysis.get("chunks") or []
+    summary = analysis.get("summary") or {}
+    profile = analysis.get("targetProfile") or {}
+
+    project = Project(
+        id=f"cloud-{uuid.uuid4().hex[:8]}",
+        owner_id=user_id,
+        name=(body.name or analysis.get("projectName") or "Untitled").strip() or "Untitled",
+        source_language=_detect_source_language(analysis, body.source_language),
+        target_language=(profile.get("language") or "Python") if isinstance(profile, dict) else "Python",
+        status="ready",
+        chunk_count=len(chunks),
+        risk_summary=summary.get("byLevel") or {},
+        target_profile=profile if isinstance(profile, dict) and profile else None,
+        client_analysis=analysis,
+        client_progress={},
+        client_file_status={},
+    )
+    storage.put(project)
+    storage.increment_projects_used(user_id)
+    asyncio.ensure_future(storage.persist())
+    return {
+        "project_id": project.id,
+        "name": project.name,
+        "status": _status_str(project),
+        "created_at": project.created_at.isoformat(),
+    }
+
+
+def _apply_progress(project: Project, body: SaveProgressRequest) -> None:
+    """Fold the client's per-chunk progress into both the verbatim blob (for
+    loss-less rehydrate) and the normalized Project dicts (so the workbench_*
+    tables, list counts, and status stay correct)."""
+    progress: dict[str, dict] = {}
+    project.chunk_migrations = {}
+    project.chunk_approvals = {}
+    project.chunk_static_analysis = {}
+    project.chunk_ai_reviews = {}
+    project.chunk_test_results = {}
+
+    approved = 0
+    for c in body.chunks:
+        progress[c.id] = {
+            "status": c.status,
+            "migrated_code": c.migrated_code,
+            "static_analysis": c.static_analysis,
+            "ai_review": c.ai_review,
+            "test_results": c.test_results,
+        }
+        if c.migrated_code:
+            project.chunk_migrations[c.id] = c.migrated_code
+        if c.status == "Approved":
+            project.chunk_approvals[c.id] = "approved"
+            approved += 1
+        elif c.status == "Rejected":
+            project.chunk_approvals[c.id] = "rejected"
+        if c.static_analysis is not None:
+            project.chunk_static_analysis[c.id] = c.static_analysis
+        if c.ai_review is not None:
+            project.chunk_ai_reviews[c.id] = c.ai_review
+        if c.test_results:
+            project.chunk_test_results[c.id] = c.test_results
+
+    project.client_progress = progress
+    project.client_file_status = {k: v for k, v in body.finalized_files.items() if v}
+
+    total = len(body.chunks)
+    if total > 0 and approved == total:
+        if _status_str(project) != "complete":
+            project.completed_at = datetime.now(timezone.utc)
+        project.status = "complete"
+    elif approved > 0:
+        project.status = "migrating"
+    else:
+        project.status = "ready"
+
+
+@app.put("/project/{project_id}/progress", status_code=200)
+async def save_progress(
+    project_id: str,
+    body: SaveProgressRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Save the client-driven workbench progress (migrated code, checks, tests,
+    per-chunk status, finalized files) for a cloud project."""
+    project = _get_project(project_id, user_id)
+    _apply_progress(project, body)
+    asyncio.ensure_future(storage.persist())
+    return {
+        "project_id": project_id,
+        "status": _status_str(project),
+        "chunks_saved": len(body.chunks),
+    }
+
+
+@app.get("/project/{project_id}/workbench")
+async def get_workbench(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """Return the stored AnalyzeResult blob + progress + finalized files so the
+    browser can rehydrate a cloud project exactly as it was left."""
+    project = _get_project(project_id, user_id)
+    if not project.client_analysis:
+        raise HTTPException(status_code=404, detail="No stored workbench for this project")
+    return {
+        "project_id": project_id,
+        "analysis": project.client_analysis,
+        "progress": project.client_progress or {},
+        "file_status": project.client_file_status or {},
+    }
+
+
+@app.delete("/project/{project_id}", status_code=200)
+async def delete_project(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """Delete a project the user owns and free one project-quota slot."""
+    _get_project(project_id, user_id)  # 404/403 guard
+    storage.delete(project_id)
+    lim = storage.get_limits(user_id)
+    lim.projects_used = max(0, lim.projects_used - 1)
+    asyncio.ensure_future(storage.persist())
+    return {"deleted": project_id}
 
 
 # ---------------------------------------------------------------------------

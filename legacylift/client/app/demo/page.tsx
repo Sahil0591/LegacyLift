@@ -13,6 +13,7 @@ import { Footer } from "@/components/shared/Footer";
 import { AmbientBackground } from "@/components/landing/AmbientBackground";
 import { FileUpload } from "@/components/pipeline/FileUpload";
 import { storeAnalysis } from "@/lib/projectStore";
+import { importAnalysis } from "@/lib/api";
 import { DEMO_HERITAGE_PROJECT_ID, DEMO_PROJECT_ID } from "@/lib/demoData";
 import type { AnalyzeResult } from "@/lib/analyze";
 import type { ProjectLanguage } from "@/types/legacylift";
@@ -44,7 +45,18 @@ export default function DemoPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Analysis failed");
-      const id = storeAnalysis(data as AnalyzeResult);
+      const analysis = data as AnalyzeResult;
+
+      // Persist to the DB (owner-scoped). /demo is behind Clerk middleware, so
+      // the user is always signed in here; localStorage is only a fallback for
+      // a backend/DB outage so the workbench still opens.
+      let id: string;
+      try {
+        const created = await importAnalysis(analysis, repoLang);
+        id = created.project_id;
+      } catch {
+        id = storeAnalysis(analysis);
+      }
       router.push(`/project/${id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analysis failed");

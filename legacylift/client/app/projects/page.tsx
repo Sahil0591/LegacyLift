@@ -23,6 +23,7 @@ import {
   type ProjectIndexEntry,
 } from "@/lib/projectStore";
 import {
+  deleteServerProject,
   getUserLimits,
   listServerProjects,
   type ServerProject,
@@ -46,7 +47,7 @@ function projectFromServer(project: ServerProject): DashboardProject {
   return {
     id: project.project_id,
     name: project.name,
-    source: "server",
+    source: project.source ?? "server",
     language: project.source_language,
     chunksTotal: project.chunk_count,
     chunksApproved: project.chunks_approved,
@@ -151,15 +152,13 @@ function ProjectCard({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <StatusBadge status={project.status} />
-          {project.localOnly && (
-            <button
-              onClick={() => onDelete(project.id)}
-              title="Delete project"
-              className="rounded-lg p-1.5 text-sub opacity-0 transition-all hover:bg-ink/10 hover:text-red-400 group-hover:opacity-100"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          )}
+          <button
+            onClick={() => onDelete(project.id)}
+            title="Delete project"
+            className="rounded-lg p-1.5 text-sub opacity-0 transition-all hover:bg-ink/10 hover:text-red-400 group-hover:opacity-100"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
 
@@ -291,9 +290,33 @@ export default function ProjectsPage() {
     };
   }, []);
 
-  const handleDelete = (id: string) => {
-    deleteProject(id);
+  const handleDelete = async (id: string) => {
+    const project = projects.find((p) => p.id === id);
+    if (!project) return;
+    // Optimistic removal; localStorage projects delete locally, DB-backed
+    // (cloud/pipeline) projects delete server-side and free a quota slot.
     setProjects((prev) => prev.filter((p) => p.id !== id));
+    try {
+      if (project.localOnly) {
+        deleteProject(id);
+      } else {
+        await deleteServerProject(id);
+        setLimits((prev) =>
+          prev
+            ? {
+                ...prev,
+                projects_used: Math.max(0, prev.projects_used - 1),
+                projects_remaining: prev.projects_remaining + 1,
+              }
+            : prev,
+        );
+      }
+    } catch {
+      // Re-add on failure so the card isn't silently lost.
+      setProjects((prev) =>
+        prev.some((p) => p.id === id) ? prev : [project, ...prev],
+      );
+    }
   };
 
   return (
