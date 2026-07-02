@@ -372,14 +372,26 @@ async def readiness_check():
     llm_configured = _get_llm().is_configured()
     missing_env = [v for v in _REQUIRED_PRODUCTION_ENV_VARS if not os.getenv(v)]
 
-    ready = demo_mode or (llm_configured and not missing_env)
-
     if demo_mode:
         storage_mode = "json_file"
     elif get_database_url().startswith("postgresql"):
         storage_mode = "postgres"
     else:
         storage_mode = "sqlite"
+
+    database_status = "skipped"
+    database_error = None
+    if not demo_mode:
+        try:
+            async with get_session() as session:
+                await session.execute(text("SELECT 1"))
+            database_status = "ok"
+        except Exception as exc:
+            logger.exception("readiness_check database=unavailable")
+            database_status = "unavailable"
+            database_error = str(exc)
+
+    ready = demo_mode or (llm_configured and not missing_env and database_status == "ok")
 
     return JSONResponse(
         status_code=200 if ready else 503,
@@ -388,6 +400,7 @@ async def readiness_check():
             "demo_mode": demo_mode,
             "llm_configured": llm_configured,
             "storage_mode": storage_mode,
+            "database": {"status": database_status, "error": database_error},
             "missing_env": missing_env,
         },
     )
