@@ -102,9 +102,9 @@ function SourceLabel({ source }: { source: string }) {
     : "Uploaded files";
 
   return (
-    <span className="inline-flex items-center gap-1 truncate font-mono text-xs text-sub">
+    <span className="flex min-w-0 max-w-full items-center gap-1 font-mono text-xs text-sub">
       <Icon className="h-3 w-3 shrink-0" />
-      <span className="truncate">{label}</span>
+      <span className="min-w-0 truncate">{label}</span>
     </span>
   );
 }
@@ -135,7 +135,7 @@ function ProjectCard({
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="group relative flex flex-col gap-3 rounded-2xl border border-ink/10 bg-surface/40 p-5 backdrop-blur transition-colors hover:border-[#7C3AED]/30 hover:bg-surface/60"
+      className="group relative flex min-w-0 flex-col gap-3 rounded-2xl border border-ink/10 bg-surface/40 p-5 backdrop-blur transition-colors hover:border-[#7C3AED]/30 hover:bg-surface/60"
     >
       {/* Top row */}
       <div className="flex items-start justify-between gap-3">
@@ -308,8 +308,8 @@ export default function ProjectsPage() {
         <Navbar />
         <main className="mx-auto max-w-3xl px-6 py-12">
           {/* Header */}
-          <div className="mb-8 flex items-center justify-between">
-            <div>
+          <div className="mb-8 flex items-center justify-between gap-3">
+            <div className="min-w-0">
               <h1 className="text-2xl font-bold tracking-tight text-ink">
                 Your migrations
               </h1>
@@ -319,10 +319,11 @@ export default function ProjectsPage() {
             </div>
             <Link
               href="/demo"
-              className="inline-flex items-center gap-2 rounded-xl bg-[#7C3AED] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-[#6D28D9]"
+              className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-[#7C3AED] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-[#6D28D9]"
             >
               <Plus className="h-4 w-4" />
-              New migration
+              <span className="hidden sm:inline">New migration</span>
+              <span className="sm:hidden">New</span>
             </Link>
           </div>
 
@@ -337,7 +338,7 @@ export default function ProjectsPage() {
           {projects.length === 0 ? (
             <EmptyState />
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {projects.map((p) => (
                 <ProjectCard key={p.id} project={p} onDelete={handleDelete} />
               ))}
