@@ -74,6 +74,10 @@ DEFAULT_OWNERSHIP_GROUPS = (
 )
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 @dataclass(frozen=True)
 class PersistedLayer0Summary:
     repository_id: str
@@ -238,7 +242,7 @@ async def mark_webhook_delivery_processed(
 ) -> GitHubWebhookDelivery:
     delivery.status = status
     delivery.error = error
-    delivery.processed_at = datetime.now(UTC)
+    delivery.processed_at = _utcnow()
     await session.flush()
     return delivery
 
@@ -297,7 +301,7 @@ async def upsert_commit(
         commit = Commit(repository_id=repository_id, sha=sha, ref=ref)
         session.add(commit)
     else:
-        commit.indexed_at = datetime.now(UTC)
+        commit.indexed_at = _utcnow()
 
     await session.flush()
     return commit

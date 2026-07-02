@@ -76,7 +76,7 @@ def apply_review_transition(
     current_owner = state.current_owner_name or "Unknown"
     review_state = normalize_review_state(state.review_state)
     approval_state = normalize_approval_state(state.approval_state)
-    timestamp = datetime.now(UTC)
+    timestamp = datetime.now(UTC).replace(tzinfo=None)
     approval_timestamp: datetime | None = None
     clean_reason = reason.strip() if isinstance(reason, str) and reason.strip() else None
 
