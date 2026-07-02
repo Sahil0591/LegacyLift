@@ -203,7 +203,13 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const projectId = params.id;
   const demo = isDemoProject(projectId);
   const local = projectId.startsWith("local");
-  const offline = demo || local;
+  // Cloud projects ("cloud-" prefix) are DB-backed but still client-driven —
+  // the browser owns generation/approval via the /llm/* endpoints, exactly
+  // like local/demo. They must NOT hit the backend-pipeline routes
+  // (confirm-rule/select-chunk/approve), which only know pipeline projects and
+  // 404 on a cloud id. Keep this in sync with usePipeline's own `offline`.
+  const cloud = projectId.startsWith("cloud-");
+  const offline = demo || local || cloud;
 
   const {
     state,
