@@ -12,4 +12,3 @@ legacylift/
 
 Start with [`legacylift/README.md`](legacylift/README.md) for local setup, database configuration, GitHub App setup, extension loading, and verification commands.
 
-TODO
