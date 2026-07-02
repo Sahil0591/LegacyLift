@@ -48,6 +48,7 @@ import {
 } from "@/components/workbench/WorkbenchHeader";
 import { ChunkQueue } from "@/components/workbench/ChunkQueue";
 import { ChunkReview } from "@/components/workbench/ChunkReview";
+import { WalkthroughTour } from "@/components/workbench/WalkthroughTour";
 import { OverviewPanel } from "@/components/workbench/OverviewPanel";
 import { FileContextPanel } from "@/components/workbench/FileContextPanel";
 import { FileFinalizeModal } from "@/components/workbench/FileFinalizeModal";
@@ -239,7 +240,30 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const [projectReviewError, setProjectReviewError] = useState<string | null>(null);
   const [bulkFinalizeOpen, setBulkFinalizeOpen] = useState(false);
   const [quota, setQuota] = useState<{ remaining: number; max: number } | null>(null);
+  const [tourOpen, setTourOpen] = useState(false);
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+
+  // Auto-launch the guided walkthrough the first time someone lands on a
+  // project — non-technical users get oriented without hunting for help. The
+  // lightbulb in the header replays it any time after that.
+  useEffect(() => {
+    let seen = false;
+    try {
+      seen = localStorage.getItem("legacylift.tourSeen.v1") === "1";
+    } catch {
+      /* private mode / storage blocked — just show the tour */
+    }
+    if (seen) return;
+    const timer = setTimeout(() => {
+      setTourOpen(true);
+      try {
+        localStorage.setItem("legacylift.tourSeen.v1", "1");
+      } catch {
+        /* ignore */
+      }
+    }, 700);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Jump straight to a chunk's Review view — used by the header job pill and
   // by toast "View chunk" actions so background work is never a dead end.
@@ -722,6 +746,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         quotaMax={quota?.max ?? null}
         activeJob={activeJob}
         onJumpToJob={busyChunk ? () => jumpToChunk(busyChunk.id) : undefined}
+        onStartTour={() => setTourOpen(true)}
       />
 
       <div className="min-h-0 flex-1">
@@ -740,7 +765,10 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           </div>
         ) : (
           <div className="flex h-full">
-            <aside className="hidden w-72 shrink-0 border-r border-ink/10 md:block">
+            <aside
+              data-tour="queue"
+              className="hidden w-72 shrink-0 border-r border-ink/10 md:block"
+            >
               <ChunkQueue
                 chunks={state.chunks}
                 selectedId={reviewChunk?.id ?? null}
@@ -748,7 +776,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                 busyId={busyId}
               />
             </aside>
-            <main className="min-w-0 flex-1">
+            <main data-tour="review-main" className="min-w-0 flex-1">
               {explicit ? (
                 <ChunkReview
                   chunk={explicit}
@@ -807,6 +835,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
               )}
             </main>
             <aside
+              data-tour="context"
               className={`hidden shrink-0 border-l border-ink/10 transition-all duration-200 lg:block ${
                 fileContextCollapsed ? "w-10" : "w-96"
               }`}
@@ -853,6 +882,13 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       )}
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
+
+      <WalkthroughTour
+        open={tourOpen}
+        onClose={() => setTourOpen(false)}
+        view={view}
+        onViewChange={setView}
+      />
     </div>
   );
 }
