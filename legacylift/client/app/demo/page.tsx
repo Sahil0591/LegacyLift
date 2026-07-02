@@ -13,7 +13,12 @@ import { Footer } from "@/components/shared/Footer";
 import { AmbientBackground } from "@/components/landing/AmbientBackground";
 import { FileUpload } from "@/components/pipeline/FileUpload";
 import { storeAnalysis } from "@/lib/projectStore";
-import { importAnalysis } from "@/lib/api";
+import {
+  createProject,
+  importAnalysis,
+  startPipeline,
+  uploadFiles,
+} from "@/lib/api";
 import { DEMO_HERITAGE_PROJECT_ID, DEMO_PROJECT_ID } from "@/lib/demoData";
 import type { AnalyzeResult } from "@/lib/analyze";
 import type { ProjectLanguage } from "@/types/legacylift";
@@ -69,11 +74,26 @@ export default function DemoPage() {
     analyzeAndGo({ repoUrl });
   };
 
-  const handleFileSubmit = async (files: File[]) => {
-    const contents = await Promise.all(
-      files.map(async (f) => ({ filename: f.name, content: await f.text() })),
-    );
-    await analyzeAndGo({ files: contents });
+  const handleFileSubmit = async (
+    files: File[],
+    schema: File | null,
+    language: ProjectLanguage,
+  ) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const projectName =
+        files.length === 1
+          ? files[0].name.replace(/\.[^.]+$/, "")
+          : `${language} upload`;
+      const project = await createProject({ name: projectName, language });
+      await uploadFiles(project.project_id, files, schema ?? undefined);
+      await startPipeline(project.project_id);
+      router.push(`/project/${project.project_id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Project creation failed");
+      setLoading(false);
+    }
   };
 
   return (
