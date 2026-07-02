@@ -10,6 +10,7 @@ import {
   Download,
   Loader2,
   ArrowUpRight,
+  Lightbulb,
 } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
@@ -37,6 +38,8 @@ interface WorkbenchHeaderProps {
   /** A chunk generating/testing in the background while the user is elsewhere. */
   activeJob?: ActiveJob | null;
   onJumpToJob?: () => void;
+  /** Launch the guided walkthrough (the lightbulb button). */
+  onStartTour?: () => void;
 }
 
 const TABS: { id: WorkbenchView; label: string; Icon: typeof Cpu }[] = [
@@ -56,6 +59,7 @@ export function WorkbenchHeader({
   quotaMax = null,
   activeJob = null,
   onJumpToJob,
+  onStartTour,
 }: WorkbenchHeaderProps) {
   const quotaRatio =
     quotaRemaining != null && quotaMax ? quotaRemaining / quotaMax : null;
@@ -94,6 +98,7 @@ export function WorkbenchHeader({
         {TABS.map(({ id, label, Icon }) => (
           <button
             key={id}
+            data-tour={`tab-${id}`}
             onClick={() => onViewChange(id)}
             className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
               view === id
@@ -107,7 +112,7 @@ export function WorkbenchHeader({
         ))}
       </div>
 
-      <div className="hidden items-center gap-2 lg:flex">
+      <div data-tour="progress" className="hidden items-center gap-2 lg:flex">
         <div className="h-1.5 w-24 overflow-hidden rounded-full bg-ink/10">
           <div
             className="h-full rounded-full bg-[#10B981] transition-all duration-500"
@@ -167,6 +172,18 @@ export function WorkbenchHeader({
         >
           <Download className="h-4 w-4" />
           <span className="hidden sm:inline">Download</span>
+        </button>
+      )}
+
+      {onStartTour && (
+        <button
+          data-tour="help"
+          onClick={onStartTour}
+          aria-label="Take a guided tour"
+          title="Take a guided tour"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ink/10 text-ink/70 transition-colors hover:bg-[#7C3AED]/10 hover:text-[#7C3AED]"
+        >
+          <Lightbulb className="h-4 w-4" />
         </button>
       )}
 

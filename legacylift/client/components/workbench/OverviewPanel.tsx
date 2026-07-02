@@ -136,7 +136,7 @@ export function OverviewPanel({
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div data-tour="stats" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile
           Icon={FileCode2}
           value={dependencyGraph?.nodes.length ?? chunks.length}
@@ -164,7 +164,7 @@ export function OverviewPanel({
       </div>
 
       {/* Files */}
-      <div className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
+      <div data-tour="files" className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
         <div className="flex items-center justify-between border-b border-ink/10 px-5 py-3">
           <h3 className="text-sm font-semibold text-ink">Files</h3>
           <div className="flex items-center gap-3">
@@ -238,7 +238,7 @@ export function OverviewPanel({
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Risk distribution */}
-        <div className="rounded-xl border border-ink/10 bg-surface/40 p-5">
+        <div data-tour="risk" className="rounded-xl border border-ink/10 bg-surface/40 p-5">
           <h3 className="text-sm font-semibold text-ink">Risk distribution</h3>
           <div className="mt-4 flex h-2.5 overflow-hidden rounded-full bg-ink/10">
             {order.map((level) =>
@@ -301,13 +301,13 @@ export function OverviewPanel({
         </div>
 
         {/* Dependency graph */}
-        <div className="lg:col-span-2">
+        <div data-tour="graph" className="lg:col-span-2">
           <DependencyGraph graph={dependencyGraph} />
         </div>
       </div>
 
       {/* Business rules */}
-      <div className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
+      <div data-tour="rules" className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
         <div className="flex items-center justify-between border-b border-ink/10 px-5 py-3">
           <h3 className="text-sm font-semibold text-ink">Business rules</h3>
           <span className="font-mono text-xs text-sub">
