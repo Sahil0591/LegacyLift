@@ -22,7 +22,44 @@ import {
   deleteProject,
   type ProjectIndexEntry,
 } from "@/lib/projectStore";
-import { getUserLimits, type UserLimits } from "@/lib/api";
+import {
+  getUserLimits,
+  listServerProjects,
+  type ServerProject,
+  type UserLimits,
+} from "@/lib/api";
+
+type DashboardProject = ProjectIndexEntry & {
+  localOnly: boolean;
+};
+
+function statusFromServer(status: string): ProjectIndexEntry["status"] {
+  const normalized = status.toLowerCase();
+  if (normalized === "complete") return "complete";
+  if (["analysing", "migrating", "validating", "failed"].includes(normalized)) {
+    return "in_progress";
+  }
+  return "ready";
+}
+
+function projectFromServer(project: ServerProject): DashboardProject {
+  return {
+    id: project.project_id,
+    name: project.name,
+    source: "server",
+    language: project.source_language,
+    chunksTotal: project.chunk_count,
+    chunksApproved: project.chunks_approved,
+    status: statusFromServer(project.status),
+    createdAt: project.created_at,
+    updatedAt: project.completed_at ?? project.created_at,
+    localOnly: false,
+  };
+}
+
+function localProject(project: ProjectIndexEntry): DashboardProject {
+  return { ...project, localOnly: true };
+}
 
 // ---------------------------------------------------------------------------
 // Status badge
@@ -86,7 +123,7 @@ function ProjectCard({
   project,
   onDelete,
 }: {
-  project: ProjectIndexEntry;
+  project: DashboardProject;
   onDelete: (id: string) => void;
 }) {
   const progress =
@@ -114,13 +151,15 @@ function ProjectCard({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <StatusBadge status={project.status} />
-          <button
-            onClick={() => onDelete(project.id)}
-            title="Delete project"
-            className="rounded-lg p-1.5 text-sub opacity-0 transition-all hover:bg-ink/10 hover:text-red-400 group-hover:opacity-100"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          {project.localOnly && (
+            <button
+              onClick={() => onDelete(project.id)}
+              title="Delete project"
+              className="rounded-lg p-1.5 text-sub opacity-0 transition-all hover:bg-ink/10 hover:text-red-400 group-hover:opacity-100"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -223,12 +262,33 @@ function EmptyState() {
 // ---------------------------------------------------------------------------
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<ProjectIndexEntry[]>([]);
+  const [projects, setProjects] = useState<DashboardProject[]>([]);
   const [limits, setLimits] = useState<UserLimits | null>(null);
 
   useEffect(() => {
-    setProjects(listProjects());
-    getUserLimits().then((l) => setLimits(l));
+    let cancelled = false;
+
+    async function loadProjects() {
+      const [serverProjects, userLimits] = await Promise.all([
+        listServerProjects(),
+        getUserLimits(),
+      ]);
+      if (cancelled) return;
+
+      const remote = serverProjects.map(projectFromServer);
+      const remoteIds = new Set(remote.map((p) => p.id));
+      const local = listProjects()
+        .filter((p) => !remoteIds.has(p.id))
+        .map(localProject);
+
+      setProjects([...remote, ...local]);
+      setLimits(userLimits);
+    }
+
+    loadProjects();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleDelete = (id: string) => {

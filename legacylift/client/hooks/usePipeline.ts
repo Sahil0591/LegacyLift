@@ -7,7 +7,7 @@
 // TODO: Persist state to sessionStorage so a page refresh doesn't lose progress.
 // TODO: Add optimistic UI updates for chunk approve/reject actions.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { isDemoProject, createDemoState } from "@/lib/demoData";
 import {
@@ -36,7 +36,7 @@ import type {
   RuleConfidence,
   TargetProfile,
 } from "@/types/legacylift";
-import { getProjectFiles } from "@/lib/api";
+import { addProjectLesson, getProjectFiles, getProjectLessons } from "@/lib/api";
 
 const INITIAL_STATE: PipelineState = {
   projectId: null,
@@ -283,6 +283,11 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
   );
   const [finalizedFiles, setFinalizedFiles] = useState<Record<string, true>>({});
   const [lessons, setLessons] = useState<Lesson[]>([]);
+  const lessonsRef = useRef<Lesson[]>([]);
+
+  useEffect(() => {
+    lessonsRef.current = lessons;
+  }, [lessons]);
 
   // Reset / load when the project changes. sessionStorage is client-only, so
   // local projects are loaded here (in an effect) rather than in the initializer.
@@ -337,6 +342,23 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     setLessons([]);
     setState({ ...INITIAL_STATE, projectId });
   }, [projectId, demo, isLocal]);
+
+  // Backend projects keep lessons in the shared project record so the
+  // feedback loop follows the authenticated user across devices.
+  useEffect(() => {
+    if (offline || !projectId) return;
+    let cancelled = false;
+    getProjectLessons(projectId)
+      .then((loadedLessons) => {
+        if (!cancelled) setLessons(loadedLessons);
+      })
+      .catch(() => {
+        if (!cancelled) setLessons([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [offline, projectId]);
 
   // Backend-tracked (non-offline) projects don't have file content client-side
   // yet — fetch it best-effort so the file context panel/manifest can use it.
@@ -810,17 +832,36 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
 
   const addLesson = useCallback(
     (lesson: Lesson) => {
-      setLessons((prev) => {
-        // Dedupe by (sourceFile, text) so repeated identical findings don't pile up.
-        if (prev.some((l) => l.sourceFile === lesson.sourceFile && l.text === lesson.text)) {
-          return prev;
-        }
-        const next = [...prev, lesson];
-        if (isLocal && projectId) saveLessons(projectId, next);
-        return next;
-      });
+      // Dedupe by (sourceFile, text) so repeated identical findings don't pile up.
+      if (lessonsRef.current.some((l) => l.sourceFile === lesson.sourceFile && l.text === lesson.text)) {
+        return;
+      }
+
+      const next = [...lessonsRef.current, lesson];
+      lessonsRef.current = next;
+      setLessons(next);
+
+      if (isLocal && projectId) {
+        saveLessons(projectId, next);
+        return;
+      }
+
+      if (!offline && projectId) {
+        addProjectLesson(projectId, lesson)
+          .then((savedLesson) => {
+            setLessons((prev) =>
+              prev.map((existing) =>
+                existing.id === lesson.id ? savedLesson : existing,
+              ),
+            );
+          })
+          .catch(() => {
+            // Keep the optimistic lesson in memory; a refresh will show the
+            // durable server state and future additions can still succeed.
+          });
+      }
     },
-    [isLocal, projectId],
+    [isLocal, offline, projectId],
   );
 
   return {

@@ -6,6 +6,7 @@ import type {
   RejectChunkRequest,
   RuleStatus,
 } from "@/types/legacylift";
+import type { Lesson, LessonSource } from "@/lib/lessons";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_HOST
@@ -257,6 +258,52 @@ export async function getProjectFiles(
     { ignoreNotFound: true },
   );
   return data?.files ?? [];
+}
+
+interface ServerLesson {
+  id: string;
+  source: string;
+  source_file?: string | null;
+  chunk_name?: string | null;
+  text: string;
+  created_at: string;
+}
+
+function toClientLesson(lesson: ServerLesson): Lesson {
+  return {
+    id: lesson.id,
+    source: lesson.source as LessonSource,
+    sourceFile: lesson.source_file ?? undefined,
+    chunkName: lesson.chunk_name ?? undefined,
+    text: lesson.text,
+    createdAt: lesson.created_at,
+  };
+}
+
+export async function getProjectLessons(projectId: string): Promise<Lesson[]> {
+  const data = await request<{ lessons: ServerLesson[] }>(
+    `/project/${encodeURIComponent(projectId)}/lessons`,
+  );
+  return data.lessons.map(toClientLesson);
+}
+
+export async function addProjectLesson(
+  projectId: string,
+  lesson: Lesson,
+): Promise<Lesson> {
+  const data = await request<{ lesson: ServerLesson }>(
+    `/project/${encodeURIComponent(projectId)}/lessons`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        source: lesson.source,
+        text: lesson.text,
+        source_file: lesson.sourceFile,
+        chunk_name: lesson.chunkName,
+      }),
+    },
+  );
+  return toClientLesson(data.lesson);
 }
 
 export async function updateBusinessRule(
