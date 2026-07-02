@@ -35,6 +35,8 @@ import { downloadProjectZip } from "@/lib/download";
 import { reviewProject, type ProjectReviewResult } from "@/lib/projectReview";
 import { getDemoRepo, isDemoProject } from "@/lib/demoData";
 import type { MigrationChunk } from "@/types/legacylift";
+import { useToasts } from "@/hooks/useToasts";
+import { ToastStack } from "@/components/shared/ToastStack";
 
 // Total attempts (initial generation + every auto-fix round) a single chunk
 // may burn. Auto-fix now consumes several of these per click, so the budget
@@ -231,6 +233,14 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const [projectReviewError, setProjectReviewError] = useState<string | null>(null);
   const [bulkFinalizeOpen, setBulkFinalizeOpen] = useState(false);
   const [quota, setQuota] = useState<{ remaining: number; max: number } | null>(null);
+  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+
+  // Jump straight to a chunk's Review view — used by the header job pill and
+  // by toast "View chunk" actions so background work is never a dead end.
+  const jumpToChunk = (id: string) => {
+    setView("review");
+    setSelectedId(id);
+  };
 
   const refreshQuota = () => {
     getUserLimits().then((limits) => {
@@ -400,9 +410,28 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       }
       if (review.status === "rejected" && tests.status === "rejected") {
         setRegenError("Checks failed to run — please try again.");
+        pushToast({
+          variant: "error",
+          title: `Checks failed for ${chunk.name}`,
+          description: "Please try again.",
+          action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+        });
+      } else {
+        pushToast({
+          variant: "success",
+          title: `Checks complete for ${chunk.name}`,
+          action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+        });
       }
     } catch (err) {
-      setRegenError(err instanceof Error ? err.message : "Checks failed to run");
+      const message = err instanceof Error ? err.message : "Checks failed to run";
+      setRegenError(message);
+      pushToast({
+        variant: "error",
+        title: `Checks failed for ${chunk.name}`,
+        description: message,
+        action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+      });
     } finally {
       setBusyId(null);
       setRegenStatus(null);
@@ -447,10 +476,21 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         await confirmBusinessRule(projectId, chunk.id);
         await selectChunkForMigration(projectId, chunk.id);
         patchChunk(chunk.id, { status: "Running" });
+        pushToast({
+          variant: "info",
+          title: `Migration started for ${chunk.name}`,
+          description: "Progress reports back over the pipeline connection.",
+          action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+        });
       } catch (err) {
-        setRegenError(
-          err instanceof Error ? err.message : "Venice request failed",
-        );
+        const message = err instanceof Error ? err.message : "Venice request failed";
+        setRegenError(message);
+        pushToast({
+          variant: "error",
+          title: `Couldn't start migration for ${chunk.name}`,
+          description: message,
+          action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+        });
       } finally {
         setBusyId(null);
         setRegenStatus(null);
@@ -556,11 +596,23 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           setRegenError(
             "Code generated, but the review/tests step failed — try again.",
           );
+          pushToast({
+            variant: "error",
+            title: `${chunk.name} generated, but checks failed`,
+            description: "Try again.",
+            action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+          });
           break;
         }
         if (review.status !== "fulfilled") {
           // Tests came back but review didn't — nothing to auto-fix against,
           // so stop here rather than looping blind.
+          pushToast({
+            variant: "info",
+            title: `${chunk.name} generated — review step didn't return`,
+            description: "Check it manually.",
+            action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+          });
           break;
         }
 
@@ -580,7 +632,16 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         }
 
         const criticalCount = review.value.critical_issues.length;
-        if (criticalCount === 0) break; // clean — hand back to the human to approve
+        if (criticalCount === 0) {
+          // clean — hand back to the human to approve
+          pushToast({
+            variant: "success",
+            title: `${chunk.name} passed review`,
+            description: "Ready for you to approve.",
+            action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+          });
+          break;
+        }
 
         setRegenStatus(
           `Found ${criticalCount} critical issue${criticalCount === 1 ? "" : "s"} — auto-fixing…`,
@@ -597,11 +658,22 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         setRegenError(
           `Auto-fix tried ${MAX_REGENS} times on ${chunk.name} and couldn't clear every critical issue — please review the remaining findings manually.`,
         );
+        pushToast({
+          variant: "error",
+          title: `${chunk.name} needs manual review`,
+          description: `Auto-fix tried ${MAX_REGENS} times and couldn't clear every critical issue.`,
+          action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+        });
       }
     } catch (err) {
-      setRegenError(
-        err instanceof Error ? err.message : "Venice request failed",
-      );
+      const message = err instanceof Error ? err.message : "Venice request failed";
+      setRegenError(message);
+      pushToast({
+        variant: "error",
+        title: `Generation failed for ${chunk.name}`,
+        description: message,
+        action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
+      });
     } finally {
       setBusyId(null);
       setRegenStatus(null);
@@ -615,6 +687,21 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
   const finalizeGroup = fileGroups.find((f) => f.filename === finalizeTarget) ?? null;
 
+  // Only surface the header's background-job pill when the busy chunk isn't
+  // the one already on screen — ChunkReview shows regenStatus inline there,
+  // so the pill would just be a redundant echo.
+  const busyChunk = busyId ? state.chunks.find((c) => c.id === busyId) ?? null : null;
+  const isViewingBusyChunk = view === "review" && reviewChunk?.id === busyId;
+  const activeJob =
+    busyChunk && !isViewingBusyChunk
+      ? {
+          chunkName: busyChunk.name,
+          statusText: regenStatus ?? "Working…",
+          attempt: regenCounts[busyChunk.id] ?? 0,
+          maxAttempts: MAX_REGENS,
+        }
+      : null;
+
   return (
     <div className="flex h-screen flex-col bg-base text-ink">
       <WorkbenchHeader
@@ -627,6 +714,8 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         canDownload={canDownloadZip}
         quotaRemaining={quota?.remaining ?? null}
         quotaMax={quota?.max ?? null}
+        activeJob={activeJob}
+        onJumpToJob={busyChunk ? () => jumpToChunk(busyChunk.id) : undefined}
       />
 
       <div className="min-h-0 flex-1">
@@ -650,6 +739,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                 chunks={state.chunks}
                 selectedId={reviewChunk?.id ?? null}
                 onSelect={setSelectedId}
+                busyId={busyId}
               />
             </aside>
             <main className="min-w-0 flex-1">
@@ -755,6 +845,8 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           }}
         />
       )}
+
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

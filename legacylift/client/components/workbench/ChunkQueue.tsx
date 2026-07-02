@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Folder,
   FolderOpen,
+  Loader2,
   Search,
   SlidersHorizontal,
   X,
@@ -26,6 +27,8 @@ interface ChunkQueueProps {
   chunks: MigrationChunk[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** Chunk currently generating/testing in the background, if any. */
+  busyId?: string | null;
 }
 
 const UNGROUPED = "(ungrouped)";
@@ -38,7 +41,7 @@ function worstRisk(chunks: MigrationChunk[]): RiskLevel {
   );
 }
 
-export function ChunkQueue({ chunks, selectedId, onSelect }: ChunkQueueProps) {
+export function ChunkQueue({ chunks, selectedId, onSelect, busyId = null }: ChunkQueueProps) {
   const approved = chunks.filter((c) => c.status === "Approved").length;
   const pct = chunks.length ? Math.round((approved / chunks.length) * 100) : 0;
 
@@ -258,7 +261,13 @@ export function ChunkQueue({ chunks, selectedId, onSelect }: ChunkQueueProps) {
                           {active && (
                             <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-[#7C3AED]" />
                           )}
-                          <StatusDot status={chunk.status} />
+                          {chunk.id === busyId ? (
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#7C3AED]/15 text-[#7C3AED]">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            </span>
+                          ) : (
+                            <StatusDot status={chunk.status} />
+                          )}
                           <div className="min-w-0 flex-1">
                             <div
                               className={`truncate font-mono text-[13px] ${
