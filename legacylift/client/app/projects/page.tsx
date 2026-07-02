@@ -17,11 +17,7 @@ import {
 } from "lucide-react";
 import { Navbar } from "@/components/shared/Navbar";
 import { AmbientBackground } from "@/components/landing/AmbientBackground";
-import {
-  listProjects,
-  deleteProject,
-  type ProjectIndexEntry,
-} from "@/lib/projectStore";
+import type { ProjectIndexEntry } from "@/lib/projectStore";
 import {
   deleteServerProject,
   getUserLimits,
@@ -30,9 +26,11 @@ import {
   type UserLimits,
 } from "@/lib/api";
 
-type DashboardProject = ProjectIndexEntry & {
-  localOnly: boolean;
-};
+// The dashboard is DB-backed only: every card comes from /projects (owner-scoped
+// by the Clerk user), so the list is identical on every device the user signs
+// in on. localStorage projects are intentionally not merged in here — they can't
+// sync across devices, which is exactly the mismatch we want to avoid.
+type DashboardProject = ProjectIndexEntry;
 
 function statusFromServer(status: string): ProjectIndexEntry["status"] {
   const normalized = status.toLowerCase();
@@ -54,12 +52,7 @@ function projectFromServer(project: ServerProject): DashboardProject {
     status: statusFromServer(project.status),
     createdAt: project.created_at,
     updatedAt: project.completed_at ?? project.created_at,
-    localOnly: false,
   };
-}
-
-function localProject(project: ProjectIndexEntry): DashboardProject {
-  return { ...project, localOnly: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -274,13 +267,7 @@ export default function ProjectsPage() {
       ]);
       if (cancelled) return;
 
-      const remote = serverProjects.map(projectFromServer);
-      const remoteIds = new Set(remote.map((p) => p.id));
-      const local = listProjects()
-        .filter((p) => !remoteIds.has(p.id))
-        .map(localProject);
-
-      setProjects([...remote, ...local]);
+      setProjects(serverProjects.map(projectFromServer));
       setLimits(userLimits);
     }
 
@@ -293,24 +280,19 @@ export default function ProjectsPage() {
   const handleDelete = async (id: string) => {
     const project = projects.find((p) => p.id === id);
     if (!project) return;
-    // Optimistic removal; localStorage projects delete locally, DB-backed
-    // (cloud/pipeline) projects delete server-side and free a quota slot.
+    // Optimistic removal; delete server-side and free a quota slot.
     setProjects((prev) => prev.filter((p) => p.id !== id));
     try {
-      if (project.localOnly) {
-        deleteProject(id);
-      } else {
-        await deleteServerProject(id);
-        setLimits((prev) =>
-          prev
-            ? {
-                ...prev,
-                projects_used: Math.max(0, prev.projects_used - 1),
-                projects_remaining: prev.projects_remaining + 1,
-              }
-            : prev,
-        );
-      }
+      await deleteServerProject(id);
+      setLimits((prev) =>
+        prev
+          ? {
+              ...prev,
+              projects_used: Math.max(0, prev.projects_used - 1),
+              projects_remaining: prev.projects_remaining + 1,
+            }
+          : prev,
+      );
     } catch {
       // Re-add on failure so the card isn't silently lost.
       setProjects((prev) =>
