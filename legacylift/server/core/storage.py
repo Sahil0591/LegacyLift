@@ -157,8 +157,8 @@ class ProjectStorage:
                         async with session.begin_nested():
                             await delete_workbench_project(session, project_id)
                         self._pending_deletes.discard(project_id)
-                    except Exception as exc:
-                        logger.error("Failed to delete project %s: %s", project_id, exc)
+                    except Exception:
+                        logger.exception("Failed to delete project %s", project_id)
                 for pid, p in list(self._projects.items()):
                     try:
                         # SAVEPOINT per project: one bad project shouldn't
@@ -167,16 +167,16 @@ class ProjectStorage:
                         # mutating route, so isolate failures per project.
                         async with session.begin_nested():
                             await persist_project(session, p)
-                    except Exception as exc:
-                        logger.error("Failed to persist project %s: %s", pid, exc)
+                    except Exception:
+                        logger.exception("Failed to persist project %s", pid)
                 for uid, lim in list(self._limits.items()):
                     try:
                         async with session.begin_nested():
                             await upsert_workbench_user_limit(session, limit=lim)
-                    except Exception as exc:
-                        logger.error("Failed to persist user limits for %s: %s", uid, exc)
-        except Exception as exc:
-            logger.error("Failed to persist storage to DATABASE_URL: %s", exc)
+                    except Exception:
+                        logger.exception("Failed to persist user limits for %s", uid)
+        except Exception:
+            logger.exception("Failed to persist storage to DATABASE_URL")
 
     # ------------------------------------------------------------------
     # Project CRUD
