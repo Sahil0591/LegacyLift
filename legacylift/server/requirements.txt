@@ -4,6 +4,9 @@
 # Pin major versions but allow patch updates for security fixes.
 # After adding a new dependency, run: pip freeze > requirements.lock
 # for fully reproducible production builds.
+#
+# uv users: keep this file in sync with ../../pyproject.toml, then from the
+# repo root run: uv run pytest legacylift/server/tests -q
 # =============================================================================
 
 # --- Web Framework & Server ---

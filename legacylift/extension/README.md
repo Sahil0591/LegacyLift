@@ -37,6 +37,7 @@ The overlay renders a non-blocking banner when it cannot draw badges:
 ## Verification
 
 ```bash
+npm ci
 npm run type-check
 npm test
 ```

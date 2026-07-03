@@ -75,3 +75,19 @@ This README is the high-level tour. For the technical detail, see:
 | [`plans/`](./plans/) | Design specs and implementation handoffs for the GitHub Decision Overlay. |
 
 Component setup guides (backend, frontend, browser extension, GitHub App, database/Neon) and the full environment reference live in [`PIPELINE_DOCUMENTATION.md`](./PIPELINE_DOCUMENTATION.md).
+
+## Verification
+
+From the repository root (requires [uv](https://docs.astral.sh/uv/)):
+
+```bash
+uv run pytest legacylift/server/tests -q
+```
+
+From individual packages:
+
+```bash
+cd legacylift/client && npm ci && npm run type-check
+cd legacylift/extension && npm ci && npm run type-check && npm test
+```
+
