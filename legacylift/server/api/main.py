@@ -78,6 +78,7 @@ from utils.llm_client import (
     LLMRequestFailedError,
 )
 from utils.migration_prompts import (
+    build_file_summary_prompt,
     build_migration_prompt,
     build_project_review_prompt,
     build_review_prompt,
@@ -247,6 +248,7 @@ class ImportProjectRequest(BaseModel):
     analysis: dict
     source_language: SourceLanguage = SourceLanguage.COBOL
     name: Optional[str] = Field(None, max_length=120)
+    config: Optional[dict] = None
 
     @field_validator("source_language", mode="before")
     @classmethod
@@ -268,6 +270,9 @@ class _ProgressChunkIn(BaseModel):
 class SaveProgressRequest(BaseModel):
     chunks: list[_ProgressChunkIn] = Field(default_factory=list, max_length=4_000)
     finalized_files: dict[str, bool] = Field(default_factory=dict)
+    # Human-authored workbench config (institutional context + per-file target
+    # languages). Optional so older clients that don't send it don't wipe it.
+    config: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1198,13 +1203,24 @@ async def import_project(body: ImportProjectRequest, user_id: str = Depends(get_
     chunks = analysis.get("chunks") or []
     summary = analysis.get("summary") or {}
     profile = analysis.get("targetProfile") or {}
+    config = body.config if isinstance(body.config, dict) else None
+
+    # Prefer the human-chosen default target from config; fall back to the
+    # analysis profile's language, then Python.
+    config_default_target = None
+    if config and isinstance(config.get("targets"), dict):
+        config_default_target = config["targets"].get("default")
 
     project = Project(
         id=f"cloud-{uuid.uuid4().hex[:8]}",
         owner_id=user_id,
         name=(body.name or analysis.get("projectName") or "Untitled").strip() or "Untitled",
         source_language=_detect_source_language(analysis, body.source_language),
-        target_language=(profile.get("language") or "Python") if isinstance(profile, dict) else "Python",
+        target_language=(
+            config_default_target
+            or (profile.get("language") if isinstance(profile, dict) else None)
+            or "Python"
+        ),
         status="ready",
         chunk_count=len(chunks),
         risk_summary=summary.get("byLevel") or {},
@@ -1212,6 +1228,7 @@ async def import_project(body: ImportProjectRequest, user_id: str = Depends(get_
         client_analysis=analysis,
         client_progress={},
         client_file_status={},
+        client_config=config,
     )
     storage.put(project)
     storage.increment_projects_used(user_id)
@@ -1260,6 +1277,17 @@ def _apply_progress(project: Project, body: SaveProgressRequest) -> None:
 
     project.client_progress = progress
     project.client_file_status = {k: v for k, v in body.finalized_files.items() if v}
+    # Only overwrite config when the client actually sent it, so a client that
+    # doesn't yet know about config never blanks a previously-saved one.
+    if body.config is not None:
+        project.client_config = body.config
+        default_target = (
+            body.config.get("targets", {}).get("default")
+            if isinstance(body.config.get("targets"), dict)
+            else None
+        )
+        if isinstance(default_target, str) and default_target.strip():
+            project.target_language = default_target
 
     total = len(body.chunks)
     if total > 0 and approved == total:
@@ -1302,6 +1330,7 @@ async def get_workbench(project_id: str, user_id: str = Depends(get_current_user
         "analysis": project.client_analysis,
         "progress": project.client_progress or {},
         "file_status": project.client_file_status or {},
+        "config": project.client_config or None,
     }
 
 
@@ -1358,6 +1387,14 @@ class _TargetProfileIn(BaseModel):
     version: str = Field("", max_length=32)
     test_framework: str = Field("", max_length=64)
     notes: str = Field("", max_length=1_000)
+    # Rich, per-language guidance from the client target-language catalog.
+    numeric_policy: str = Field("", max_length=500)
+    date_policy: str = Field("", max_length=500)
+    style_guide: str = Field("", max_length=500)
+    type_system: str = Field("", max_length=500)
+    async_model: str = Field("", max_length=500)
+    recommended_libraries: list[str] = Field(default_factory=list, max_length=24)
+    risk_focus: list[str] = Field(default_factory=list, max_length=24)
 
 
 class MigrateUnitRequest(BaseModel):
@@ -1374,6 +1411,7 @@ class MigrateUnitRequest(BaseModel):
     file_context: Optional[str] = Field(None, max_length=60_000)
     project_manifest: Optional[str] = Field(None, max_length=8_000)
     lessons_learned: Optional[str] = Field(None, max_length=4_000)
+    institutional_context: Optional[str] = Field(None, max_length=12_000)
 
 
 class ReviewUnitRequest(BaseModel):
@@ -1384,6 +1422,8 @@ class ReviewUnitRequest(BaseModel):
     migrated_code: str = Field(..., min_length=1, max_length=120_000)
     source_lang: str = Field("COBOL", max_length=32)
     target_lang: str = Field("Python", max_length=32)
+    target_profile: Optional[_TargetProfileIn] = None
+    institutional_context: Optional[str] = Field(None, max_length=12_000)
 
 
 class TestsUnitRequest(BaseModel):
@@ -1392,6 +1432,17 @@ class TestsUnitRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     migrated_code: str = Field(..., min_length=1, max_length=120_000)
     target_lang: str = Field("Python", max_length=32)
+    target_profile: Optional[_TargetProfileIn] = None
+
+
+class SummarizeFileRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    filename: str = Field(..., min_length=1, max_length=260)
+    source_code: str = Field(..., min_length=1, max_length=120_000)
+    source_lang: str = Field("COBOL", max_length=32)
+    business_rules: list[_BusinessRuleIn] = Field(default_factory=list, max_length=40)
+    institutional_context: Optional[str] = Field(None, max_length=12_000)
 
 
 class _FileSummaryIn(BaseModel):
@@ -1536,6 +1587,7 @@ async def llm_migrate(
         file_context=body.file_context,
         project_manifest=body.project_manifest,
         lessons_learned=body.lessons_learned,
+        institutional_context=body.institutional_context,
     )
     content = await _safe_complete(llm, system=system, user=user, temperature=0.1, max_tokens=8000)
     content = _ensure_real_output(content)
@@ -1565,6 +1617,8 @@ async def llm_review(
         target_lang=body.target_lang,
         source_code=body.source_code,
         migrated_code=body.migrated_code,
+        target_profile=body.target_profile.model_dump() if body.target_profile else None,
+        institutional_context=body.institutional_context,
     )
     content = await _safe_complete(
         llm,
@@ -1629,6 +1683,7 @@ async def llm_tests(
         name=body.name,
         migrated_code=body.migrated_code,
         target_lang=body.target_lang,
+        target_profile=body.target_profile.model_dump() if body.target_profile else None,
     )
     content = await _safe_complete(
         llm,
@@ -1647,6 +1702,56 @@ async def llm_tests(
         if isinstance(t, dict) and isinstance(t.get("name"), str)
     ][:8]
     return {"tests": tests, "code": parsed.get("code") or ""}
+
+
+# ---------------------------------------------------------------------------
+# POST /llm/summarize-file
+# ---------------------------------------------------------------------------
+
+@app.post("/llm/summarize-file")
+async def llm_summarize_file(
+    body: SummarizeFileRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Explain what a whole legacy file does, in two registers: a technical
+    summary for engineers and a plain-language one for non-technical readers.
+    Returns {technical, layman, model}."""
+    _rate_limit(request, "summarize", user_id)
+    _check_and_charge_quota(user_id)
+    llm = _get_llm()
+    _require_configured(llm)
+
+    system, user = build_file_summary_prompt(
+        filename=body.filename,
+        source_lang=body.source_lang,
+        source_code=body.source_code,
+        business_rules=[r.model_dump() for r in body.business_rules],
+        institutional_context=body.institutional_context,
+    )
+    content = await _safe_complete(
+        llm,
+        system=system,
+        user=user,
+        temperature=0.2,
+        max_tokens=2500,
+        json_response=True,
+    )
+    content = _ensure_real_output(content)
+    storage.increment_migrations_today(user_id)
+
+    parsed = parse_json_loose(content)
+    if not parsed:
+        return {
+            "technical": content.strip()[:4000],
+            "layman": "",
+            "model": llm.model,
+        }
+    return {
+        "technical": parsed.get("technical") or "",
+        "layman": parsed.get("layman") or "",
+        "model": llm.model,
+    }
 
 
 # ---------------------------------------------------------------------------

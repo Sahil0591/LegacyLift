@@ -2,7 +2,7 @@
 // OverviewPanel — the "we mapped your codebase" dashboard: headline numbers,
 // risk distribution, the dependency graph, and the extracted business rules.
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   FileCode2,
   BookOpen,
@@ -13,6 +13,7 @@ import {
   Layers,
   ChevronDown,
   ChevronRight,
+  Sparkles,
 } from "lucide-react";
 import type { PipelineState } from "@/types/legacylift";
 import { DependencyGraph } from "@/components/layer0/DependencyGraph";
@@ -20,6 +21,10 @@ import { RISK_META, RiskBadge, scoreToLevel } from "@/components/workbench/share
 import type { FileGroup, FileStatus } from "@/hooks/useFileStatus";
 import type { Lesson } from "@/lib/lessons";
 import { downloadSingleFile } from "@/lib/download";
+import type { ProjectConfig } from "@/lib/projectConfig";
+import { getTargetLanguage } from "@/lib/targetLanguages";
+import { ContextPanel } from "@/components/workbench/ContextPanel";
+import { TargetLanguageSelect } from "@/components/workbench/TargetLanguageSelect";
 
 const FILE_STATUS_META: Record<FileStatus, { label: string; color: string }> = {
   in_progress: { label: "In progress", color: "#6B7280" },
@@ -30,14 +35,20 @@ const FILE_STATUS_META: Record<FileStatus, { label: string; color: string }> = {
 
 function FileRow({
   group,
+  defaultTargetId,
+  onTargetChange,
+  onSummarize,
   onFinalize,
 }: {
   group: FileGroup;
+  defaultTargetId: string;
+  onTargetChange: (targetId: string) => void;
+  onSummarize: () => void;
   onFinalize: () => void;
 }) {
   const meta = FILE_STATUS_META[group.status];
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
       <span className="font-mono text-sm font-medium text-ink">{group.filename}</span>
       {group.language && (
         <span className="rounded-full bg-ink/[0.06] px-2 py-0.5 text-[11px] text-sub">
@@ -48,7 +59,28 @@ function FileRow({
         {group.approvedCount}/{group.totalCount} units
       </span>
       <RiskBadge level={group.riskLevel} />
+      {/* Per-file target language: source language → chosen target. */}
+      <div className="flex items-center gap-1.5 text-xs text-sub">
+        <span className="text-sub/60">→</span>
+        <TargetLanguageSelect
+          value={group.targetOverridden ? group.target.id : ""}
+          onChange={onTargetChange}
+          allowDefault
+          defaultTargetId={defaultTargetId}
+          size="sm"
+          ariaLabel={`Target language for ${group.filename}`}
+          title={`Migrate ${group.filename} into ${group.target.label}`}
+        />
+      </div>
       <div className="ml-auto flex items-center gap-2">
+        <button
+          onClick={onSummarize}
+          title="Explain what this file does (developer + plain-English)"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-ink/15 px-2.5 py-1 text-[11px] font-semibold text-ink/70 transition-colors hover:border-[#7C3AED]/50 hover:text-[#7C3AED]"
+        >
+          <Sparkles className="h-3 w-3" />
+          Explain
+        </button>
         <span
           className="rounded-full px-2 py-0.5 text-[11px] font-medium"
           style={{ background: `${meta.color}1f`, color: meta.color }}
@@ -107,19 +139,37 @@ function StatTile({
 export function OverviewPanel({
   state,
   fileGroups,
+  config,
   onFinalizeFile,
   onOpenBulkFinalize,
+  onGlobalContextChange,
+  onFileContextChange,
+  onDefaultTargetChange,
+  onFileTargetChange,
+  onSummarizeFile,
   lessons = [],
 }: {
   state: PipelineState;
   fileGroups: FileGroup[];
+  config: ProjectConfig;
   onFinalizeFile: (filename: string) => void;
   onOpenBulkFinalize?: () => void;
+  onGlobalContextChange: (text: string) => void;
+  onFileContextChange: (filename: string, text: string) => void;
+  onDefaultTargetChange: (targetId: string) => void;
+  onFileTargetChange: (filename: string, targetId: string) => void;
+  onSummarizeFile: (filename: string) => void;
   lessons?: Lesson[];
 }) {
-  const { businessRules, riskScores, dependencyGraph, chunks, targetProfile } =
-    state;
+  const { businessRules, riskScores, dependencyGraph, chunks } = state;
   const [lessonsOpen, setLessonsOpen] = useState(false);
+
+  // Distinct target languages across the project (for the summary box).
+  const targetCounts = new Map<string, number>();
+  for (const g of fileGroups) {
+    targetCounts.set(g.target.id, (targetCounts.get(g.target.id) ?? 0) + 1);
+  }
+  const defaultTarget = getTargetLanguage(config.targets.default);
 
   const scores = Object.values(riskScores);
   const avg = scores.length
@@ -163,11 +213,31 @@ export function OverviewPanel({
         />
       </div>
 
+      {/* Migration context & instructions — the "README for the AI agent" */}
+      <div data-tour="context">
+        <ContextPanel
+          config={config}
+          filenames={fileGroups.map((f) => f.filename)}
+          onGlobalChange={onGlobalContextChange}
+          onFileChange={onFileContextChange}
+        />
+      </div>
+
       {/* Files */}
       <div data-tour="files" className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
-        <div className="flex items-center justify-between border-b border-ink/10 px-5 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink/10 px-5 py-3">
           <h3 className="text-sm font-semibold text-ink">Files</h3>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-medium text-sub">Target</span>
+              <TargetLanguageSelect
+                value={config.targets.default}
+                onChange={onDefaultTargetChange}
+                size="sm"
+                ariaLabel="Default target language"
+                title="Default target language for files without an override"
+              />
+            </div>
             {onOpenBulkFinalize &&
               fileGroups.some((f) => f.status === "ready_to_finalize" && f.clusterReady) && (
                 <button
@@ -192,6 +262,9 @@ export function OverviewPanel({
               <FileRow
                 key={group.filename}
                 group={group}
+                defaultTargetId={config.targets.default}
+                onTargetChange={(id) => onFileTargetChange(group.filename, id)}
+                onSummarize={() => onSummarizeFile(group.filename)}
                 onFinalize={() => onFinalizeFile(group.filename)}
               />
             ))
@@ -271,33 +344,34 @@ export function OverviewPanel({
             ))}
           </div>
 
-          {targetProfile && (
-            <div className="mt-5 border-t border-ink/10 pt-4">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-sub">
-                Target
-              </h4>
-              <div className="mt-2 space-y-1.5 text-xs text-ink/80">
-                <div className="flex justify-between gap-2">
-                  <span className="text-sub">Language</span>
-                  <span className="font-mono">
-                    {targetProfile.language} {targetProfile.version}
-                  </span>
-                </div>
+          <div className="mt-5 border-t border-ink/10 pt-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-sub">
+              Targets
+            </h4>
+            <div className="mt-2 space-y-1.5 text-xs text-ink/80">
+              <div className="flex justify-between gap-2">
+                <span className="text-sub">Default</span>
+                <span className="font-mono">
+                  {defaultTarget.label} {defaultTarget.version}
+                </span>
+              </div>
+              {targetCounts.size > 1 &&
+                [...targetCounts.entries()].map(([id, n]) => (
+                  <div key={id} className="flex justify-between gap-2">
+                    <span className="text-sub">{getTargetLanguage(id).label}</span>
+                    <span className="font-mono text-ink/80">
+                      {n} file{n === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                ))}
+              {targetCounts.size <= 1 && (
                 <div className="flex justify-between gap-2">
                   <span className="text-sub">Tests</span>
-                  <span className="font-mono">
-                    {targetProfile.test_framework}
-                  </span>
+                  <span className="font-mono">{defaultTarget.testFramework}</span>
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-sub">Style</span>
-                  <span className="truncate font-mono">
-                    {targetProfile.style_guide}
-                  </span>
-                </div>
-              </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         {/* Dependency graph */}

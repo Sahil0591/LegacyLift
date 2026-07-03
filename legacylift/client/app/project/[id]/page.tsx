@@ -27,8 +27,13 @@ import {
   generateMigration,
   reviewMigration,
   generateTests,
+  summarizeFile,
+  type FileSummary,
 } from "@/lib/migration";
 import { buildProjectManifest } from "@/lib/manifest";
+import { concatenateSource } from "@/lib/fileAssembly";
+import { resolveTarget, buildInstitutionalContext, summarizeTargets } from "@/lib/projectConfig";
+import { toProfileCtx } from "@/lib/targetLanguages";
 import { makeLesson, selectRelevantLessons, formatLessonsBlock } from "@/lib/lessons";
 import { staticAnalyze } from "@/lib/staticCheck";
 import { downloadProjectZip } from "@/lib/download";
@@ -53,6 +58,7 @@ import { OverviewPanel } from "@/components/workbench/OverviewPanel";
 import { FileContextPanel } from "@/components/workbench/FileContextPanel";
 import { FileFinalizeModal } from "@/components/workbench/FileFinalizeModal";
 import { BulkFinalizeModal } from "@/components/workbench/BulkFinalizeModal";
+import { FileSummaryModal } from "@/components/workbench/FileSummaryModal";
 
 interface ProjectPageProps {
   params: { id: string };
@@ -223,6 +229,11 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     unmarkFileFinalized,
     lessons,
     addLesson,
+    config,
+    setGlobalContext,
+    setFileContext,
+    setDefaultTarget,
+    setFileTarget,
   } = usePipeline(projectId);
 
   const [view, setView] = useState<WorkbenchView>("review");
@@ -239,6 +250,12 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const [reviewingProject, setReviewingProject] = useState(false);
   const [projectReviewError, setProjectReviewError] = useState<string | null>(null);
   const [bulkFinalizeOpen, setBulkFinalizeOpen] = useState(false);
+  // File-level "what does this file do" AI summaries, cached per filename so a
+  // reopen doesn't re-charge an AI call.
+  const [fileSummaries, setFileSummaries] = useState<Record<string, FileSummary>>({});
+  const [summaryTarget, setSummaryTarget] = useState<string | null>(null);
+  const [summarizingFile, setSummarizingFile] = useState<string | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [quota, setQuota] = useState<{ remaining: number; max: number } | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
@@ -292,7 +309,15 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
   const repo = demo ? getDemoRepo(projectId).replace("github.com/", "") : projectId;
   const approved = state.chunks.filter((c) => c.status === "Approved").length;
-  const fileGroups = useFileGroups(state, finalizedFiles, finalizeTarget);
+  const fileGroups = useFileGroups(state, finalizedFiles, finalizeTarget, config);
+  const sourceLang =
+    state.files.find((f) => f.language)?.language ||
+    fileGroups.find((f) => f.language)?.language ||
+    "Source";
+  const targetLabels = summarizeTargets(
+    config,
+    fileGroups.map((f) => f.filename),
+  ).labels;
   const allFilesFinalized =
     fileGroups.length > 0 && fileGroups.every((f) => f.status === "finalized");
   const canDownloadZip = allFilesFinalized && projectReviewAcked;
@@ -403,14 +428,25 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     setBusyId(chunk.id);
     setRegenError(null);
     setRegenStatus("Running tests & AI review…");
+    const target = resolveTarget(config, chunk.source_file);
+    const targetProfile = toProfileCtx(target);
+    const institutionalContext = buildInstitutionalContext(config, chunk.source_file);
     try {
       const [review, tests] = await Promise.allSettled([
         reviewMigration({
           name: chunk.name,
           sourceCode: chunk.source_code,
           migratedCode: chunk.migrated_code,
+          targetLang: target.language,
+          targetProfile,
+          institutionalContext,
         }),
-        generateTests({ name: chunk.name, migratedCode: chunk.migrated_code }),
+        generateTests({
+          name: chunk.name,
+          migratedCode: chunk.migrated_code,
+          targetLang: target.language,
+          targetProfile,
+        }),
       ]);
       if (review.status === "fulfilled") {
         patchChunk(chunk.id, { ai_review: review.value });
@@ -465,6 +501,62 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     } finally {
       setBusyId(null);
       setRegenStatus(null);
+      refreshQuota();
+    }
+  };
+
+  // Explain a whole FILE (not a chunk): one AI call returns a technical and a
+  // plain-language summary, grounded in the file's rules + institutional
+  // context. Cached per filename so reopening doesn't re-spend the quota;
+  // `force` regenerates.
+  const handleSummarizeFile = async (filename: string, force = false) => {
+    setSummaryTarget(filename);
+    setSummaryError(null);
+    if (!force && fileSummaries[filename]) return;
+
+    const group = fileGroups.find((f) => f.filename === filename);
+    const fileContent =
+      state.files.find((f) => f.filename === filename)?.content ||
+      (group ? concatenateSource(group.chunks) : "");
+    if (!fileContent.trim()) {
+      setSummaryError("This file has no source available to summarize.");
+      return;
+    }
+
+    const businessRules = state.businessRules
+      .filter((r) => r.source_file === filename)
+      .map((r) => ({
+        title: r.title,
+        description: r.description,
+        hardcoded_values: r.hardcoded_values,
+      }));
+    const fileSourceLang =
+      group?.language ||
+      state.files.find((f) => f.filename === filename)?.language ||
+      sourceLang;
+
+    setSummarizingFile(filename);
+    try {
+      const result = await summarizeFile({
+        filename,
+        sourceCode: fileContent,
+        sourceLang: fileSourceLang,
+        businessRules,
+        institutionalContext:
+          buildInstitutionalContext(config, filename) || undefined,
+      });
+      setFileSummaries((m) => ({
+        ...m,
+        [filename]: { technical: result.technical, layman: result.layman },
+      }));
+    } catch (err) {
+      setSummaryError(
+        err instanceof Error
+          ? err.message
+          : "Couldn't summarize this file — please try again.",
+      );
+    } finally {
+      setSummarizingFile(null);
       refreshQuota();
     }
   };
@@ -533,14 +625,13 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       description: r.description,
       hardcoded_values: r.hardcoded_values,
     }));
-    const targetProfile = state.targetProfile
-      ? {
-          language: state.targetProfile.language,
-          version: state.targetProfile.version,
-          test_framework: state.targetProfile.test_framework,
-          notes: state.targetProfile.notes,
-        }
-      : null;
+    // Per-file target language + its rich guidance, and the human-authored
+    // institutional context for this file — the levers that make migration
+    // land in the right language with the org's constraints respected.
+    const target = resolveTarget(config, chunk.source_file);
+    const targetLang = target.language;
+    const targetProfile = toProfileCtx(target);
+    const institutionalContext = buildInstitutionalContext(config, chunk.source_file);
     const fileContext = state.files.find(
       (f) => f.filename === chunk.source_file,
     )?.content;
@@ -580,6 +671,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         const { migrated_code } = await generateMigration({
           name: chunk.name,
           sourceCode: chunk.source_code,
+          targetLang,
           businessRules,
           targetProfile,
           instructions: currentInstructions,
@@ -587,6 +679,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           fileContext,
           projectManifest: projectManifest || undefined,
           lessonsLearned: lessonsLearned || undefined,
+          institutionalContext: institutionalContext || undefined,
         });
         currentCode = migrated_code;
         // Clear the previous round's review/tests immediately — otherwise the
@@ -608,8 +701,16 @@ export default function ProjectPage({ params }: ProjectPageProps) {
             name: chunk.name,
             sourceCode: chunk.source_code,
             migratedCode: migrated_code,
+            targetLang,
+            targetProfile,
+            institutionalContext,
           }),
-          generateTests({ name: chunk.name, migratedCode: migrated_code }),
+          generateTests({
+            name: chunk.name,
+            migratedCode: migrated_code,
+            targetLang,
+            targetProfile,
+          }),
         ]);
 
         if (tests.status === "fulfilled") {
@@ -738,6 +839,8 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         repo={repo}
         view={view}
         onViewChange={setView}
+        sourceLang={sourceLang}
+        targetLabels={targetLabels}
         approved={approved}
         total={state.chunks.length}
         onDownload={() => downloadProjectZip(repo, fileGroups)}
@@ -755,11 +858,17 @@ export default function ProjectPage({ params }: ProjectPageProps) {
             <OverviewPanel
               state={state}
               fileGroups={fileGroups}
+              config={config}
               onFinalizeFile={(filename) => {
                 const group = fileGroups.find((f) => f.filename === filename);
                 if (group?.clusterReady) setFinalizeTarget(filename);
               }}
               onOpenBulkFinalize={() => setBulkFinalizeOpen(true)}
+              onGlobalContextChange={setGlobalContext}
+              onFileContextChange={setFileContext}
+              onDefaultTargetChange={setDefaultTarget}
+              onFileTargetChange={setFileTarget}
+              onSummarizeFile={handleSummarizeFile}
               lessons={lessons}
             />
           </div>
@@ -780,6 +889,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
               {explicit ? (
                 <ChunkReview
                   chunk={explicit}
+                  targetLabel={resolveTarget(config, explicit.source_file).label}
                   onApprove={handleApprove}
                   onReject={handleReject}
                   onReopen={handleReopen}
@@ -812,6 +922,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
               ) : reviewChunk ? (
                 <ChunkReview
                   chunk={reviewChunk}
+                  targetLabel={resolveTarget(config, reviewChunk.source_file).label}
                   onApprove={handleApprove}
                   onReject={handleReject}
                   onReopen={handleReopen}
@@ -878,6 +989,17 @@ export default function ProjectPage({ params }: ProjectPageProps) {
             for (const filename of filenames) markFileFinalized(filename);
             setBulkFinalizeOpen(false);
           }}
+        />
+      )}
+
+      {summaryTarget && (
+        <FileSummaryModal
+          filename={summaryTarget}
+          summary={fileSummaries[summaryTarget] ?? null}
+          loading={summarizingFile === summaryTarget}
+          error={summaryError}
+          onClose={() => setSummaryTarget(null)}
+          onRegenerate={() => handleSummarizeFile(summaryTarget, true)}
         />
       )}
 

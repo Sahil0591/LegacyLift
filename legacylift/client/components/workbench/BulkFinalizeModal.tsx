@@ -19,6 +19,7 @@ import type { AIReviewResult } from "@/types/legacylift";
 import type { FileGroup } from "@/hooks/useFileStatus";
 import { assembleFile, concatenateSource } from "@/lib/fileAssembly";
 import { reviewMigration } from "@/lib/migration";
+import { toProfileCtx } from "@/lib/targetLanguages";
 import { makeLesson, type Lesson } from "@/lib/lessons";
 
 interface BulkFinalizeModalProps {
@@ -74,12 +75,14 @@ export function BulkFinalizeModal({
       [file.filename]: { checking: true, error: null, review: null, hasChecked: false },
     }));
     const source = concatenateSource(file.chunks);
-    const assembled = assembleFile(file.filename, file.chunks);
+    const assembled = assembleFile(file.filename, file.chunks, file.target);
     try {
       const result = await reviewMigration({
         name: file.filename,
         sourceCode: source,
         migratedCode: assembled,
+        targetLang: file.target.language,
+        targetProfile: toProfileCtx(file.target),
       });
       setChecks((prev) => ({
         ...prev,

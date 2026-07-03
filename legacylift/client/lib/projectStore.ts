@@ -9,6 +9,7 @@
 
 import type { AnalyzeResult } from "@/lib/analyze";
 import type { Lesson } from "@/lib/lessons";
+import { normalizeConfig, type ProjectConfig } from "@/lib/projectConfig";
 import type {
   AIReviewResult,
   StaticAnalysisResult,
@@ -19,6 +20,7 @@ const ANALYSIS_PREFIX = "legacylift:analysis:";
 const PROGRESS_PREFIX = "legacylift:progress:";
 const FILE_STATUS_PREFIX = "legacylift:filestatus:";
 const LESSONS_PREFIX = "legacylift:lessons:";
+const CONFIG_PREFIX = "legacylift:config:";
 const INDEX_KEY = "legacylift:project-index";
 
 export interface ProjectIndexEntry {
@@ -122,6 +124,9 @@ export function deleteProject(id: string): void {
   try {
     localStorage.removeItem(ANALYSIS_PREFIX + id);
     localStorage.removeItem(PROGRESS_PREFIX + id);
+    localStorage.removeItem(FILE_STATUS_PREFIX + id);
+    localStorage.removeItem(LESSONS_PREFIX + id);
+    localStorage.removeItem(CONFIG_PREFIX + id);
   } catch {}
   writeIndex(readIndex().filter((e) => e.id !== id));
 }
@@ -227,6 +232,30 @@ export function loadLessons(projectId: string): Lesson[] | null {
   try {
     const raw = localStorage.getItem(LESSONS_PREFIX + projectId);
     return raw ? (JSON.parse(raw) as Lesson[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Project config (local projects only) — institutional context + per-file
+// target languages authored on the Overview.
+// ---------------------------------------------------------------------------
+
+/** Persist the workbench config so a refresh keeps context + target choices. */
+export function saveConfig(projectId: string, config: ProjectConfig): void {
+  try {
+    localStorage.setItem(CONFIG_PREFIX + projectId, JSON.stringify(config));
+  } catch {
+    // best-effort
+  }
+}
+
+/** Load previously saved config. Returns null when nothing is stored. */
+export function loadConfig(projectId: string): ProjectConfig | null {
+  try {
+    const raw = localStorage.getItem(CONFIG_PREFIX + projectId);
+    return raw ? normalizeConfig(JSON.parse(raw)) : null;
   } catch {
     return null;
   }

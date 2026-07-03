@@ -12,13 +12,16 @@ import { Navbar } from "@/components/shared/Navbar";
 import { Footer } from "@/components/shared/Footer";
 import { AmbientBackground } from "@/components/landing/AmbientBackground";
 import { FileUpload } from "@/components/pipeline/FileUpload";
-import { storeAnalysis } from "@/lib/projectStore";
+import { TargetLanguageSelect } from "@/components/workbench/TargetLanguageSelect";
+import { saveConfig, storeAnalysis } from "@/lib/projectStore";
 import {
   createProject,
   importAnalysis,
   startPipeline,
   uploadFiles,
 } from "@/lib/api";
+import { emptyConfig } from "@/lib/projectConfig";
+import { DEFAULT_TARGET_ID, getTargetLanguage } from "@/lib/targetLanguages";
 import { DEMO_HERITAGE_PROJECT_ID, DEMO_PROJECT_ID } from "@/lib/demoData";
 import type { AnalyzeResult } from "@/lib/analyze";
 import type { ProjectLanguage } from "@/types/legacylift";
@@ -33,6 +36,7 @@ export default function DemoPage() {
   const [tab, setTab] = useState<Tab>("repo");
   const [repoUrl, setRepoUrl] = useState(SAMPLE_REPO);
   const [repoLang, setRepoLang] = useState<ProjectLanguage>("COBOL");
+  const [repoTarget, setRepoTarget] = useState<string>(DEFAULT_TARGET_ID);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,15 +56,20 @@ export default function DemoPage() {
       if (!res.ok) throw new Error(data?.error ?? "Analysis failed");
       const analysis = data as AnalyzeResult;
 
+      // Seed the workbench config with the chosen target as the project
+      // default (per-file overrides come later on the Overview).
+      const cfg = emptyConfig(repoTarget);
+
       // Persist to the DB (owner-scoped). /demo is behind Clerk middleware, so
       // the user is always signed in here; localStorage is only a fallback for
       // a backend/DB outage so the workbench still opens.
       let id: string;
       try {
-        const created = await importAnalysis(analysis, repoLang);
+        const created = await importAnalysis(analysis, repoLang, cfg);
         id = created.project_id;
       } catch {
         id = storeAnalysis(analysis);
+        saveConfig(id, cfg);
       }
       router.push(`/project/${id}`);
     } catch (err) {
@@ -78,6 +87,7 @@ export default function DemoPage() {
     files: File[],
     schema: File | null,
     language: ProjectLanguage,
+    targetId: string,
   ) => {
     setLoading(true);
     setError(null);
@@ -86,7 +96,11 @@ export default function DemoPage() {
         files.length === 1
           ? files[0].name.replace(/\.[^.]+$/, "")
           : `${language} upload`;
-      const project = await createProject({ name: projectName, language });
+      const project = await createProject({
+        name: projectName,
+        language,
+        targetLanguage: getTargetLanguage(targetId).language,
+      });
       await uploadFiles(project.project_id, files, schema ?? undefined);
       await startPipeline(project.project_id);
       router.push(`/project/${project.project_id}`);
@@ -184,28 +198,43 @@ export default function DemoPage() {
                     </p>
                   </div>
 
-                  <div className="flex flex-col gap-2">
-                    <label
-                      htmlFor="repo-language"
-                      className="text-sm font-medium text-sub"
-                    >
-                      Source language
-                    </label>
-                    <div className="relative w-48">
-                      <select
-                        id="repo-language"
-                        value={repoLang}
-                        onChange={(e) =>
-                          setRepoLang(e.target.value as ProjectLanguage)
-                        }
-                        className="w-full appearance-none rounded-xl border border-ink/10 bg-surface/70 px-3 py-2 text-sm text-ink outline-none backdrop-blur transition-colors focus:border-[#7C3AED]"
+                  <div className="flex flex-wrap gap-6">
+                    <div className="flex flex-col gap-2">
+                      <label
+                        htmlFor="repo-language"
+                        className="text-sm font-medium text-sub"
                       >
-                        {LANGUAGES.map((l) => (
-                          <option key={l} value={l}>
-                            {l}
-                          </option>
-                        ))}
-                      </select>
+                        Source language
+                      </label>
+                      <div className="relative w-48">
+                        <select
+                          id="repo-language"
+                          value={repoLang}
+                          onChange={(e) =>
+                            setRepoLang(e.target.value as ProjectLanguage)
+                          }
+                          className="w-full appearance-none rounded-xl border border-ink/10 bg-surface/70 px-3 py-2 text-sm text-ink outline-none backdrop-blur transition-colors focus:border-[#7C3AED]"
+                        >
+                          {LANGUAGES.map((l) => (
+                            <option key={l} value={l}>
+                              {l}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <label className="text-sm font-medium text-sub">
+                        Target language
+                      </label>
+                      <TargetLanguageSelect
+                        value={repoTarget}
+                        onChange={setRepoTarget}
+                        className="w-48"
+                        ariaLabel="Target language"
+                        title="Default target language — override per file later on the Overview"
+                      />
                     </div>
                   </div>
 

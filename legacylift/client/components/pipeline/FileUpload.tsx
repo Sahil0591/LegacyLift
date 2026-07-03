@@ -5,12 +5,19 @@ import { useCallback, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown, File as FileIcon, Upload, X } from "lucide-react";
 import type { ProjectLanguage } from "@/types/legacylift";
+import { DEFAULT_TARGET_ID } from "@/lib/targetLanguages";
+import { TargetLanguageSelect } from "@/components/workbench/TargetLanguageSelect";
 
 const DEMO_LABEL = "PAYROLL.cbl (sample COBOL - 847 lines)";
 const LANGUAGES: ProjectLanguage[] = ["COBOL", "Java", "VB6"];
 
 interface FileUploadProps {
-  onSubmit: (files: File[], schema: File | null, language: ProjectLanguage) => Promise<void>;
+  onSubmit: (
+    files: File[],
+    schema: File | null,
+    language: ProjectLanguage,
+    targetId: string,
+  ) => Promise<void>;
   loading: boolean;
 }
 
@@ -24,6 +31,7 @@ export function FileUpload({ onSubmit, loading }: FileUploadProps) {
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [schemaFile, setSchemaFile] = useState<File | null>(null);
   const [language, setLanguage] = useState<ProjectLanguage>("COBOL");
+  const [targetId, setTargetId] = useState<string>(DEFAULT_TARGET_ID);
   const [sourceDragging, setSourceDragging] = useState(false);
   const [schemaDragging, setSchemaDragging] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
@@ -128,9 +136,9 @@ export function FileUpload({ onSubmit, loading }: FileUploadProps) {
       const demoFile = new File([demoBlob], "PAYROLL.cbl", {
         type: "text/plain",
       });
-      await onSubmit([demoFile], null, "COBOL");
+      await onSubmit([demoFile], null, "COBOL", targetId);
     } else {
-      await onSubmit(sourceFiles, schemaFile, language);
+      await onSubmit(sourceFiles, schemaFile, language, targetId);
     }
   };
 
@@ -138,24 +146,37 @@ export function FileUpload({ onSubmit, loading }: FileUploadProps) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <label htmlFor="source-language" className="text-sm font-medium text-sub">
-          Source language
-        </label>
-        <div className="relative w-48">
-          <select
-            id="source-language"
-            value={language}
-            onChange={(e) => setLanguage(e.target.value as ProjectLanguage)}
-            className="w-full appearance-none rounded-xl border border-ink/10 bg-surface/70 px-3 py-2 text-sm text-ink outline-none backdrop-blur transition-colors focus:border-[#7C3AED]"
-          >
-            {LANGUAGES.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-sub" />
+      <div className="flex flex-wrap gap-6">
+        <div className="flex flex-col gap-2">
+          <label htmlFor="source-language" className="text-sm font-medium text-sub">
+            Source language
+          </label>
+          <div className="relative w-48">
+            <select
+              id="source-language"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value as ProjectLanguage)}
+              className="w-full appearance-none rounded-xl border border-ink/10 bg-surface/70 px-3 py-2 text-sm text-ink outline-none backdrop-blur transition-colors focus:border-[#7C3AED]"
+            >
+              {LANGUAGES.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-sub" />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <label className="text-sm font-medium text-sub">Target language</label>
+          <TargetLanguageSelect
+            value={targetId}
+            onChange={setTargetId}
+            className="w-48"
+            ariaLabel="Target language"
+            title="Default target language — override per file later on the Overview"
+          />
         </div>
       </div>
 

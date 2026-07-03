@@ -137,18 +137,25 @@ def _installation_payload() -> dict:
 
 
 def test_setup_docs_include_release_readiness_commands_and_security_settings():
-    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text()
+    # The README is intentionally a high-level tour; the canonical operational
+    # reference (env vars, security settings, deep-dive commands) lives in
+    # PIPELINE_DOCUMENTATION.md, which the README links to. Treat both together
+    # as the "setup docs" so this check follows the content, not a single file.
+    root = Path(__file__).resolve().parents[2]
+    docs = (root / "README.md").read_text() + "\n" + (
+        root / "PIPELINE_DOCUMENTATION.md"
+    ).read_text()
 
-    assert "cd legacylift/server" in readme
-    assert "python -m pytest tests -q" in readme
-    assert "cd legacylift/client" in readme
-    assert "npm run type-check" in readme
-    assert "cd legacylift/extension" in readme
-    assert "DATABASE_URL" in readme
-    assert "sqlite+aiosqlite:///./.data/legacylift.db" in readme
-    assert "GITHUB_WEBHOOK_SECRET" in readme
-    assert "OVERLAY_ALLOWED_REPOS_BY_USER" in readme
-    assert "Load unpacked" in readme
+    assert "cd legacylift/server" in docs
+    assert "python -m pytest tests -q" in docs
+    assert "cd legacylift/client" in docs
+    assert "npm run type-check" in docs
+    assert "cd legacylift/extension" in docs
+    assert "DATABASE_URL" in docs
+    assert "sqlite+aiosqlite:///./.data/legacylift.db" in docs
+    assert "GITHUB_WEBHOOK_SECRET" in docs
+    assert "OVERLAY_ALLOWED_REPOS_BY_USER" in docs
+    assert "Load unpacked" in docs
 
 
 @pytest.mark.asyncio

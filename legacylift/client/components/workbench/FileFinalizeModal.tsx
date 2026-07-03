@@ -18,6 +18,7 @@ import type { AIReviewResult } from "@/types/legacylift";
 import type { FileGroup } from "@/hooks/useFileStatus";
 import { assembleFile, concatenateSource } from "@/lib/fileAssembly";
 import { reviewMigration } from "@/lib/migration";
+import { toProfileCtx } from "@/lib/targetLanguages";
 import { makeLesson, type Lesson } from "@/lib/lessons";
 
 interface FileFinalizeModalProps {
@@ -44,7 +45,7 @@ export function FileFinalizeModal({
 
   if (!open) return null;
 
-  const assembled = assembleFile(file.filename, file.chunks);
+  const assembled = assembleFile(file.filename, file.chunks, file.target);
   const source = concatenateSource(file.chunks);
   const allChunksHaveCode = file.chunks.every(
     (c) => c.migrated_code.trim().length > 0,
@@ -70,6 +71,8 @@ export function FileFinalizeModal({
         name: file.filename,
         sourceCode: source,
         migratedCode: assembled,
+        targetLang: file.target.language,
+        targetProfile: toProfileCtx(file.target),
       });
       setReview(result);
       for (const text of [...result.critical_issues, ...result.warnings]) {

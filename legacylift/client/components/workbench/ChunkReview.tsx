@@ -22,6 +22,8 @@ import { RiskBadge, STATUS_META } from "@/components/workbench/shared";
 
 interface ChunkReviewProps {
   chunk: MigrationChunk;
+  /** Target language this chunk migrates into, e.g. "Java 21". */
+  targetLabel?: string;
   onApprove: (id: string) => void;
   onReject: (id: string, reason: string) => void;
   /** Reopen an already-approved (or rejected) chunk for another look/edit. */
@@ -285,6 +287,7 @@ function Checks({
 
 export function ChunkReview({
   chunk,
+  targetLabel,
   onApprove,
   onReject,
   onReopen,
@@ -339,6 +342,14 @@ export function ChunkReview({
         >
           {statusMeta.label}
         </span>
+        {targetLabel && (
+          <span
+            title={`This unit migrates into ${targetLabel}`}
+            className="inline-flex items-center gap-1 rounded-full border border-[#7C3AED]/25 bg-[#7C3AED]/[0.08] px-2 py-0.5 text-[11px] font-medium text-[#7C3AED]"
+          >
+            → {targetLabel}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-3">
           {onRunChecks && (
             <button

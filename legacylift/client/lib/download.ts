@@ -1,12 +1,17 @@
 // lib/download.ts — export the migrated code from the workbench.
-// Bundles every generated unit into a single annotated Python file and triggers
-// a browser download. (Single file keeps it dependency-free; swap for a zip if
-// you want the original folder structure.)
+// Each file is assembled in its own chosen target language (a project can be
+// genuinely multi-language), named with that language's extension, and either
+// saved individually or bundled into a zip.
 
 import JSZip from "jszip";
 import type { MigrationChunk } from "@/types/legacylift";
 import type { FileGroup } from "@/hooks/useFileStatus";
 import { assembleFile } from "@/lib/fileAssembly";
+import {
+  DEFAULT_TARGET_ID,
+  getTargetLanguage,
+  type TargetLanguage,
+} from "@/lib/targetLanguages";
 
 interface SaveFilePickerWindow extends Window {
   showSaveFilePicker?: (options?: {
@@ -18,37 +23,41 @@ interface SaveFilePickerWindow extends Window {
   }) => Promise<FileSystemFileHandle>;
 }
 
-/** 'interest.cbl' -> 'interest.py'; 'AccountService.java' -> 'AccountService.py'. */
-export function toPythonFilename(originalName: string): string {
+/** 'interest.cbl' -> 'interest.py' (Python); 'ledger.cbl' -> 'ledger.java' (Java). */
+export function toTargetFilename(originalName: string, target: TargetLanguage): string {
   const stripped = originalName.replace(/\.[^./\\]+$/, "");
-  return `${stripped}.py`;
+  return `${stripped}${target.extension}`;
 }
 
 export function buildMigratedFile(
   projectName: string,
   chunks: MigrationChunk[],
+  target: TargetLanguage,
 ): string {
   const done = chunks.filter((c) => c.migrated_code && c.migrated_code.trim());
-  const bar = "#".repeat(64);
+  const c = target.commentPrefix;
+  const bar = `${c} ${"=".repeat(60)}`;
+  const preamble =
+    target.language === "Python"
+      ? "\nfrom decimal import Decimal, ROUND_HALF_UP  # noqa: F401\n"
+      : "";
   const header = [
     bar,
-    `# Migrated by LegacyLift — ${projectName}`,
-    `# ${done.length} of ${chunks.length} units generated.`,
-    `# Generated code is a starting point — review every unit before use.`,
+    `${c} Migrated by LegacyLift — ${projectName} → ${target.label}`,
+    `${c} ${done.length} of ${chunks.length} units generated.`,
+    `${c} Generated code is a starting point — review every unit before use.`,
     bar,
-    "",
-    "from decimal import Decimal, ROUND_HALF_UP  # noqa: F401",
-    "",
+    preamble,
     "",
   ].join("\n");
 
   const body = done
-    .map((c) =>
+    .map((chunk) =>
       [
         bar,
-        `# ${c.name}   (risk: ${c.risk_level} · status: ${c.status})`,
+        `${c} ${chunk.name}   (risk: ${chunk.risk_level} · status: ${chunk.status})`,
         bar,
-        c.migrated_code.trim(),
+        chunk.migrated_code.trim(),
       ].join("\n"),
     )
     .join("\n\n\n");
@@ -98,29 +107,31 @@ async function saveBlob(
 export async function downloadMigration(
   projectName: string,
   chunks: MigrationChunk[],
+  target: TargetLanguage = getTargetLanguage(DEFAULT_TARGET_ID),
 ): Promise<void> {
-  const text = buildMigratedFile(projectName, chunks);
+  const text = buildMigratedFile(projectName, chunks, target);
   const safe = projectName.replace(/[^\w.-]+/g, "_") || "migration";
-  const filename = `${safe}_migrated.py`;
-  const blob = new Blob([text], { type: "text/x-python;charset=utf-8" });
+  const filename = `${safe}_migrated${target.extension}`;
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
   await saveBlob(blob, filename, {
-    description: "Python file",
-    accept: { "text/x-python": [".py"] },
+    description: `${target.label} file`,
+    accept: { "text/plain": [target.extension] },
   });
 }
 
-/** Download one finalized file's assembled Python module on its own. */
+/** Download one finalized file's assembled module in its target language. */
 export async function downloadSingleFile(fileGroup: FileGroup): Promise<void> {
-  const content = assembleFile(fileGroup.filename, fileGroup.chunks);
-  const filename = toPythonFilename(fileGroup.filename);
-  const blob = new Blob([content], { type: "text/x-python;charset=utf-8" });
+  const content = assembleFile(fileGroup.filename, fileGroup.chunks, fileGroup.target);
+  const filename = toTargetFilename(fileGroup.filename, fileGroup.target);
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
   await saveBlob(blob, filename, {
-    description: "Python file",
-    accept: { "text/x-python": [".py"] },
+    description: `${fileGroup.target.label} file`,
+    accept: { "text/plain": [fileGroup.target.extension] },
   });
 }
 
-/** Bundle every finalized file into one zip, preserving original filenames. */
+/** Bundle every finalized file into one zip; each file keeps its own target
+ *  language and extension (a project can be genuinely multi-language). */
 export async function downloadProjectZip(
   projectName: string,
   fileGroups: FileGroup[],
@@ -130,18 +141,25 @@ export async function downloadProjectZip(
 
   const approved = finalized.reduce((n, f) => n + f.approvedCount, 0);
   const total = finalized.reduce((n, f) => n + f.totalCount, 0);
+  const targetLine = [...new Set(finalized.map((f) => f.target.label))].join(", ");
   zip.file(
     "_MIGRATION_SUMMARY.txt",
     [
       `Migrated by LegacyLift — ${projectName}`,
       `${finalized.length} file(s) finalized · ${approved}/${total} units approved.`,
+      targetLine ? `Target language(s): ${targetLine}.` : "",
       "Generated code is a starting point — review every unit before use.",
       "",
-    ].join("\n"),
+    ]
+      .filter(Boolean)
+      .join("\n"),
   );
 
   for (const fg of finalized) {
-    zip.file(toPythonFilename(fg.filename), assembleFile(fg.filename, fg.chunks));
+    zip.file(
+      toTargetFilename(fg.filename, fg.target),
+      assembleFile(fg.filename, fg.chunks, fg.target),
+    );
   }
 
   const blob = await zip.generateAsync({ type: "blob" });

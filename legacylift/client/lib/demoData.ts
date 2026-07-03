@@ -11,6 +11,7 @@ import type {
   ProjectFile,
   TargetProfile,
 } from "@/types/legacylift";
+import type { ProjectConfig } from "@/lib/projectConfig";
 
 export const DEMO_PROJECT_ID = "demo-loan-engine";
 export const DEMO_REPO = "github.com/acme-bank/loan-engine";
@@ -584,5 +585,32 @@ export function createDemoState(
     files: FILES.map((f) => ({ ...f })),
     migrationComplete: false,
     error: null,
+  };
+}
+
+// Seed workbench config for the demos so both new features are visible out of
+// the box: sample institutional context, and a genuinely mixed-target project
+// (the COBOL loan engine defaults to Python but sends ledger.cbl to Java).
+export function getDemoConfig(projectId: string): ProjectConfig {
+  if (projectId === DEMO_HERITAGE_PROJECT_ID) {
+    return {
+      context: {
+        global:
+          "Acme Bank core payments. Money is GBP in minor units (pence). Preserve the double-entry ledger invariants and the end-of-day settlement audit exactly. External transfers must route through the settlement suspense account for EOD clearing.",
+        perFile: {},
+      },
+      targets: { default: "java-21", perFile: {} },
+    };
+  }
+  return {
+    context: {
+      global:
+        "Acme Bank loan engine. COMP-3 money fields are GBP pence. The £25.00 late-fee cap is a 2019 FCA regulatory limit — never change it. RATE-TABLE is sourced from our quarterly regulatory feed; treat its values as external config, not constants to inline.",
+      perFile: {
+        "ledger.cbl":
+          "The general ledger posts to the DB2 GLEDGER table via a copybook we cannot change. Keep the debit-before-credit ordering and the audit write. This module is consumed by our Java services — migrate it to Java.",
+      },
+    },
+    targets: { default: "python-3x", perFile: { "ledger.cbl": "java-21" } },
   };
 }

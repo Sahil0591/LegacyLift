@@ -242,5 +242,12 @@ class Project(BaseModel):
     client_file_status: Optional[dict] = None
     """filename -> true, for files the human has finalized."""
 
+    client_config: Optional[dict] = None
+    """Human-authored workbench configuration, computed and owned by the browser:
+    {"context": {"global": str, "perFile": {filename: str}},
+     "targets": {"default": target_language_id, "perFile": {filename: target_language_id}}}.
+    Feeds institutional context and per-file target-language selection into the
+    /llm/* prompts. Round-tripped verbatim like the other client_* blobs."""
+
     class Config:
         use_enum_values = True

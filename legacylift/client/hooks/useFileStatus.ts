@@ -9,6 +9,13 @@ import { useMemo } from "react";
 import type { MigrationChunk, PipelineState, RiskLevel } from "@/types/legacylift";
 import { RISK_RANK } from "@/components/workbench/shared";
 import { computeFileClusters } from "@/lib/fileClusters";
+import {
+  emptyConfig,
+  hasTargetOverride,
+  resolveTarget,
+  type ProjectConfig,
+} from "@/lib/projectConfig";
+import type { TargetLanguage } from "@/lib/targetLanguages";
 
 export type FileStatus =
   | "in_progress"
@@ -30,6 +37,10 @@ export interface FileGroup {
   clusterReady: boolean;
   /** Cluster-mate filenames not yet ready — surfaced in the disabled-button tooltip. */
   blockedBy: string[];
+  /** Resolved target language this file migrates into (override ?? default). */
+  target: TargetLanguage;
+  /** True when the file has an explicit per-file target override. */
+  targetOverridden: boolean;
 }
 
 const UNGROUPED = "(ungrouped)";
@@ -38,6 +49,7 @@ export function useFileGroups(
   state: Pick<PipelineState, "chunks" | "files" | "dependencyGraph">,
   finalizedFiles: Record<string, true> = {},
   finalizingFile: string | null = null,
+  config: ProjectConfig = emptyConfig(),
 ): FileGroup[] {
   return useMemo(() => {
     const byFile = new Map<string, MigrationChunk[]>();
@@ -89,7 +101,9 @@ export function useFileGroups(
         clusterFiles,
         clusterReady,
         blockedBy,
+        target: resolveTarget(config, filename),
+        targetOverridden: hasTargetOverride(config, filename),
       };
     });
-  }, [state.chunks, state.files, state.dependencyGraph, finalizedFiles, finalizingFile]);
+  }, [state.chunks, state.files, state.dependencyGraph, finalizedFiles, finalizingFile, config]);
 }

@@ -28,6 +28,10 @@ interface WorkbenchHeaderProps {
   repo: string;
   view: WorkbenchView;
   onViewChange: (view: WorkbenchView) => void;
+  /** Legacy source language, e.g. "COBOL". */
+  sourceLang?: string;
+  /** Distinct target-language labels across the project. */
+  targetLabels?: string[];
   approved: number;
   total: number;
   onDownload?: () => void;
@@ -51,6 +55,8 @@ export function WorkbenchHeader({
   repo,
   view,
   onViewChange,
+  sourceLang = "COBOL",
+  targetLabels = ["Python"],
   approved,
   total,
   onDownload,
@@ -61,6 +67,9 @@ export function WorkbenchHeader({
   onJumpToJob,
   onStartTour,
 }: WorkbenchHeaderProps) {
+  const targets = targetLabels.length > 0 ? targetLabels : ["Python"];
+  const targetText =
+    targets.length === 1 ? targets[0] : `${targets.length} targets`;
   const quotaRatio =
     quotaRemaining != null && quotaMax ? quotaRemaining / quotaMax : null;
   const quotaColor =
@@ -88,8 +97,15 @@ export function WorkbenchHeader({
 
       <div className="flex min-w-0 items-center gap-2">
         <span className="truncate font-mono text-sm text-ink/80">{repo}</span>
-        <span className="hidden shrink-0 rounded-full border border-ink/10 px-2 py-0.5 text-[10px] font-medium text-sub md:inline">
-          COBOL → Python
+        <span
+          title={
+            targets.length > 1
+              ? `${sourceLang} → ${targets.join(", ")}`
+              : `${sourceLang} → ${targets[0]}`
+          }
+          className="hidden shrink-0 rounded-full border border-ink/10 px-2 py-0.5 text-[10px] font-medium text-sub md:inline"
+        >
+          {sourceLang} → {targetText}
         </span>
       </div>
 

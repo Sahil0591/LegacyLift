@@ -489,6 +489,8 @@ export interface PipelineState {
 export interface CreateProjectRequest {
   name: string;
   language: ProjectLanguage;
+  /** Destination language name (e.g. "Python", "Java"). Defaults to Python. */
+  targetLanguage?: string;
 }
 
 export interface CreateProjectResponse {

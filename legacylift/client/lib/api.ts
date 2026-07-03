@@ -115,7 +115,7 @@ export async function createProject(
     body: JSON.stringify({
       name: body.name,
       source_language: toSourceLanguage(body.language),
-      target_language: "Python",
+      target_language: body.targetLanguage ?? "Python",
     }),
   });
 }
@@ -256,10 +256,11 @@ export interface ImportProjectResponse {
 export async function importAnalysis(
   analysis: unknown,
   sourceLanguage?: string,
+  config?: unknown,
 ): Promise<ImportProjectResponse> {
   return await request<ImportProjectResponse>("/project/import", {
     method: "POST",
-    body: JSON.stringify({ analysis, source_language: sourceLanguage }),
+    body: JSON.stringify({ analysis, source_language: sourceLanguage, config }),
   });
 }
 
@@ -273,15 +274,16 @@ export interface WorkbenchProgressChunk {
 }
 
 /** Save the full workbench progress (code, checks, tests, status, finalized
- *  files) for a cloud project. */
+ *  files, and the human-authored config) for a cloud project. */
 export async function saveWorkbenchProgress(
   projectId: string,
   chunks: WorkbenchProgressChunk[],
   finalizedFiles: Record<string, boolean>,
+  config?: unknown,
 ): Promise<void> {
   await request<unknown>(`/project/${encodeURIComponent(projectId)}/progress`, {
     method: "PUT",
-    body: JSON.stringify({ chunks, finalized_files: finalizedFiles }),
+    body: JSON.stringify({ chunks, finalized_files: finalizedFiles, config }),
   });
 }
 
@@ -290,6 +292,7 @@ export interface WorkbenchSnapshot {
   analysis: unknown;
   progress: Record<string, WorkbenchProgressChunk & Record<string, unknown>>;
   file_status: Record<string, boolean>;
+  config?: unknown;
 }
 
 /** Fetch a cloud project's stored analysis + progress for rehydration.

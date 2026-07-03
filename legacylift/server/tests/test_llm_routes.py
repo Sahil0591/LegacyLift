@@ -75,6 +75,21 @@ TESTS_BODY = {
     "target_lang": "Python",
 }
 
+SUMMARIZE_BODY = {
+    "filename": "interest.cbl",
+    "source_code": "       INTEREST-CALC SECTION.\n           COMPUTE WS-INT = WS-BAL * 0.025.",
+    "source_lang": "COBOL",
+    "business_rules": [
+        {"title": "Daily interest", "description": "2.5% annual rate", "hardcoded_values": ["0.025"]}
+    ],
+    "institutional_context": "Money fields are GBP pence.",
+}
+
+SUMMARY_JSON = (
+    '{"technical": "Computes daily interest on the balance.",'
+    ' "layman": "Works out how much interest a customer owes each day."}'
+)
+
 MIGRATED_CODE = "interest = balance * Decimal('0.025')"
 REVIEW_JSON = (
     '{"equivalent": true, "confidence": "High", "issues_found": 0,'
@@ -141,6 +156,31 @@ class TestLlmMigrate:
             r = client.post("/llm/migrate", json=MIGRATE_BODY)
         assert r.status_code == 200
         assert r.json()["migrated_code"] == MIGRATED_CODE
+
+    def test_accepts_rich_profile_and_institutional_context(self):
+        """New multi-language + context fields are accepted and reach the prompt."""
+        body = {
+            **MIGRATE_BODY,
+            "target_lang": "Java",
+            "target_profile": {
+                "language": "Java",
+                "version": "21",
+                "test_framework": "JUnit 5",
+                "numeric_policy": "Use BigDecimal for money.",
+                "risk_focus": ["BigDecimal scale", "transaction boundaries"],
+                "recommended_libraries": ["java.math.BigDecimal"],
+            },
+            "institutional_context": "ACME rule: post to GLEDGER via copybook.",
+        }
+        llm = _make_llm(MIGRATED_CODE)
+        with patch.object(_main, "_get_llm", return_value=llm):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/migrate", json=body)
+        assert r.status_code == 200, r.text
+        user_prompt = llm.complete.await_args.kwargs["user"]
+        assert "BigDecimal" in user_prompt
+        assert "ORGANIZATION CONTEXT" in user_prompt
+        assert "GLEDGER" in user_prompt
 
     def test_501_when_not_configured(self):
         with patch.object(_main, "_get_llm", return_value=_unconfigured_llm()):
@@ -263,6 +303,42 @@ class TestLlmTests:
         assert len(r.json()["tests"]) == 8
 
 
+# ── /llm/summarize-file ──────────────────────────────────────────────────────
+
+class TestLlmSummarizeFile:
+
+    def test_returns_two_summaries(self):
+        llm = _make_llm(SUMMARY_JSON)
+        with patch.object(_main, "_get_llm", return_value=llm):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/summarize-file", json=SUMMARIZE_BODY)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "interest" in data["technical"].lower()
+        assert "customer" in data["layman"].lower()
+        assert data["model"] == "test-model"
+        assert llm.complete.await_args.kwargs["json_response"] is True
+
+    def test_prompt_includes_rules_and_context(self):
+        """The whole-file summary prompt carries the file's rules + org context."""
+        llm = _make_llm(SUMMARY_JSON)
+        with patch.object(_main, "_get_llm", return_value=llm):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/summarize-file", json=SUMMARIZE_BODY)
+        assert r.status_code == 200
+        user_prompt = llm.complete.await_args.kwargs["user"]
+        assert "interest.cbl" in user_prompt
+        assert "Daily interest" in user_prompt
+        assert "ORGANIZATION CONTEXT" in user_prompt
+        assert "GBP pence" in user_prompt
+
+    def test_501_when_not_configured(self):
+        with patch.object(_main, "_get_llm", return_value=_unconfigured_llm()):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/summarize-file", json=SUMMARIZE_BODY)
+        assert r.status_code == 501
+
+
 # ── Rate limiter ──────────────────────────────────────────────────────────────
 
 class TestRateLimit:
@@ -381,6 +457,72 @@ class TestMigrationPrompts:
         )
         assert "pytest" in system
         assert "LOAN-CALC" in user
+
+    # ── Multi-language: prompts must reflect the chosen target, not Python ──
+
+    JAVA_PROFILE = {
+        "language": "Java",
+        "version": "21",
+        "test_framework": "JUnit 5",
+        "numeric_policy": "Use BigDecimal for money; never double.",
+        "type_system": "records and sealed types",
+        "notes": "Preserve double-entry invariants.",
+    }
+
+    def test_migration_prompt_is_language_specific_for_java(self):
+        from utils.migration_prompts import build_migration_prompt
+        system, user = build_migration_prompt(
+            name="processTransfer",
+            source_code="public void processTransfer() {}",
+            source_lang="Java",
+            target_lang="Java",
+            target_profile=self.JAVA_PROFILE,
+        )
+        # System prompt is parameterized on the target language, not Python.
+        assert "Java" in system
+        assert "decimal.Decimal" not in system
+        # Profile guidance flows into the user prompt.
+        assert "BigDecimal" in user
+        assert "JUnit 5" in user
+
+    def test_test_prompt_uses_profile_framework_for_java(self):
+        from utils.migration_prompts import build_test_prompt
+        system, _ = build_test_prompt(
+            name="processTransfer",
+            migrated_code="void f() {}",
+            target_lang="Java",
+            target_profile=self.JAVA_PROFILE,
+        )
+        assert "JUnit 5" in system
+        assert "pytest" not in system
+
+    def test_test_prompt_defaults_framework_by_language(self):
+        """With no profile, the framework is inferred from the target language."""
+        from utils.migration_prompts import build_test_prompt
+        system, _ = build_test_prompt(
+            name="X", migrated_code="fn f() {}", target_lang="Rust"
+        )
+        assert "cargo test" in system
+        assert "pytest" not in system
+
+    def test_migration_prompt_includes_institutional_context(self):
+        from utils.migration_prompts import build_migration_prompt
+        _, user = build_migration_prompt(
+            name="X", source_code=".", source_lang="COBOL", target_lang="Python",
+            institutional_context="ACME rule: money fields are GBP pence; never change the £25 cap.",
+        )
+        assert "ORGANIZATION CONTEXT" in user
+        assert "GBP pence" in user
+
+    def test_review_prompt_includes_institutional_context(self):
+        from utils.migration_prompts import build_review_prompt
+        _, user = build_review_prompt(
+            name="X", source_lang="COBOL", target_lang="Java",
+            source_code="COMPUTE X = 1.", migrated_code="var x = 1;",
+            institutional_context="ACME rule: route external transfers to suspense.",
+        )
+        assert "ORGANIZATION CONTEXT" in user
+        assert "suspense" in user
 
     def test_strip_code_fence(self):
         from utils.migration_prompts import strip_code_fence

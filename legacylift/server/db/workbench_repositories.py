@@ -56,6 +56,7 @@ _RESIDUAL_FIELDS = (
     "client_analysis",
     "client_progress",
     "client_file_status",
+    "client_config",
 )
 
 

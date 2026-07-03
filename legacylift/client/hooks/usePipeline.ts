@@ -9,18 +9,25 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { isDemoProject, createDemoState } from "@/lib/demoData";
+import { isDemoProject, createDemoState, getDemoConfig } from "@/lib/demoData";
 import {
   loadAnalysis,
+  loadConfig,
   loadFileStatus,
   loadLessons,
   loadProgress,
+  saveConfig,
   saveFileStatus,
   saveLessons,
   saveProgress,
   updateProjectProgress,
   type ChunkProgressEntry,
 } from "@/lib/projectStore";
+import {
+  emptyConfig,
+  normalizeConfig,
+  type ProjectConfig,
+} from "@/lib/projectConfig";
 import type { AnalyzeResult } from "@/lib/analyze";
 import type { Lesson } from "@/lib/lessons";
 import type {
@@ -84,6 +91,16 @@ interface UsePipelineReturn {
   lessons: Lesson[];
   /** Record a new lesson; persisted for local projects. */
   addLesson: (lesson: Lesson) => void;
+  /** Human-authored config: institutional context + per-file target languages. */
+  config: ProjectConfig;
+  /** Set the project-wide institutional context. */
+  setGlobalContext: (text: string) => void;
+  /** Set (or clear, when text is empty) a file's specific context. */
+  setFileContext: (filename: string, text: string) => void;
+  /** Set the default target-language id for files without an override. */
+  setDefaultTarget: (targetId: string) => void;
+  /** Set (or clear, when targetId is empty) a file's target-language override. */
+  setFileTarget: (filename: string, targetId: string) => void;
 }
 
 function stateFromAnalysis(
@@ -337,6 +354,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
   const [finalizedFiles, setFinalizedFiles] = useState<Record<string, true>>({});
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const lessonsRef = useRef<Lesson[]>([]);
+  const [config, setConfigState] = useState<ProjectConfig>(() => emptyConfig());
 
   useEffect(() => {
     lessonsRef.current = lessons;
@@ -349,11 +367,13 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
       setState(createDemoState(projectId));
       setFinalizedFiles({});
       setLessons([]);
+      setConfigState(getDemoConfig(projectId));
       return;
     }
     if (isLocal && projectId) {
       setFinalizedFiles(loadFileStatus(projectId) ?? {});
       setLessons(loadLessons(projectId) ?? []);
+      setConfigState(loadConfig(projectId) ?? emptyConfig());
       const analysis = loadAnalysis(projectId);
       if (!analysis) {
         setState({ ...INITIAL_STATE, projectId });
@@ -369,6 +389,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
       setState({ ...INITIAL_STATE, projectId });
       setFinalizedFiles({});
       setLessons([]);
+      setConfigState(emptyConfig());
       (async () => {
         const [snapshot, loadedLessons] = await Promise.all([
           getWorkbench(projectId).catch(() => undefined),
@@ -391,6 +412,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
             ),
           );
         }
+        if (snapshot?.config) setConfigState(normalizeConfig(snapshot.config));
         setLessons(loadedLessons);
       })();
       return () => {
@@ -399,6 +421,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     }
     setFinalizedFiles({});
     setLessons([]);
+    setConfigState(emptyConfig());
     setState({ ...INITIAL_STATE, projectId });
   }, [projectId, demo, isLocal, isCloud]);
 
@@ -813,13 +836,14 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
           test_results: c.test_results,
         })),
         finalizedFiles,
+        config,
       ).catch(() => {
         // Best-effort — the in-memory state is authoritative until the next
         // successful save; a later edit re-attempts persistence.
       });
     }, 800);
     return () => clearTimeout(timer);
-  }, [state.chunks, state.migrationComplete, finalizedFiles, isCloud, projectId]);
+  }, [state.chunks, state.migrationComplete, finalizedFiles, config, isCloud, projectId]);
 
   // ------------------------------------------------------------------
   // Optimistic UI helpers
@@ -953,6 +977,59 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     [isLocal, demo, projectId],
   );
 
+  // Config mutations. Local projects persist to localStorage inside the
+  // updater (same pattern as markFileFinalized); cloud projects persist via the
+  // debounced save effect keyed on `config`; demo/pipeline stay in-memory.
+  const updateConfig = useCallback(
+    (updater: (c: ProjectConfig) => ProjectConfig) => {
+      setConfigState((prev) => {
+        const next = updater(prev);
+        if (isLocal && projectId) saveConfig(projectId, next);
+        return next;
+      });
+    },
+    [isLocal, projectId],
+  );
+
+  const setGlobalContext = useCallback(
+    (text: string) => {
+      updateConfig((c) => ({ ...c, context: { ...c.context, global: text } }));
+    },
+    [updateConfig],
+  );
+
+  const setFileContext = useCallback(
+    (filename: string, text: string) => {
+      updateConfig((c) => {
+        const perFile = { ...c.context.perFile };
+        if (text.trim()) perFile[filename] = text;
+        else delete perFile[filename];
+        return { ...c, context: { ...c.context, perFile } };
+      });
+    },
+    [updateConfig],
+  );
+
+  const setDefaultTarget = useCallback(
+    (targetId: string) => {
+      updateConfig((c) => ({ ...c, targets: { ...c.targets, default: targetId } }));
+    },
+    [updateConfig],
+  );
+
+  const setFileTarget = useCallback(
+    (filename: string, targetId: string) => {
+      updateConfig((c) => {
+        const perFile = { ...c.targets.perFile };
+        // Empty id clears the override so the file follows the project default.
+        if (targetId) perFile[filename] = targetId;
+        else delete perFile[filename];
+        return { ...c, targets: { ...c.targets, perFile } };
+      });
+    },
+    [updateConfig],
+  );
+
   return {
     state,
     wsStatus: offline ? "connected" : wsStatus,
@@ -967,5 +1044,10 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     unmarkFileFinalized,
     lessons,
     addLesson,
+    config,
+    setGlobalContext,
+    setFileContext,
+    setDefaultTarget,
+    setFileTarget,
   };
 }
