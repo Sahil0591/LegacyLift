@@ -73,7 +73,7 @@ jobs:
         run: uv run pytest -q
 
   client-build:
-    name: Client type-check, lint & build
+    name: Client type-check & build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -94,8 +94,10 @@ jobs:
       - name: Type-check
         run: npm run type-check
 
-      - name: Lint
-        run: npm run lint
+      # No `next lint` step: this project has no ESLint config/deps, so
+      # `next lint` would trigger interactive first-time setup and hang in CI.
+      # `next build` also skips linting when ESLint isn't configured, so nothing
+      # is lost. Add eslint-config-next + an .eslintrc and reinstate if desired.
 
       # `next build` succeeds without Clerk keys (routes using auth() are
       # dynamic); no build-time secrets needed.
