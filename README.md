@@ -1,4 +1,4 @@
-# LegacyLift
+# LegacyLift v1
 
 **Turning decades-old business software into modern, trustworthy code — with a human in the loop at every step.**
 
