@@ -1,2 +1,4 @@
 # Local demo/runtime project store
 /legacylift_data.json
+.venv/
+.data/
