@@ -284,14 +284,15 @@ async def health_check():
     try:
         async with get_session() as session:
             await session.execute(text("SELECT 1"))
-    except Exception as exc:
+    except Exception:
+        # Log full detail server-side; never leak driver/host internals to callers.
         logger.exception("health_check database=unavailable")
         return JSONResponse(
             status_code=503,
             content={
                 "status": "error",
                 "version": "0.1.0",
-                "database": {"status": "unavailable", "error": str(exc)},
+                "database": {"status": "unavailable"},
             },
         )
 
@@ -424,10 +425,10 @@ async def readiness_check():
             async with get_session() as session:
                 await session.execute(text("SELECT 1"))
             database_status = "ok"
-        except Exception as exc:
+        except Exception:
+            # Log full detail server-side; response exposes only a coarse status.
             logger.exception("readiness_check database=unavailable")
             database_status = "unavailable"
-            database_error = str(exc)
 
     ready = demo_mode or (llm_configured and not missing_env and database_status == "ok")
 
