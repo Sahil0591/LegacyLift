@@ -114,6 +114,25 @@ def _get_project_lock(project_id: str) -> asyncio.Lock:
     return _project_locks[project_id]
 
 
+def _spawn_tracked(coro, *, key: str, registry: dict[str, asyncio.Task]) -> asyncio.Task:
+    """Launch a background task that keeps a strong reference (so it isn't
+    garbage-collected mid-flight), logs any exception instead of letting it die
+    silently, and evicts itself from `registry` on completion so the map can't
+    leak. asyncio tasks are process-local — work stranded by a restart is
+    recovered separately by _reconcile_interrupted_projects() at startup."""
+    task = asyncio.create_task(coro)
+    registry[key] = task
+
+    def _on_done(finished: asyncio.Task) -> None:
+        if registry.get(key) is finished:
+            registry.pop(key, None)
+        if not finished.cancelled() and finished.exception() is not None:
+            logger.error("Background task %r failed", key, exc_info=finished.exception())
+
+    task.add_done_callback(_on_done)
+    return task
+
+
 # Env vars a DEMO_MODE=false deployment cannot function without. Checked at
 # startup so a misconfigured production deploy fails loudly instead of
 # silently serving demo/stub behaviour or rejecting every request with 401s.
@@ -142,6 +161,40 @@ def _validate_production_env() -> None:
     validate_database_url(os.getenv("DATABASE_URL", ""))
 
 
+# States a project can be stranded in if the process dies mid-work, mapped to
+# the nearest stable state the user can safely resume from via normal endpoints
+# (uploading → POST /start re-runs Layer 0; ready → POST /select-chunk re-runs
+# migration). Both target transitions are idempotent to repeat.
+_INTERRUPTED_RESUME_STATE = {
+    "analysing": "uploading",
+    "migrating": "ready",
+}
+
+
+async def _reconcile_interrupted_projects() -> None:
+    """Recover work stranded by a restart.
+
+    Background pipeline tasks live only in the previous process, so any project
+    still parked in a transient state after boot would hang forever. Reset each
+    one to the nearest resumable state instead of stranding it, then flush once.
+    """
+    recovered = 0
+    for project in storage.all_projects():
+        resume_state = _INTERRUPTED_RESUME_STATE.get(_status_str(project))
+        if resume_state is None:
+            continue
+        logger.warning(
+            "Project %s was interrupted mid-'%s' by a restart — resetting to '%s'",
+            project.id, _status_str(project), resume_state,
+        )
+        project.status = resume_state
+        recovered += 1
+
+    if recovered:
+        await storage.persist()
+        logger.info("Reconciled %d interrupted project(s) after restart", recovered)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -162,6 +215,7 @@ async def lifespan(app: FastAPI):
     _validate_production_env()
     await storage.load()
     await init_db()
+    await _reconcile_interrupted_projects()
     yield
     await storage.persist()
     await storage.close()
@@ -466,7 +520,7 @@ async def create_project(body: CreateProjectRequest, user_id: str = Depends(get_
             )
         storage.put(project)
         storage.increment_projects_used(user_id)
-        asyncio.ensure_future(storage.persist())
+        storage.schedule_persist()
         return {
             "project_id": project.id,
             "name": project.name,
@@ -558,7 +612,7 @@ async def upload_files(
     if _status_str(project) == "created":
         project.status = "uploading"
 
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "files_uploaded": filenames,
@@ -582,8 +636,7 @@ async def start_pipeline(project_id: str, user_id: str = Depends(get_current_use
             detail=f"Pipeline already started (status: {current})",
         )
 
-    task = asyncio.create_task(run_pipeline(project))
-    active_pipelines[project_id] = task
+    _spawn_tracked(run_pipeline(project), key=project_id, registry=active_pipelines)
 
     return JSONResponse(
         status_code=202,
@@ -658,7 +711,7 @@ async def approve_chunk(
             await _transition(project, "ready")
         await ws_manager.emit(project.id, "ready_for_next_chunk")
 
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
@@ -703,7 +756,7 @@ async def reject_chunk(
         feedback=feedback,
     )
 
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
@@ -888,7 +941,7 @@ async def confirm_rule(
 
     project.chunk_rule_statuses[chunk_id] = review_state_label(transition.review_state)
 
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
@@ -967,7 +1020,11 @@ async def select_chunk(project_id: str, chunk_id: str, user_id: str = Depends(ge
 
         project.selected_chunk_id = chunk_id
         await _transition(project, "migrating")
-        asyncio.create_task(run_migration_generation(project, chunk_id))
+        _spawn_tracked(
+            run_migration_generation(project, chunk_id),
+            key=project_id,
+            registry=active_pipelines,
+        )
 
     await ws_manager.emit(project.id, "chunk_selected", chunk_id=chunk_id)
 
@@ -1049,7 +1106,7 @@ async def add_lesson(project_id: str, body: AddLessonRequest, user_id: str = Dep
         source_file=body.source_file or "",
         chunk_name=body.chunk_name or "",
     )
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id":   project_id,
         "lesson":       project.lessons[-1],
@@ -1065,7 +1122,7 @@ async def delete_lesson(project_id: str, lesson_id: str, user_id: str = Depends(
     project.lessons = [l for l in project.lessons if l.get("id") != lesson_id]
     if len(project.lessons) == before:
         raise HTTPException(status_code=404, detail=f"Lesson '{lesson_id}' not found")
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id":   project_id,
         "lesson_id":    lesson_id,
@@ -1233,7 +1290,7 @@ async def import_project(body: ImportProjectRequest, user_id: str = Depends(get_
     )
     storage.put(project)
     storage.increment_projects_used(user_id)
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project.id,
         "name": project.name,
@@ -1311,7 +1368,7 @@ async def save_progress(
     per-chunk status, finalized files) for a cloud project."""
     project = _get_project(project_id, user_id)
     _apply_progress(project, body)
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "status": _status_str(project),
@@ -1342,7 +1399,7 @@ async def delete_project(project_id: str, user_id: str = Depends(get_current_use
     storage.delete(project_id)
     lim = storage.get_limits(user_id)
     lim.projects_used = max(0, lim.projects_used - 1)
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {"deleted": project_id}
 
 

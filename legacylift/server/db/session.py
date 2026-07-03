@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Awaitable, Callable, TypeVar
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -16,6 +19,10 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from db.models import Base
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./.data/legacylift.db"
@@ -79,17 +86,77 @@ def create_engine(database_url: str | None = None) -> AsyncEngine:
     url = database_url or get_database_url()
     ensure_sqlite_directory(url)
 
+    engine_kwargs: dict[str, object] = {"future": True}
+
     if url.startswith("sqlite"):
-        connect_args = {"check_same_thread": False}
+        connect_args: dict[str, object] = {"check_same_thread": False}
     elif url.startswith("postgresql"):
         # Neon's pooled (pgbouncer transaction-mode) connection string breaks
         # asyncpg's server-side prepared-statement cache. Disabling it is a
         # safe no-op against Neon's direct/non-pooled connection string too,
         # so apply it unconditionally for any postgresql URL.
-        connect_args = {"statement_cache_size": 0}
+        connect_args = {
+            "statement_cache_size": 0,
+            "timeout": 10,          # cap connection establishment (seconds)
+            "command_timeout": 60,  # cap any single statement (seconds)
+        }
+        # Neon scale-to-zero suspends idle compute and silently drops pooled
+        # connections. pool_pre_ping revalidates (and transparently reopens) a
+        # connection before it is handed out; pool_recycle proactively discards
+        # connections older than the idle window so we rarely reach a dead one.
+        # Modest sizing keeps us within Neon/pgbouncer connection limits.
+        engine_kwargs.update(
+            pool_pre_ping=True,
+            pool_recycle=300,
+            pool_size=5,
+            max_overflow=10,
+            pool_timeout=30,
+        )
     else:
         connect_args = {}
-    return create_async_engine(url, future=True, connect_args=connect_args)
+
+    return create_async_engine(url, connect_args=connect_args, **engine_kwargs)
+
+
+def is_db_disconnect(exc: BaseException) -> bool:
+    """True when an error looks like a dropped/stale connection worth retrying,
+    as opposed to a genuine query error (constraint violation, bad SQL, ...)."""
+    if isinstance(exc, (OperationalError, InterfaceError)):
+        return True
+    # SQLAlchemy flags disconnects it recognises on the wrapped DBAPIError.
+    return bool(getattr(exc, "connection_invalidated", False))
+
+
+async def with_db_retry(
+    operation: Callable[[], Awaitable[T]],
+    *,
+    retries: int = 3,
+    base_delay: float = 0.5,
+) -> T:
+    """Run an *idempotent* DB operation, retrying only transient disconnects.
+
+    Targets Neon scale-to-zero, where a connection can drop mid-flight. Non
+    disconnect errors (integrity errors, etc.) propagate immediately. The
+    operation must open its own session so each retry gets a fresh connection.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(retries):
+        try:
+            return await operation()
+        except (OperationalError, InterfaceError, DBAPIError) as exc:
+            if not is_db_disconnect(exc):
+                raise
+            last_exc = exc
+            if attempt == retries - 1:
+                break
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "DB disconnect (attempt %d/%d), retrying in %.1fs: %s",
+                attempt + 1, retries, delay, exc,
+            )
+            await asyncio.sleep(delay)
+    assert last_exc is not None  # only reached after last_exc was set
+    raise last_exc
 
 
 def _literal_sql(value: object) -> str | None:

@@ -37,7 +37,12 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from db.session import get_session, init_db as db_init_db
+from db.session import (
+    get_session,
+    init_db as db_init_db,
+    is_db_disconnect,
+    with_db_retry,
+)
 from db.workbench_repositories import (
     delete_workbench_project,
     load_all_projects,
@@ -70,6 +75,12 @@ class ProjectStorage:
         # Project ids removed via delete() since the last persist() flush —
         # applied to the DB on the next flush (delete() itself stays sync).
         self._pending_deletes: set[str] = set()
+        # Single-flight persistence: only one flush touches the shared engine at
+        # a time, and overlapping schedule_persist() calls coalesce into at most
+        # one in-flight flush plus one queued re-run (see schedule_persist).
+        self._persist_lock = asyncio.Lock()
+        self._persist_dirty = False
+        self._persist_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Startup / teardown
@@ -100,11 +111,14 @@ class ProjectStorage:
             logger.warning("Could not load storage file: %s — starting fresh", exc)
 
     async def _load_db(self) -> None:
-        try:
+        async def _do_load() -> None:
             await db_init_db()
             async with get_session() as session:
                 self._projects = await load_all_projects(session)
                 self._limits = await load_all_user_limits(session)
+
+        try:
+            await with_db_retry(_do_load)
         except Exception as exc:
             logger.error("Failed to load storage from DATABASE_URL: %s", exc)
 
@@ -124,13 +138,40 @@ class ProjectStorage:
     # Persistence
     # ------------------------------------------------------------------
 
+    def schedule_persist(self) -> None:
+        """Coalesced, single-flight background flush.
+
+        Safe to call after every mutation. Overlapping calls collapse into at
+        most one in-flight flush plus one queued re-run, so two concurrent
+        requests can never interleave full-state writes onto the shared engine
+        (which risked persisting stale state and losing updates). For a
+        guaranteed synchronous flush — e.g. shutdown — await persist() directly.
+        """
+        self._persist_dirty = True
+        if self._persist_task is None or self._persist_task.done():
+            self._persist_task = asyncio.create_task(self._drain_persist())
+
+    async def _drain_persist(self) -> None:
+        # Keep flushing while new mutations mark the state dirty. Because this is
+        # the only scheduled writer and it clears the flag *before* each flush,
+        # a mutation arriving mid-flush is guaranteed one more pass afterwards.
+        while self._persist_dirty:
+            self._persist_dirty = False
+            try:
+                await self.persist()
+            except Exception:
+                logger.exception("Scheduled persist failed — will retry on next mutation")
+                self._persist_dirty = True
+                return
+
     async def persist(self) -> None:
-        """Flush current in-memory state to disk."""
-        if self._demo_mode:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._write_json_file)
-        else:
-            await self._write_db()
+        """Flush current in-memory state to disk under a single-flight lock."""
+        async with self._persist_lock:
+            if self._demo_mode:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._write_json_file)
+            else:
+                await self._write_db()
 
     def _write_json_file(self) -> None:
         try:
@@ -150,14 +191,16 @@ class ProjectStorage:
             logger.error("Failed to persist storage: %s", exc)
 
     async def _write_db(self) -> None:
-        try:
+        async def _flush() -> None:
             async with get_session() as session:
                 for project_id in list(self._pending_deletes):
                     try:
                         async with session.begin_nested():
                             await delete_workbench_project(session, project_id)
                         self._pending_deletes.discard(project_id)
-                    except Exception:
+                    except Exception as exc:
+                        if is_db_disconnect(exc):
+                            raise  # whole-flush retry handles a dropped connection
                         logger.exception("Failed to delete project %s", project_id)
                 for pid, p in list(self._projects.items()):
                     try:
@@ -167,14 +210,21 @@ class ProjectStorage:
                         # mutating route, so isolate failures per project.
                         async with session.begin_nested():
                             await persist_project(session, p)
-                    except Exception:
+                    except Exception as exc:
+                        if is_db_disconnect(exc):
+                            raise
                         logger.exception("Failed to persist project %s", pid)
                 for uid, lim in list(self._limits.items()):
                     try:
                         async with session.begin_nested():
                             await upsert_workbench_user_limit(session, limit=lim)
-                    except Exception:
+                    except Exception as exc:
+                        if is_db_disconnect(exc):
+                            raise
                         logger.exception("Failed to persist user limits for %s", uid)
+
+        try:
+            await with_db_retry(_flush)
         except Exception:
             logger.exception("Failed to persist storage to DATABASE_URL")
 
@@ -196,6 +246,10 @@ class ProjectStorage:
         results = [p for p in self._projects.values() if p.owner_id == user_id]
         results.sort(key=lambda p: p.created_at, reverse=True)
         return results
+
+    def all_projects(self) -> list[Project]:
+        """Snapshot of every in-memory project — used by startup reconciliation."""
+        return list(self._projects.values())
 
     # ------------------------------------------------------------------
     # Limits
