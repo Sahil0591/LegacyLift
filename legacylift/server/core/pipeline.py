@@ -56,6 +56,11 @@ from core.layer0.risk_scorer        import RiskScorer
 from core.layer0_5.doc_fetcher      import DocFetcher
 from core.layer0_5.deprecation_mapper import DeprecationMapper
 from core.layer0_5.gotcha_registry  import GotchaRegistry
+from core.layer0_5.target_profile_registry import (
+    TargetProfileNotFoundError,
+    resolve_profile,
+)
+from models.target_profile import TargetProfileDefinition
 from core.layer1.static_analyser    import StaticAnalyser
 from core.layer2.ai_reviewer        import AIReviewer
 from core.layer3.test_generator     import TestGenerator
@@ -107,11 +112,56 @@ async def _transition(project: Project, new_status: str) -> None:
 # Layer 0.5 helper — shared by run_pipeline and any future callers
 # ---------------------------------------------------------------------------
 
+def _resolve_catalog_profile(
+    target_language: str,
+) -> Optional[TargetProfileDefinition]:
+    """Resolve project.target_language against the target profile catalog."""
+
+    try:
+        return resolve_profile(target_language)
+    except TargetProfileNotFoundError:
+        logger.warning(
+            "No catalog profile for target_language=%r — using legacy defaults",
+            target_language,
+        )
+        return None
+
+
+def _merge_recommended_libraries(
+    doc_libraries: list,
+    catalog_libraries: tuple[str, ...],
+) -> list:
+    """Prefer doc_fetcher output, then append catalog entries without duplicates."""
+
+    merged: list = list(doc_libraries)
+    seen = {str(item) for item in merged}
+    for library in catalog_libraries:
+        if library not in seen:
+            merged.append(library)
+            seen.add(library)
+    return merged
+
+
+def _catalog_notes(definition: TargetProfileDefinition) -> str:
+    """Flatten catalog guidance into the runtime TargetProfile.notes field."""
+
+    parts = [definition.tagline, *definition.migration_guidance]
+    parts.append(f"Numeric policy: {definition.numeric_policy}")
+    parts.append(f"Date policy: {definition.date_policy}")
+    return " ".join(part.strip() for part in parts if part.strip())
+
+
 async def _build_target_profile(project: Project) -> "TargetProfile":
     """
     Build a TargetProfile for the given project.  Never raises — returns a
     minimal default profile if anything goes wrong so the pipeline is non-fatal.
+
+    When project.target_language matches a catalog profile (by id or alias),
+    style/test/concurrency guidance comes from the registry instead of the
+    legacy Python-only defaults baked into TargetProfile.__init__.
     """
+    target_language = getattr(project, "target_language", "Python") or "Python"
+
     try:
         src_lang = (
             project.source_language.value
@@ -119,18 +169,43 @@ async def _build_target_profile(project: Project) -> "TargetProfile":
             else str(project.source_language)
         )
 
+        catalog = _resolve_catalog_profile(target_language)
+        lookup_language = catalog.language if catalog else target_language
+
         fetcher = DocFetcher()
-        docs = await fetcher.fetch(project.target_language)
+        docs = await fetcher.fetch(lookup_language)
 
         mapper = DeprecationMapper()
-        deprecated = await mapper.map(src_lang, project.target_language)
+        deprecated = await mapper.map(src_lang, lookup_language)
 
-        registry = GotchaRegistry()
-        gotchas = await registry.get_gotchas(src_lang, project.target_language)
+        gotcha_registry = GotchaRegistry()
+        gotchas = await gotcha_registry.get_gotchas(src_lang, lookup_language)
+
+        doc_version = docs.get("version")
+        if catalog:
+            version = catalog.version
+            if lookup_language == "Python" and doc_version and doc_version != "unknown":
+                version = doc_version
+            libraries = _merge_recommended_libraries(
+                docs.get("libraries", []),
+                catalog.recommended_libraries,
+            )
+            return TargetProfile(
+                language=catalog.language,
+                version=version,
+                deprecated_patterns=deprecated,
+                gotchas=gotchas,
+                recommended_libraries=libraries,
+                style_guide=catalog.style_guide,
+                type_system=catalog.type_system_guidance,
+                async_model=catalog.async_concurrency_model,
+                test_framework=catalog.test_framework,
+                notes=_catalog_notes(catalog),
+            )
 
         return TargetProfile(
-            language=project.target_language,
-            version=docs.get("version", "3.12"),
+            language=target_language,
+            version=doc_version or "3.12",
             deprecated_patterns=deprecated,
             gotchas=gotchas,
             recommended_libraries=docs.get("libraries", []),
@@ -141,7 +216,7 @@ async def _build_target_profile(project: Project) -> "TargetProfile":
             project.id, exc, exc_info=True,
         )
         return TargetProfile(
-            language=getattr(project, "target_language", "Python"),
+            language=target_language,
             version="3.12",
             deprecated_patterns=[],
             gotchas=[],
@@ -1027,22 +1102,7 @@ class MigrationPipeline:
         t_start = time.monotonic()
 
         try:
-            fetcher = DocFetcher()
-            docs = await fetcher.fetch(project.target_language)
-
-            mapper = DeprecationMapper()
-            deprecated = await mapper.map(project.source_language, project.target_language)
-
-            registry = GotchaRegistry()
-            gotchas = await registry.get_gotchas(project.source_language, project.target_language)
-
-            profile = TargetProfile(
-                language=project.target_language,
-                version=docs.get("version", "3.12"),
-                deprecated_patterns=deprecated,
-                gotchas=gotchas,
-                recommended_libraries=docs.get("libraries", []),
-            )
+            profile = await _build_target_profile(project)
 
             await self.manager.emit(
                 project.id, "target_profile_ready", profile=profile.to_dict()
@@ -1057,13 +1117,7 @@ class MigrationPipeline:
             await self.manager.emit_error(
                 project.id, "Layer0.5", str(exc), recoverable=True
             )
-            return TargetProfile(
-                language=project.target_language,
-                version="3.12",
-                deprecated_patterns=[],
-                gotchas=[],
-                recommended_libraries=["decimal", "datetime"],
-            )
+            return await _build_target_profile(project)
 
     # -----------------------------------------------------------------------
     # Migration — Layers 1-3 per chunk
