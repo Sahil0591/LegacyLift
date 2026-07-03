@@ -58,7 +58,13 @@ from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition, _add_lesson
 from core.storage import storage
 from db.session import get_database_url, get_session, init_db, validate_database_url
-from integrations.github_app import GitHubAppSettings, verify_webhook_signature
+from integrations.github_app import (
+    GitHubAppAuthError,
+    GitHubAppInstallationAuth,
+    GitHubAppSettings,
+    verify_webhook_signature,
+)
+from integrations.github_client import GitHubClientProtocol
 from integrations.github_ingestion import process_github_webhook
 from models.project import Project, SourceLanguage, UploadedFile
 from ownership.review_workflow import (
@@ -357,6 +363,36 @@ async def health_check():
 # POST /github/webhook
 # ---------------------------------------------------------------------------
 
+# Caches installation tokens across webhooks (see GitHubAppInstallationAuth).
+_github_app_auth = GitHubAppInstallationAuth()
+
+
+async def _resolve_github_client(
+    event: str, payload: dict
+) -> GitHubClientProtocol | None:
+    """Build an authenticated GitHub App client for events that must call the
+    GitHub API (pull_request). Returns None — never a stub — when the app isn't
+    configured or the payload lacks an installation id; the ingestion layer then
+    records the event as unsynced instead of silently processing zero files."""
+    if event != "pull_request":
+        return None
+    if not _github_app_auth.is_configured():
+        logger.warning(
+            "pull_request webhook received but GitHub App is not configured "
+            "(GITHUB_APP_ID/GITHUB_PRIVATE_KEY) — PR files will not be synced"
+        )
+        return None
+    installation_id = str((payload.get("installation") or {}).get("id") or "")
+    if not installation_id:
+        logger.warning("pull_request webhook has no installation id — cannot authenticate")
+        return None
+    try:
+        return await _github_app_auth.client_for(installation_id)
+    except GitHubAppAuthError:
+        logger.exception("Failed to obtain GitHub installation token for %s", installation_id)
+        return None
+
+
 @app.post("/github/webhook", status_code=202)
 async def github_webhook(
     request: Request,
@@ -386,6 +422,7 @@ async def github_webhook(
         )
         raise HTTPException(status_code=400, detail="Invalid GitHub webhook JSON") from exc
 
+    github_client = await _resolve_github_client(x_github_event, payload)
     async with get_session() as session:
         result = await process_github_webhook(
             session,
@@ -393,6 +430,7 @@ async def github_webhook(
             delivery_id=x_github_delivery,
             payload=payload,
             raw_body=body,
+            github_client=github_client,
         )
 
     repository = _github_payload_repository(payload)

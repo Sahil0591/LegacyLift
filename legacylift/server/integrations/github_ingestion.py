@@ -19,7 +19,7 @@ from db.repositories import (
     upsert_pull_request_hunk,
     upsert_repository,
 )
-from integrations.github_client import GitHubClientProtocol, MockGitHubClient
+from integrations.github_client import GitHubClientProtocol
 from integrations.github_patches import parse_patch_hunks
 
 
@@ -95,11 +95,24 @@ async def process_github_webhook(
         elif event == "push":
             result = await _process_push_event(session, payload)
         elif event == "pull_request":
-            result = await _process_pull_request_event(
-                session,
-                payload,
-                github_client=github_client or MockGitHubClient(),
-            )
+            if github_client is None:
+                # Do NOT silently fall back to an empty mock: in production that
+                # records the PR with zero files and masquerades as success.
+                # Surface it as unsynced so the caller/logs can act on it.
+                result = {
+                    "event": "pull_request",
+                    "action": payload.get("action"),
+                    "synced": False,
+                    "reason": "github_client_unavailable",
+                    "files": 0,
+                    "hunks": 0,
+                }
+            else:
+                result = await _process_pull_request_event(
+                    session,
+                    payload,
+                    github_client=github_client,
+                )
         else:
             result = {"status": "ignored", "event": event}
 

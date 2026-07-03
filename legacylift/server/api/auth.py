@@ -15,7 +15,7 @@ Requires CLERK_JWKS_URL in environment:
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Any, Optional
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -41,6 +41,51 @@ def _get_jwks_client() -> PyJWKClient:
     return _jwks_client
 
 
+def _authorized_parties() -> set[str]:
+    """Allowed `azp` (authorized party) values from CLERK_AUTHORIZED_PARTIES
+    (comma-separated). Empty set means `azp` is not enforced."""
+    raw = os.environ.get("CLERK_AUTHORIZED_PARTIES", "")
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _decode_clerk_jwt(token: str) -> dict[str, Any]:
+    """Verify a Clerk JWT's signature *and* its issuer / audience / authorized
+    party — not just the signature.
+
+    - `exp` and `sub` are always required.
+    - Issuer is enforced only when CLERK_ISSUER is set.
+    - Audience is enforced only when CLERK_AUDIENCE is set; Clerk omits `aud` by
+      default, so absent that config we must not hard-fail on a missing `aud`.
+    - `azp` is checked against CLERK_AUTHORIZED_PARTIES when configured.
+
+    Raises the underlying `jwt` exceptions on failure so callers can distinguish
+    expiry from other invalidity.
+    """
+    client = _get_jwks_client()
+    signing_key = client.get_signing_key_from_jwt(token)
+
+    issuer = os.environ.get("CLERK_ISSUER")
+    audience = os.environ.get("CLERK_AUDIENCE")
+
+    options: dict[str, Any] = {"require": ["exp", "sub"]}
+    decode_kwargs: dict[str, Any] = {"algorithms": ["RS256"]}
+    if issuer:
+        decode_kwargs["issuer"] = issuer
+    if audience:
+        decode_kwargs["audience"] = audience
+    else:
+        options["verify_aud"] = False
+    decode_kwargs["options"] = options
+
+    payload: dict[str, Any] = jwt.decode(token, signing_key.key, **decode_kwargs)
+
+    allowed_parties = _authorized_parties()
+    if allowed_parties and payload.get("azp") not in allowed_parties:
+        raise jwt.InvalidTokenError(f"Unauthorized party (azp): {payload.get('azp')!r}")
+
+    return payload
+
+
 def get_current_user_id(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> str:
@@ -58,13 +103,7 @@ def get_current_user_id(
         )
 
     try:
-        client = _get_jwks_client()
-        signing_key = client.get_signing_key_from_jwt(creds.credentials)
-        payload = jwt.decode(
-            creds.credentials,
-            signing_key.key,
-            algorithms=["RS256"],
-        )
+        payload = _decode_clerk_jwt(creds.credentials)
         user_id: str = payload["sub"]
         return user_id
     except jwt.ExpiredSignatureError:
@@ -87,9 +126,7 @@ def verify_ws_token(token: str) -> str:
     Returns the Clerk user ID on success, raises HTTPException on failure.
     """
     try:
-        client = _get_jwks_client()
-        signing_key = client.get_signing_key_from_jwt(token)
-        payload = jwt.decode(token, signing_key.key, algorithms=["RS256"])
+        payload = _decode_clerk_jwt(token)
         return payload["sub"]
     except Exception:
         raise HTTPException(
