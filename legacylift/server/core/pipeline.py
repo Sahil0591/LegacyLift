@@ -60,12 +60,12 @@ from core.layer0_5.target_profile_registry import (
     TargetProfileNotFoundError,
     resolve_profile,
 )
-from models.target_profile import TargetProfileDefinition
 from core.layer1.static_analyser    import StaticAnalyser
 from core.layer2.ai_reviewer        import AIReviewer
 from core.layer3.test_generator     import TestGenerator
 from core.layer4.schema_validator   import SchemaValidator, SchemaValidationResult
 from core.storage                   import storage
+from models.target_profile          import TargetProfileDefinition
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -112,115 +112,99 @@ async def _transition(project: Project, new_status: str) -> None:
 # Layer 0.5 helper — shared by run_pipeline and any future callers
 # ---------------------------------------------------------------------------
 
-def _resolve_catalog_profile(
-    target_language: str,
-) -> Optional[TargetProfileDefinition]:
-    """Resolve project.target_language against the target profile catalog."""
+def _resolve_target_catalog(project: Project) -> TargetProfileDefinition:
+    """Resolve project.target_language to a catalog profile."""
 
+    target_language = getattr(project, "target_language", "Python") or "Python"
     try:
         return resolve_profile(target_language)
     except TargetProfileNotFoundError:
         logger.warning(
-            "No catalog profile for target_language=%r — using legacy defaults",
+            "No catalog profile for target_language=%r; falling back to Python",
             target_language,
         )
-        return None
+        return resolve_profile("Python")
 
 
-def _merge_recommended_libraries(
-    doc_libraries: list,
-    catalog_libraries: tuple[str, ...],
-) -> list:
-    """Prefer doc_fetcher output, then append catalog entries without duplicates."""
-
-    merged: list = list(doc_libraries)
-    seen = {str(item) for item in merged}
-    for library in catalog_libraries:
-        if library not in seen:
-            merged.append(library)
-            seen.add(library)
-    return merged
-
-
-def _catalog_notes(definition: TargetProfileDefinition) -> str:
+def _catalog_notes(catalog: TargetProfileDefinition) -> str:
     """Flatten catalog guidance into the runtime TargetProfile.notes field."""
 
-    parts = [definition.tagline, *definition.migration_guidance]
-    parts.append(f"Numeric policy: {definition.numeric_policy}")
-    parts.append(f"Date policy: {definition.date_policy}")
-    return " ".join(part.strip() for part in parts if part.strip())
+    sections = [
+        catalog.tagline,
+        f"Runtime: {catalog.runtime_description}",
+        f"Numeric policy: {catalog.numeric_policy}",
+        f"Date policy: {catalog.date_policy}",
+        "Migration guidance: "
+        + "; ".join(catalog.migration_guidance),
+        "Risk check focus: "
+        + "; ".join(catalog.risk_check_focus),
+    ]
+    return "\n".join(section for section in sections if section.strip())
+
+
+def _target_profile_from_catalog(
+    catalog: TargetProfileDefinition,
+    docs: dict,
+    deprecated_patterns: list,
+    gotchas: list,
+) -> "TargetProfile":
+    """Create the runtime TargetProfile from catalog and Layer 0.5 outputs."""
+
+    doc_version = docs.get("version")
+    version = doc_version if doc_version and doc_version != "unknown" else catalog.version
+    doc_libraries = docs.get("libraries", [])
+    recommended_libraries = (
+        doc_libraries if doc_libraries else list(catalog.recommended_libraries)
+    )
+
+    return TargetProfile(
+        language=catalog.language,
+        version=version,
+        deprecated_patterns=deprecated_patterns,
+        gotchas=gotchas,
+        recommended_libraries=recommended_libraries,
+        style_guide=catalog.style_guide,
+        type_system=catalog.type_system_guidance,
+        async_model=catalog.async_concurrency_model,
+        test_framework=catalog.test_framework,
+        notes=_catalog_notes(catalog),
+    )
 
 
 async def _build_target_profile(project: Project) -> "TargetProfile":
     """
     Build a TargetProfile for the given project.  Never raises — returns a
     minimal default profile if anything goes wrong so the pipeline is non-fatal.
-
-    When project.target_language matches a catalog profile (by id or alias),
-    style/test/concurrency guidance comes from the registry instead of the
-    legacy Python-only defaults baked into TargetProfile.__init__.
     """
-    target_language = getattr(project, "target_language", "Python") or "Python"
-
     try:
+        catalog = _resolve_target_catalog(project)
         src_lang = (
             project.source_language.value
             if hasattr(project.source_language, "value")
             else str(project.source_language)
         )
 
-        catalog = _resolve_catalog_profile(target_language)
-        lookup_language = catalog.language if catalog else target_language
-
         fetcher = DocFetcher()
-        docs = await fetcher.fetch(lookup_language)
+        docs = await fetcher.fetch(catalog.language)
 
         mapper = DeprecationMapper()
-        deprecated = await mapper.map(src_lang, lookup_language)
+        deprecated = await mapper.map(src_lang, catalog.language)
 
-        gotcha_registry = GotchaRegistry()
-        gotchas = await gotcha_registry.get_gotchas(src_lang, lookup_language)
+        registry = GotchaRegistry()
+        gotchas = await registry.get_gotchas(src_lang, catalog.language)
 
-        doc_version = docs.get("version")
-        if catalog:
-            version = catalog.version
-            if lookup_language == "Python" and doc_version and doc_version != "unknown":
-                version = doc_version
-            libraries = _merge_recommended_libraries(
-                docs.get("libraries", []),
-                catalog.recommended_libraries,
-            )
-            return TargetProfile(
-                language=catalog.language,
-                version=version,
-                deprecated_patterns=deprecated,
-                gotchas=gotchas,
-                recommended_libraries=libraries,
-                style_guide=catalog.style_guide,
-                type_system=catalog.type_system_guidance,
-                async_model=catalog.async_concurrency_model,
-                test_framework=catalog.test_framework,
-                notes=_catalog_notes(catalog),
-            )
-
-        return TargetProfile(
-            language=target_language,
-            version=doc_version or "3.12",
-            deprecated_patterns=deprecated,
-            gotchas=gotchas,
-            recommended_libraries=docs.get("libraries", []),
-        )
+        return _target_profile_from_catalog(catalog, docs, deprecated, gotchas)
     except Exception as exc:
         logger.error(
             "_build_target_profile failed for project %s: %s",
             project.id, exc, exc_info=True,
         )
-        return TargetProfile(
-            language=target_language,
-            version="3.12",
+        catalog = resolve_profile("Python")
+        return _target_profile_from_catalog(
+            catalog,
+            {"version": "3.12", "libraries": []},
             deprecated_patterns=[],
             gotchas=[],
-            recommended_libraries=[],
         )
 
 

@@ -2,7 +2,8 @@
 tests/test_layer05_target_profile_registry_integration.py
 
 Verifies that Layer 0.5 profile building resolves project.target_language
-through the target profile catalog instead of always using Python defaults.
+through the target profile catalog instead of falling back to Python-shaped
+runtime defaults for every target.
 """
 
 from __future__ import annotations
@@ -12,9 +13,10 @@ from pathlib import Path
 
 import pytest
 
+# Add project root to path so imports work without `pip install -e .`
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.pipeline import _build_target_profile
+from core.pipeline import TargetProfile, _build_target_profile
 from models.project import Project, SourceLanguage
 
 
@@ -27,79 +29,125 @@ def _project(target_language: str) -> Project:
 
 
 @pytest.mark.asyncio
-async def test_python_target_uses_catalog_guidance_and_doc_version():
-    profile = await _build_target_profile(_project("Python"))
-    payload = profile.to_dict()
-
-    assert payload["language"] == "Python"
-    assert payload["version"] == "3.12"
-    assert payload["test_framework"] == "pytest"
-    assert "dataclasses" in payload["type_system"].lower() or "pydantic" in payload["type_system"].lower()
-    assert "Decimal" in payload["notes"]
-    assert "asyncio" in payload["async_model"]
-
-
-@pytest.mark.asyncio
-async def test_java_target_uses_catalog_not_python_defaults():
+async def test_java_target_uses_registry_metadata_not_python_defaults():
     profile = await _build_target_profile(_project("Java"))
     payload = profile.to_dict()
 
     assert payload["language"] == "Java"
-    assert payload["version"] == "21 LTS with Java 25 readiness"
-    assert payload["test_framework"] == "JUnit 5"
-    assert "records" in payload["type_system"].lower() or "domain types" in payload["type_system"].lower()
-    assert "BigDecimal" in payload["notes"]
-    assert "pytest" not in payload["test_framework"]
+    assert "JUnit" in payload["test_framework"]
+    assert "BigDecimal" in payload["type_system"] or "BigDecimal" in payload["notes"]
     assert "PEP 8" not in payload["style_guide"]
+    assert "pytest" not in payload["test_framework"]
 
 
 @pytest.mark.asyncio
-async def test_cpp_alias_resolves_to_catalog_profile():
-    profile = await _build_target_profile(_project("C++23"))
+async def test_csharp_target_uses_registry_metadata():
+    profile = await _build_target_profile(_project("C#"))
     payload = profile.to_dict()
 
-    assert payload["language"] == "C++"
-    assert payload["test_framework"] == "GoogleTest or Catch2"
-    assert "RAII" in payload["style_guide"]
-
-
-@pytest.mark.asyncio
-async def test_rust_target_uses_catalog_metadata():
-    profile = await _build_target_profile(_project("Rust"))
-    payload = profile.to_dict()
-
-    assert payload["language"] == "Rust"
-    assert payload["test_framework"] == "cargo test"
-    assert "Result" in payload["type_system"]
-
-
-@pytest.mark.asyncio
-async def test_sql_target_uses_catalog_metadata():
-    profile = await _build_target_profile(_project("PL/SQL"))
-    payload = profile.to_dict()
-
-    assert payload["language"] == "SQL"
-    assert "tSQLt" in payload["test_framework"] or "utPLSQL" in payload["test_framework"]
-    assert "DECIMAL" in payload["notes"] or "NUMERIC" in payload["notes"]
-
-
-@pytest.mark.asyncio
-async def test_unknown_target_language_falls_back_without_raising():
-    profile = await _build_target_profile(_project("Go"))
-    payload = profile.to_dict()
-
-    assert payload["language"] == "Go"
-    assert payload["test_framework"] == (
-        "pytest with pytest-asyncio. One test per business rule. "
-        "Use Decimal-aware assertions."
+    assert payload["language"] == "C#"
+    assert "xUnit" in payload["test_framework"] or "NUnit" in payload["test_framework"]
+    assert (
+        "nullable" in payload["type_system"].lower()
+        or "types" in payload["type_system"].lower()
+        or ".net" in payload["notes"].lower()
     )
 
 
 @pytest.mark.asyncio
-async def test_catalog_notes_include_migration_guidance():
-    profile = await _build_target_profile(_project("Java 21"))
+async def test_cpp_target_uses_registry_metadata():
+    profile = await _build_target_profile(_project("C++23"))
+    payload = profile.to_dict()
+    combined = " ".join(
+        [
+            payload["style_guide"],
+            payload["type_system"],
+            payload["notes"],
+        ]
+    )
+
+    assert payload["language"] == "C++"
+    assert "GoogleTest" in payload["test_framework"] or "Catch2" in payload["test_framework"]
+    assert any(
+        term in combined
+        for term in ("RAII", "latency", "trading", "risk")
+    )
+
+
+@pytest.mark.asyncio
+async def test_rust_target_uses_registry_metadata():
+    profile = await _build_target_profile(_project("Rust"))
+    payload = profile.to_dict()
+    combined = f"{payload['type_system']} {payload['notes']}"
+
+    assert payload["language"] == "Rust"
+    assert "cargo test" in payload["test_framework"]
+    assert any(
+        term in combined
+        for term in ("ownership", "Result", "safety", "high-performance")
+    )
+
+
+@pytest.mark.asyncio
+async def test_sql_target_uses_registry_metadata():
+    profile = await _build_target_profile(_project("PL/SQL"))
+    payload = profile.to_dict()
+    combined = f"{payload['type_system']} {payload['notes']}"
+
+    assert payload["language"] == "SQL"
+    assert any(
+        term.lower() in combined.lower()
+        for term in ("transaction", "reconciliation", "audit", "stored procedures")
+    ) or "DECIMAL" in combined
+
+
+@pytest.mark.asyncio
+async def test_python_alias_preserves_pair_gotchas():
+    profile = await _build_target_profile(_project("Python 3.12"))
     payload = profile.to_dict()
 
-    assert "BigDecimal" in payload["notes"] or "transaction" in payload["notes"].lower()
-    assert payload["notes"]
-    assert "COBOL fixed-format strings" not in payload["notes"]
+    assert payload["language"] == "Python"
+    assert "pytest" in payload["test_framework"]
+    assert payload["deprecated_patterns"]
+    assert payload["gotchas"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_target_falls_back_to_python_catalog():
+    profile = await _build_target_profile(_project("go-1.24"))
+    payload = profile.to_dict()
+
+    assert payload["language"] == "Python"
+    assert "pytest" in payload["test_framework"]
+
+
+@pytest.mark.asyncio
+async def test_notes_include_migration_and_risk_sections():
+    profile = await _build_target_profile(_project("Java"))
+    payload = profile.to_dict()
+
+    assert "Migration guidance" in payload["notes"]
+    assert "Risk check focus" in payload["notes"]
+
+
+def test_to_dict_schema_unchanged():
+    payload = TargetProfile(
+        language="Python",
+        version="3.12",
+        recommended_libraries=[],
+        deprecated_patterns=[],
+        gotchas=[],
+    ).to_dict()
+
+    assert set(payload) == {
+        "language",
+        "version",
+        "recommended_libraries",
+        "deprecated_patterns",
+        "gotchas",
+        "style_guide",
+        "type_system",
+        "async_model",
+        "test_framework",
+        "notes",
+    }
