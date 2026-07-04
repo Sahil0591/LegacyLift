@@ -45,9 +45,9 @@ export function CTASection() {
             </div>
             <h2 className="text-[2rem] font-bold leading-tight tracking-tight text-ink sm:text-[2.6rem] sm:leading-[1.1]">
               Six months of consultants,
-              <br className="hidden sm:block" /> or an{" "}
+              <br className="hidden sm:block" /> or{" "}
               <span className="bg-gradient-to-r from-[#7C3AED] to-[#A855F7] bg-clip-text text-transparent">
-                afternoon.
+                two weeks.
               </span>
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-sub sm:mt-4 sm:text-[15px]">
@@ -78,7 +78,7 @@ export function CTASection() {
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-[#7C3AED]">
                   LegacyLift
                 </div>
-                <div className="mt-1 text-2xl font-bold text-[#7C3AED]">1 day</div>
+                <div className="mt-1 text-2xl font-bold text-[#7C3AED]">2 wk</div>
                 <div className="mt-0.5 font-mono text-[11px] text-[#10B981]">
                   approved
                 </div>
@@ -147,7 +147,7 @@ export function CTASection() {
                 </span>
               </div>
               <div className="mb-4 flex items-baseline gap-2">
-                <span className="text-3xl font-bold text-ink">~1 day</span>
+                <span className="text-3xl font-bold text-ink">~2 weeks</span>
                 <span className="font-mono text-xs text-sub">human-approved</span>
               </div>
               <ul className="space-y-2">
