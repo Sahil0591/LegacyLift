@@ -1,8 +1,10 @@
 "use client";
 // CodeCompare — side-by-side "before / after" view for a migration.
-// COBOL → Python is a translation, not a line diff, so we show two clean,
-// independently-readable code panels with light syntax emphasis (keywords +
-// comments) rather than red/green word-diff noise.
+// A legacy→modern migration is a translation, not a line diff, so we show two
+// clean, independently-readable code panels with light syntax emphasis
+// (keywords + comments) rather than red/green word-diff noise. The panel
+// titles are driven by the project's real source/target languages, not
+// hardcoded — a file heading to Java reads "Migrated · Java 21".
 
 import { useState, type ReactNode } from "react";
 import { ArrowRight, Pencil, X, Check } from "lucide-react";
@@ -102,9 +104,11 @@ function CodePanel({
 
 function EditableMigratedPanel({
   code,
+  title,
   onSave,
 }: {
   code: string;
+  title: string;
   onSave: (code: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -116,7 +120,7 @@ function EditableMigratedPanel({
         <div className="flex items-center justify-between gap-2 border-b border-ink/10 px-4 py-2.5">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full" style={{ background: "#7C3AED" }} />
-            <span className="text-xs font-semibold text-ink/80">Migrated · Python 3.12</span>
+            <span className="text-xs font-semibold text-ink/80">{title}</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="font-mono text-[10px] text-sub/60">{code.split("\n").length} lines</span>
@@ -152,7 +156,7 @@ function EditableMigratedPanel({
       <div className="flex items-center justify-between gap-2 border-b border-ink/10 px-4 py-2.5">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full" style={{ background: "#7C3AED" }} />
-          <span className="text-xs font-semibold text-ink/80">Migrated · Python 3.12</span>
+          <span className="text-xs font-semibold text-ink/80">{title}</span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -188,27 +192,34 @@ function EditableMigratedPanel({
 export function CodeCompare({
   source,
   migrated,
+  sourceLabel = "COBOL",
+  targetLabel = "Python 3.12",
   onSaveEdit,
 }: {
   source: string;
   migrated: string;
+  /** Legacy source language shown on the left panel, e.g. "COBOL", "Java". */
+  sourceLabel?: string;
+  /** Target language shown on the right panel, e.g. "Java 21", "Go". */
+  targetLabel?: string;
   /** When present, the migrated panel gets an "Edit" toggle for hand-fixing code directly. */
   onSaveEdit?: (code: string) => void;
 }) {
+  const migratedTitle = `Migrated · ${targetLabel}`;
   return (
     <div className="relative grid grid-cols-1 divide-y divide-ink/10 overflow-hidden rounded-xl border border-ink/10 bg-surface/40 md:grid-cols-2 md:divide-x md:divide-y-0">
       <CodePanel
-        title="Legacy · COBOL"
+        title={`Legacy · ${sourceLabel}`}
         accent="#6B7280"
         meta={`${source.split("\n").length} lines`}
         lang="cobol"
         code={source}
       />
       {onSaveEdit ? (
-        <EditableMigratedPanel code={migrated} onSave={onSaveEdit} />
+        <EditableMigratedPanel code={migrated} title={migratedTitle} onSave={onSaveEdit} />
       ) : (
         <CodePanel
-          title="Migrated · Python 3.12"
+          title={migratedTitle}
           accent="#7C3AED"
           meta={`${migrated.split("\n").length} lines`}
           lang="python"

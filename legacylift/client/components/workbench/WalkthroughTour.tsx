@@ -31,7 +31,7 @@ interface TourStep {
 const STEPS: TourStep[] = [
   {
     title: "Welcome to LegacyLift 👋",
-    body: "This dashboard turns your old COBOL system into modern, tested Python — with a real person approving every change. Here's a quick tour of how it all works.",
+    body: "This dashboard turns your legacy system into modern, tested code — with a real person approving every change. Here's a quick tour of how it all works.",
   },
   {
     target: "tab-overview",
@@ -46,10 +46,28 @@ const STEPS: TourStep[] = [
     body: "At a glance: how many functions we found, the business rules we pulled out, the overall risk, and how many pieces have been approved so far.",
   },
   {
+    target: "migration-context",
+    view: "overview",
+    title: "Brief the AI first",
+    body: "Think of this as a README the AI reads before touching your code. Add rules it can't guess — regulatory caps, systems, naming conventions — for the whole project or per file, and every migration respects them.",
+  },
+  {
     target: "files",
     view: "overview",
     title: "Your files",
-    body: "Each old file becomes modern code here. When you're happy with a file, you 'Finalize' it. The counter on the right tracks how many are done.",
+    body: "Each old file becomes modern code here. Every section on this page collapses — click its heading to tidy the view. When you're happy with a file, you 'Finalize' it; the counter tracks how many are done.",
+  },
+  {
+    target: "targets",
+    view: "overview",
+    title: "Migrate into any language",
+    body: "Pick the language you're modernising into — Python, Java, Go, TypeScript and more. Set a project default here, or override it per file, so core banking can go to Java while analytics goes to Python.",
+  },
+  {
+    target: "explain",
+    view: "overview",
+    title: "Not sure what a file does?",
+    body: "Hit 'Explain' on any file and the AI gives you both a developer summary and a plain-English one — grounded in that file's business rules and your context.",
   },
   {
     target: "risk",

@@ -1,13 +1,27 @@
 "use client";
 
-import Link from "next/link";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Github, ArrowRight } from "lucide-react";
-import { DEMO_PROJECT_ID } from "@/lib/demoData";
+import { SAMPLE_REPO } from "@/lib/startMigration";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
 export function Hero() {
+  const router = useRouter();
+  const [repoUrl, setRepoUrl] = useState(SAMPLE_REPO);
+
+  // Hand the typed repo off to the migration page with the URL prefilled — the
+  // user picks source/target language there and kicks off the analysis, so the
+  // landing page stays a fast, no-network entry point.
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const url = repoUrl.trim();
+    if (!url) return;
+    router.push(`/demo?repo=${encodeURIComponent(url)}`);
+  };
+
   return (
     <section className="relative px-6 pb-8 pt-20 sm:pt-28">
       <div className="mx-auto max-w-3xl text-center">
@@ -45,30 +59,34 @@ export function Hero() {
           human approving every single step.
         </motion.p>
 
-        {/* Repo input — the entry point into the flow shown below */}
-        <motion.div
+        {/* Repo input — the live entry point into the migration flow */}
+        <motion.form
+          onSubmit={handleSubmit}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.2, ease: EASE }}
           className="mx-auto mt-9 flex max-w-xl flex-col gap-2.5 sm:flex-row"
         >
-          <div className="glass flex flex-1 items-center gap-2.5 rounded-xl px-4 py-3">
+          <div className="glass flex flex-1 items-center gap-2.5 rounded-xl px-4 py-3 transition-colors focus-within:ring-1 focus-within:ring-[#7C3AED]/50">
             <Github className="h-4 w-4 shrink-0 text-sub" />
             <input
-              defaultValue="github.com/acme-bank/loan-engine"
-              readOnly
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+              spellCheck={false}
+              placeholder="github.com/org/repo"
               aria-label="Repository URL"
               className="w-full bg-transparent font-mono text-sm text-ink outline-none placeholder:text-[#a8a29e]"
             />
           </div>
-          <Link
-            href={`/project/${DEMO_PROJECT_ID}`}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#7C3AED] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-[#6D28D9]"
+          <button
+            type="submit"
+            disabled={repoUrl.trim().length === 0}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#7C3AED] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-[#6D28D9] disabled:cursor-not-allowed disabled:opacity-50"
           >
             Map my codebase
             <ArrowRight className="h-4 w-4" />
-          </Link>
-        </motion.div>
+          </button>
+        </motion.form>
 
         <motion.div
           initial={{ opacity: 0 }}
