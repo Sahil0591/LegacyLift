@@ -1,20 +1,10 @@
 """
-core/layer3/test_generator.py — LLM-powered test case generator and runner.
+core/layer3/test_generator.py - LLM-powered test case generator.
 
-Layer 3 reads the ORIGINAL legacy source (COBOL/Java) alongside the migrated
-Python to derive exact numeric thresholds and branch conditions, then asks the
-LLM to produce structured JSON test cases.  Each test case carries explicit
-input dicts and expected-output dicts so we can compare real execution results
-rather than just pass/fail from pytest.
-
-Execution strategy (subprocess isolation):
-  1. Write migrated_code to a NamedTemporaryFile (.py module).
-  2. Write a runner script that imports the module, calls the function with
-     each test's inputs, and prints all results as a JSON array to stdout.
-  3. Run the runner via subprocess with a per-test timeout budget.
-  4. Parse stdout → list of {test_name, actual, error}.
-  5. Compare actual vs expected: monetary fields require exact Decimal match;
-     all other numeric fields allow 1e-6 float tolerance.
+Layer 3 reads the original legacy source alongside the migrated code, asks the
+LLM to produce structured target-framework tests, and returns those tests for
+manual verification. Test execution is intentionally disabled until a locked
+down sandbox runner exists.
 
 Pipeline position: called by run_migration_generation() in pipeline.py after
 Layer 2 AI review completes.
@@ -22,29 +12,22 @@ Layer 2 AI review completes.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
-import subprocess
-import sys
-import tempfile
 import time
-from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from models.business_rule import BusinessRule
 from utils.code_parser import CodeChunk
 from core.layer2.ai_reviewer import AIReviewResult
 from utils.llm_client import LLMClient
+from utils.migration_prompts import build_test_prompt
 
 logger = logging.getLogger(__name__)
 
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
-TEST_EXECUTION_TIMEOUT = int(os.getenv("TEST_EXECUTION_TIMEOUT", "5"))
-
-_MONETARY_KEYWORDS = {"amount", "balance", "price", "rate", "fee", "cost"}
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +40,8 @@ class TestGenerationInput:
     migrated_code: str
     business_rule: BusinessRule
     ai_review: AIReviewResult
+    target_language: str = "Python"
+    target_profile: dict | None = None
 
 
 @dataclass
@@ -93,105 +78,8 @@ class TestGenerationResult:
 
 
 # ---------------------------------------------------------------------------
-# Subprocess runner script (written to disk at test-execution time)
-# ---------------------------------------------------------------------------
-
-_RUNNER_SCRIPT = (
-    "import sys, json, importlib.util, traceback\n"
-    "\n"
-    "def _serial(val):  # convert Decimal to str for JSON safety\n"
-    "    try:\n"
-    "        from decimal import Decimal\n"
-    "        if isinstance(val, Decimal):\n"
-    "            return str(val)\n"
-    "    except ImportError:\n"
-    "        pass\n"
-    "    if isinstance(val, dict):\n"
-    "        return {k: _serial(v) for k, v in val.items()}\n"
-    "    if isinstance(val, (list, tuple)):\n"
-    "        return [_serial(v) for v in val]\n"
-    "    return val\n"
-    "\n"
-    "module_path = sys.argv[1]\n"
-    "tests_path  = sys.argv[2]\n"
-    "\n"
-    "try:\n"
-    "    spec = importlib.util.spec_from_file_location('_migrated', module_path)\n"
-    "    mod  = importlib.util.module_from_spec(spec)\n"
-    "    spec.loader.exec_module(mod)\n"
-    "except Exception as exc:\n"
-    "    with open(tests_path) as f:\n"
-    "        tests = json.load(f)\n"
-    "    out = [{'test_name': t['name'], 'actual': None, 'error': f'Import error: {exc}'} for t in tests]\n"
-    "    print(json.dumps(out))\n"
-    "    sys.exit(0)\n"
-    "\n"
-    "fns = [(n, o) for n, o in vars(mod).items()\n"
-    "       if callable(o) and not n.startswith('_') and not isinstance(o, type)]\n"
-    "\n"
-    "with open(tests_path) as f:\n"
-    "    tests = json.load(f)\n"
-    "\n"
-    "results = []\n"
-    "for test in tests:\n"
-    "    tname  = test['name']\n"
-    "    inputs = test['inputs']\n"
-    "    try:\n"
-    "        result = None\n"
-    "        called = False\n"
-    "        for _fname, fn in fns:\n"
-    "            try:\n"
-    "                result = fn(**inputs)\n"
-    "                called = True\n"
-    "                break\n"
-    "            except TypeError:\n"
-    "                continue\n"
-    "        if not called:\n"
-    "            results.append({'test_name': tname, 'actual': None,\n"
-    "                            'error': 'No function matched the provided inputs'})\n"
-    "            continue\n"
-    "        if isinstance(result, dict):\n"
-    "            actual = _serial(result)\n"
-    "        elif hasattr(result, '_asdict'):\n"
-    "            actual = _serial(dict(result._asdict()))\n"
-    "        elif hasattr(result, '__dataclass_fields__'):\n"
-    "            import dataclasses\n"
-    "            actual = _serial(dataclasses.asdict(result))\n"
-    "        else:\n"
-    "            actual = {'result': _serial(result)}\n"
-    "        results.append({'test_name': tname, 'actual': actual, 'error': None})\n"
-    "    except Exception:\n"
-    "        results.append({'test_name': tname, 'actual': None,\n"
-    "                        'error': traceback.format_exc()})\n"
-    "\n"
-    "print(json.dumps(results))\n"
-)
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _is_monetary(field_name: str) -> bool:
-    lower = field_name.lower()
-    return any(kw in lower for kw in _MONETARY_KEYWORDS)
-
-
-def _values_match(field_name: str, expected: Any, actual: Any) -> bool:
-    """
-    Compare expected vs actual for a single output field.
-    Monetary fields require exact Decimal equality; others allow 1e-6 float tolerance.
-    """
-    if _is_monetary(field_name):
-        try:
-            return Decimal(str(expected)) == Decimal(str(actual))
-        except InvalidOperation:
-            return str(expected) == str(actual)
-    try:
-        return abs(float(str(expected)) - float(str(actual))) < 1e-6
-    except (ValueError, TypeError):
-        return str(expected) == str(actual)
-
 
 def _strip_fences(text: str) -> str:
     text = text.strip()
@@ -227,6 +115,19 @@ def _build_prompts(inp: TestGenerationInput) -> tuple[str, str]:
         if hardcoded else
         "See COBOL source for exact numeric thresholds."
     )
+
+    if inp.target_language.strip().casefold() != "python":
+        system, user = build_test_prompt(
+            name=inp.chunk.name,
+            migrated_code=inp.migrated_code[:3000],
+            target_lang=inp.target_language,
+            target_profile=inp.target_profile,
+        )
+        user += (
+            "\n\nExecution is disabled in this environment. Generate the test "
+            "file for reviewer inspection only; do not assume it will be run."
+        )
+        return system, user
 
     system = (
         "You are an expert Python test engineer specialising in verifying COBOL-to-Python "
@@ -287,125 +188,21 @@ def _parse_generated_tests(raw: str) -> list[GeneratedTest]:
         GeneratedTest(
             name=t["name"],
             category=t.get("category", "normal"),
-            description=t.get("description", ""),
+            description=t.get("description") or t.get("purpose", ""),
             inputs=t.get("inputs", {}),
             expected_output=t.get("expected_output", {}),
-            reasoning=t.get("reasoning", ""),
+            reasoning=t.get("reasoning") or t.get("purpose", ""),
         )
         for t in data.get("tests", [])
+        if isinstance(t, dict) and isinstance(t.get("name"), str)
     ]
-
-
-# ---------------------------------------------------------------------------
-# Subprocess execution
-# ---------------------------------------------------------------------------
-
-def _execute_tests(migrated_code: str, tests: list[GeneratedTest]) -> list[TestResult]:
-    """
-    Write migrated_code and the runner script to temp files, run via subprocess,
-    then compare actual vs expected outputs.  Never raises.
-    """
-    results: list[TestResult] = []
-
-    with tempfile.TemporaryDirectory(prefix="ll_l3_") as tmpdir:
-        module_path = os.path.join(tmpdir, "migrated_module.py")
-        runner_path = os.path.join(tmpdir, "runner.py")
-        tests_path  = os.path.join(tmpdir, "test_inputs.json")
-
-        try:
-            with open(module_path, "w", encoding="utf-8") as f:
-                f.write(migrated_code)
-            with open(runner_path, "w", encoding="utf-8") as f:
-                f.write(_RUNNER_SCRIPT)
-            with open(tests_path, "w", encoding="utf-8") as f:
-                json.dump([{"name": t.name, "inputs": t.inputs} for t in tests], f)
-        except OSError as e:
-            return [
-                TestResult(test_name=t.name, passed=False,
-                           expected=t.expected_output, actual=None,
-                           error=f"Failed to write temp files: {e}")
-                for t in tests
-            ]
-
-        timeout = TEST_EXECUTION_TIMEOUT * max(len(tests), 1) + 5
-
-        try:
-            proc = subprocess.run(
-                [sys.executable, runner_path, module_path, tests_path],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            stdout = proc.stdout.strip()
-            if not stdout:
-                err = (proc.stderr or "Runner produced no output")[:500]
-                return [
-                    TestResult(test_name=t.name, passed=False,
-                               expected=t.expected_output, actual=None, error=err)
-                    for t in tests
-                ]
-            run_results: list[dict] = json.loads(stdout)
-
-        except subprocess.TimeoutExpired:
-            return [
-                TestResult(test_name=t.name, passed=False,
-                           expected=t.expected_output, actual=None,
-                           error="execution timed out")
-                for t in tests
-            ]
-        except json.JSONDecodeError as e:
-            return [
-                TestResult(test_name=t.name, passed=False,
-                           expected=t.expected_output, actual=None,
-                           error=f"Failed to parse runner output: {e}")
-                for t in tests
-            ]
-        except Exception as e:
-            return [
-                TestResult(test_name=t.name, passed=False,
-                           expected=t.expected_output, actual=None, error=str(e))
-                for t in tests
-            ]
-
-        test_by_name = {t.name: t for t in tests}
-        for rr in run_results:
-            tname  = rr.get("test_name", "unknown")
-            actual = rr.get("actual")
-            error  = rr.get("error")
-            gen    = test_by_name.get(tname)
-
-            if gen is None:
-                continue
-
-            if error or actual is None:
-                results.append(TestResult(
-                    test_name=tname, passed=False,
-                    expected=gen.expected_output, actual=actual, error=error,
-                ))
-                continue
-
-            all_match = all(
-                _values_match(fname, exp_val, actual.get(fname))
-                for fname, exp_val in gen.expected_output.items()
-                if actual.get(fname) is not None
-            ) and all(
-                fname in actual
-                for fname in gen.expected_output
-            )
-
-            results.append(TestResult(
-                test_name=tname, passed=all_match,
-                expected=gen.expected_output, actual=actual, error=None,
-            ))
-
-    return results
 
 
 # ---------------------------------------------------------------------------
 # Demo stub
 # ---------------------------------------------------------------------------
 
-def _demo_result() -> TestGenerationResult:
+def _demo_result(target_language: str = "Python") -> TestGenerationResult:
     stubs = [
         GeneratedTest(
             name="test_normal_case",
@@ -433,16 +230,24 @@ def _demo_result() -> TestGenerationResult:
         ),
     ]
     stub_results = [
-        TestResult(test_name=t.name, passed=True,
-                   expected=t.expected_output, actual=t.expected_output)
+        TestResult(
+            test_name=t.name,
+            passed=False,
+            expected=t.expected_output,
+            actual=None,
+            error="Execution disabled - manual verification required",
+        )
         for t in stubs
     ]
     return TestGenerationResult(
         tests_generated=stubs,
         test_results=stub_results,
-        total=3, passed=3, failed=0,
-        all_passed=True, retry_recommended=False,
-        summary="3/3 tests passed [DEMO MODE — not real execution]",
+        total=3, passed=0, failed=0,
+        all_passed=False, retry_recommended=False,
+        summary=(
+            f"3 {target_language} test(s) generated - execution disabled; "
+            "manual verification required"
+        ),
         generation_time_seconds=0.0,
         execution_time_seconds=0.0,
     )
@@ -454,13 +259,12 @@ def _demo_result() -> TestGenerationResult:
 
 async def generate_and_run_tests(inp: TestGenerationInput) -> TestGenerationResult:
     """
-    Generate test cases via LLM (Phase 1) then execute them against the migrated
-    code in an isolated subprocess (Phase 2).
+    Generate test cases via LLM and return them for manual verification.
 
     Never raises — always returns a TestGenerationResult.
     """
     if DEMO_MODE:
-        return _demo_result()
+        return _demo_result(inp.target_language)
 
     try:
         client = LLMClient()
@@ -522,7 +326,7 @@ async def generate_and_run_tests(inp: TestGenerationInput) -> TestGenerationResu
             return TestGenerationResult(
                 tests_generated=[], test_results=[],
                 total=0, passed=0, failed=0,
-                all_passed=True, retry_recommended=False,
+                all_passed=False, retry_recommended=False,
                 summary="LLM generated no test cases",
                 generation_time_seconds=generation_time,
                 execution_time_seconds=0.0,
@@ -570,7 +374,7 @@ async def generate_and_run_tests(inp: TestGenerationInput) -> TestGenerationResu
         )
 
     except Exception as e:
-        logger.error("Test generation/execution failed: %s", e, exc_info=True)
+        logger.error("Test generation failed: %s", e, exc_info=True)
         return TestGenerationResult(
             tests_generated=[], test_results=[],
             total=0, passed=0, failed=0,
@@ -595,13 +399,18 @@ class TestGenerator:
     Internally delegates to generate_and_run_tests().
     """
 
-    async def generate_and_run(self, chunk: Any) -> list[_PydanticTestResult]:
+    async def generate_and_run(
+        self,
+        chunk: Any,
+        target_language: str = "Python",
+        target_profile: dict | None = None,
+    ) -> list[_PydanticTestResult]:
         from utils.code_parser import CodeChunk as _CC  # noqa: PLC0415
         from models.business_rule import BusinessRule as _BR  # noqa: PLC0415
         from core.layer2.ai_reviewer import AIReviewResult as _AR  # noqa: PLC0415
 
         if DEMO_MODE or not (chunk.migrated_code or "").strip():
-            return self._stubs(chunk.name)
+            return self._stubs(chunk.name, target_language=target_language)
 
         code_chunk = _CC(
             id=chunk.id,
@@ -628,6 +437,8 @@ class TestGenerator:
             migrated_code=chunk.migrated_code,
             business_rule=business_rule,
             ai_review=ai_review,
+            target_language=target_language,
+            target_profile=target_profile,
         ))
 
         pydantic_results = [
@@ -639,12 +450,35 @@ class TestGenerator:
             )
             for r in result.test_results
         ]
-        return pydantic_results or self._stubs(chunk.name)
+        return pydantic_results or self._stubs(
+            chunk.name,
+            target_language=target_language,
+        )
 
-    def _stubs(self, name: str) -> list[_PydanticTestResult]:
+    def _stubs(
+        self,
+        name: str,
+        target_language: str = "Python",
+    ) -> list[_PydanticTestResult]:
         safe = name.lower().replace("-", "_")
+        message = f"{target_language} test generated; execution disabled - manual verification required"
         return [
-            _PydanticTestResult(name=f"test_{safe}_happy_path", passed=True, duration_ms=12.4),
-            _PydanticTestResult(name=f"test_{safe}_boundary",   passed=True, duration_ms=8.1),
-            _PydanticTestResult(name=f"test_{safe}_edge_case",  passed=True, duration_ms=5.3),
+            _PydanticTestResult(
+                name=f"test_{safe}_happy_path",
+                passed=False,
+                error_message=message,
+                duration_ms=0.0,
+            ),
+            _PydanticTestResult(
+                name=f"test_{safe}_boundary",
+                passed=False,
+                error_message=message,
+                duration_ms=0.0,
+            ),
+            _PydanticTestResult(
+                name=f"test_{safe}_edge_case",
+                passed=False,
+                error_message=message,
+                duration_ms=0.0,
+            ),
         ]

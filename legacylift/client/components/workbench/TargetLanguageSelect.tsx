@@ -21,6 +21,10 @@ interface TargetLanguageSelectProps {
   title?: string;
 }
 
+function optionLabel(target: (typeof TARGET_LANGUAGES)[number]) {
+  return target.status === "active_experimental" ? `${target.label} (experimental)` : target.label;
+}
+
 export function TargetLanguageSelect({
   value,
   onChange,
@@ -33,9 +37,8 @@ export function TargetLanguageSelect({
   title,
 }: TargetLanguageSelectProps) {
   const pad = size === "sm" ? "py-1 pl-2.5 pr-7 text-xs" : "py-2 pl-3 pr-8 text-sm";
-  const defaultLabel = defaultTargetId
-    ? `Default (${getTargetLanguage(defaultTargetId).label})`
-    : "Default";
+  const defaultTarget = defaultTargetId ? getTargetLanguage(defaultTargetId) : null;
+  const defaultLabel = defaultTarget ? `Default (${optionLabel(defaultTarget)})` : "Default";
 
   return (
     <div className={`relative inline-block ${className}`}>
@@ -50,7 +53,7 @@ export function TargetLanguageSelect({
         {allowDefault && <option value="">{defaultLabel}</option>}
         {TARGET_LANGUAGES.map((t) => (
           <option key={t.id} value={t.id}>
-            {t.label}
+            {optionLabel(t)}
           </option>
         ))}
       </select>

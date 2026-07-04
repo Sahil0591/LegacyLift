@@ -263,7 +263,7 @@ def build_project_review_prompt(
     manifest: str,
     file_summaries: list[dict],
 ) -> tuple[str, str]:
-    system = """You are reviewing a completed legacy-code-to-Python migration at the \
+    system = """You are reviewing a completed legacy-code-to-target-language migration at the \
 WHOLE-PROJECT level. You are given a manifest of files, their dependency edges, and \
 extracted business rules — NOT the full migrated code for every file. Flag ONLY \
 cross-file concerns: naming/style inconsistency across files, constants or business \

@@ -1,10 +1,9 @@
 """
 models/target_profile.py - Target language profile catalog models.
 
-Target profiles describe governed generation targets without claiming that
-code generation is already wired for every language. They are consumed by
-Layer 0.5 registry code and, in later PRs, can drive API selectors and
-profile-aware prompts.
+Target profiles describe governed generation targets and their rollout state.
+They are consumed by Layer 0.5 registry code, API selectors, prompt builders,
+and CI/static-validation fixtures.
 """
 
 from __future__ import annotations
@@ -27,12 +26,15 @@ class TargetProfileId(str, Enum):
     CPP_23 = "cpp-23"
     RUST_2024 = "rust-2024"
     SQL_PLSQL = "sql-plsql"
+    GO_1X = "go-1x"
+    TYPESCRIPT_5X = "typescript-5x"
 
 
 class TargetProfileStatus(str, Enum):
     """Readiness of a target profile in the LegacyLift backend."""
 
     ACTIVE = "active"
+    ACTIVE_EXPERIMENTAL = "active_experimental"
     STUB = "stub"
 
 
@@ -44,9 +46,8 @@ class TargetProfileDefinition(BaseModel):
     """
     Enterprise target profile metadata for migration planning and governance.
 
-    PR1 intentionally stores catalog guidance only. codegen_supported remains
-    false until the generation/review/test stack is explicitly wired for a
-    profile.
+    codegen_supported is only true for profiles with target-aware generation,
+    static validation, and a CI smoke fixture.
     """
 
     id: TargetProfileId

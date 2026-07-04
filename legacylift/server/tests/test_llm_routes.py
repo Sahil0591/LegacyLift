@@ -137,6 +137,22 @@ def clear_rate_limit():
 
 # ── /llm/migrate ─────────────────────────────────────────────────────────────
 
+@pytest.mark.parametrize(
+    ("endpoint", "body"),
+    [
+        ("/llm/migrate", MIGRATE_BODY),
+        ("/llm/review", REVIEW_BODY),
+        ("/llm/tests", TESTS_BODY),
+    ],
+)
+def test_llm_routes_reject_unsupported_targets(endpoint: str, body: dict):
+    client = TestClient(app, raise_server_exceptions=True)
+    r = client.post(endpoint, json={**body, "target_lang": "Brainfuck"})
+
+    assert r.status_code == 422
+    assert "Unsupported target language" in r.text
+
+
 class TestLlmMigrate:
 
     def test_returns_migrated_code(self):

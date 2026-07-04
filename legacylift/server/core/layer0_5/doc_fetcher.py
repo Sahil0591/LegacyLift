@@ -7,7 +7,7 @@ up-to-date API information rather than relying on training data.
 
 doc_fetcher.py handles the first step: fetching documentation for the target
 language's standard library and any key third-party libraries we'll use in
-the migration (e.g. the `decimal` module for COBOL COMP-3 arithmetic).
+the migration (for example exact-decimal, date/time, and test libraries).
 
 Uses aiohttp for async fetching.  In DEMO_MODE (or when URLs are not
 configured) it returns canned stub data so the pipeline doesn't need internet
@@ -26,6 +26,8 @@ from typing import Any
 import aiohttp
 from rich.console import Console
 
+from core.target_languages import get_target_language
+
 console = Console()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 
@@ -33,8 +35,9 @@ DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 # Documentation URL registry
 # ---------------------------------------------------------------------------
 
-# Maps target language name to a list of documentation endpoints to fetch.
-# Add new languages here when the pipeline supports them.
+# Maps target language name to documentation endpoints to fetch when real
+# network-backed docs are enabled. Empty lists intentionally fall back to the
+# canonical target-language metadata.
 DOC_URLS: dict[str, list[str]] = {
     "Python": [
         # TODO (implementer): replace with real Python docs API endpoints.
@@ -47,17 +50,12 @@ DOC_URLS: dict[str, list[str]] = {
     "Go": [
         # TODO: pkg.go.dev API
     ],
+    "C#": [],
+    "C++": [],
+    "Rust": [],
+    "SQL": [],
+    "TypeScript": [],
 }
-
-# Libraries we always recommend for COBOL->Python migrations
-COBOL_MIGRATION_LIBRARIES = [
-    "decimal",      # Exact decimal arithmetic (replaces COMP-3 packed decimal)
-    "datetime",     # Date arithmetic (replaces YYYYMMDD integer tricks)
-    "dataclasses",  # Replaces COBOL data structures / copybooks
-    "enum",         # Replaces COBOL condition names (88-levels)
-    "pathlib",      # File I/O (replaces COBOL file sections)
-    "logging",      # Structured logging (replaces DISPLAY statements)
-]
 
 
 class DocFetcher:
@@ -92,7 +90,8 @@ class DocFetcher:
           - Cache the result so subsequent pipeline runs are fast.
           - Add a TTL to the cache (docs don't change often but do change).
         """
-        cache_key = target_language.lower()
+        target = get_target_language(target_language)
+        cache_key = target.id
         if cache_key in self._cache:
             if DEMO_MODE:
                 console.print(f"[dim]DocFetcher: cache hit for {target_language}[/dim]")
@@ -107,11 +106,11 @@ class DocFetcher:
             return result
 
         # Real fetch path (only runs when DEMO_MODE=false and URLs are configured)
-        urls = DOC_URLS.get(target_language, [])
+        urls = DOC_URLS.get(target.language, [])
         result = {
-            "version":    "3.12",
+            "version":    target.version,
             "modules":    [],
-            "libraries":  COBOL_MIGRATION_LIBRARIES,
+            "libraries":  list(target.recommended_libraries),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -135,21 +134,22 @@ class DocFetcher:
 
         TODO (implementer): remove once real fetching is implemented.
         """
-        stubs = {
-            "Python": {
+        target = get_target_language(language)
+        if target.id == "python-3x":
+            return {
                 "version":   "3.12",
                 "modules":   [
                     "decimal", "datetime", "collections", "itertools",
                     "functools", "pathlib", "logging", "dataclasses", "enum",
                     "typing", "re", "struct", "io",
                 ],
-                "libraries": COBOL_MIGRATION_LIBRARIES,
+                "libraries": list(target.recommended_libraries),
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
-            },
-        }
-        return stubs.get(language, {
-            "version":   "unknown",
-            "modules":   [],
-            "libraries": [],
+            }
+
+        return {
+            "version":   target.version,
+            "modules":   list(target.recommended_libraries),
+            "libraries": list(target.recommended_libraries),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
-        })
+        }

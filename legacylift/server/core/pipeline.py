@@ -61,6 +61,7 @@ from core.layer2.ai_reviewer        import AIReviewer
 from core.layer3.test_generator     import TestGenerator
 from core.layer4.schema_validator   import SchemaValidator, SchemaValidationResult
 from core.storage                   import storage
+from core.target_languages          import get_target_language, is_supported_target_language, target_profile_payload
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -127,25 +128,41 @@ async def _build_target_profile(project: Project) -> "TargetProfile":
 
         registry = GotchaRegistry()
         gotchas = await registry.get_gotchas(src_lang, project.target_language)
+        profile_ctx = target_profile_payload(project.target_language)
 
         return TargetProfile(
-            language=project.target_language,
-            version=docs.get("version", "3.12"),
+            language=profile_ctx["language"],
+            version=(
+                docs.get("version")
+                if docs.get("version") and docs.get("version") != "unknown"
+                else profile_ctx["version"]
+            ),
             deprecated_patterns=deprecated,
             gotchas=gotchas,
-            recommended_libraries=docs.get("libraries", []),
+            recommended_libraries=docs.get("libraries") or profile_ctx["recommended_libraries"],
+            style_guide=profile_ctx["style_guide"],
+            type_system=profile_ctx["type_system"],
+            async_model=profile_ctx["async_model"],
+            test_framework=profile_ctx["test_framework"],
+            notes=profile_ctx["notes"],
         )
     except Exception as exc:
         logger.error(
             "_build_target_profile failed for project %s: %s",
             project.id, exc, exc_info=True,
         )
+        profile_ctx = target_profile_payload(getattr(project, "target_language", "Python"))
         return TargetProfile(
-            language=getattr(project, "target_language", "Python"),
-            version="3.12",
+            language=profile_ctx["language"],
+            version=profile_ctx["version"],
             deprecated_patterns=[],
             gotchas=[],
-            recommended_libraries=[],
+            recommended_libraries=profile_ctx["recommended_libraries"],
+            style_guide=profile_ctx["style_guide"],
+            type_system=profile_ctx["type_system"],
+            async_model=profile_ctx["async_model"],
+            test_framework=profile_ctx["test_framework"],
+            notes=profile_ctx["notes"],
         )
 
 
@@ -381,14 +398,37 @@ def _format_lessons_block(lessons: list[dict]) -> str:
     return "\n".join(f"- ({l.get('source', 'unknown')}) {l.get('text', '')}" for l in lessons)
 
 
+def _resolve_chunk_target(project: Project, filename: str) -> tuple[str, dict]:
+    """Resolve the target language/profile for a chunk's source file."""
+
+    configured_target = None
+    config = project.client_config if isinstance(project.client_config, dict) else None
+    targets = config.get("targets") if isinstance(config, dict) else None
+    if isinstance(targets, dict):
+        per_file = targets.get("perFile")
+        if isinstance(per_file, dict) and filename:
+            configured_target = per_file.get(filename)
+        configured_target = configured_target or targets.get("default")
+
+    configured_target = configured_target or getattr(project, "target_language", "Python")
+    if not isinstance(configured_target, str) or not configured_target.strip():
+        configured_target = "Python"
+    if not is_supported_target_language(configured_target):
+        scope = filename or "project default"
+        raise ValueError(f"Unsupported target language for {scope}: {configured_target}")
+
+    target = get_target_language(configured_target)
+    return target.language, target_profile_payload(configured_target)
+
+
 # ---------------------------------------------------------------------------
 # Step 5+6: background task triggered by POST /select-chunk
 # ---------------------------------------------------------------------------
 
 async def run_migration_generation(project: Project, chunk_id: str) -> None:
     """
-    Background task: generate a Python migration for the selected chunk,
-    then automatically run Layer 1 static analysis.
+    Background task: generate a target-language migration for the selected
+    chunk, then automatically run Layer 1 static analysis.
 
     Called via asyncio.create_task() from the select-chunk endpoint.
     Broadcasts WebSocket events in order:
@@ -443,6 +483,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         from core.migration.generator import MigrationInput, generate_migration  # noqa: PLC0415
 
         chunk_filename = chunk_dict.get("filename", "")
+        target_language, target_profile = _resolve_chunk_target(project, chunk_filename)
         file_context = project.uploaded_files.get(chunk_filename, "")
         project_manifest = _build_project_manifest(project, chunk_filename)
         lessons_learned = _format_lessons_block(
@@ -459,7 +500,9 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             ),
             rule_confidence=float(rule_dict.get("confidence", 0.5)) if rule_dict else 0.5,
             source_language=str(project.source_language),
+            target_language=target_language,
             related_chunks=related_chunks,
+            target_profile=target_profile,
             file_context=file_context,
             project_manifest=project_manifest,
             lessons_learned=lessons_learned,
@@ -511,7 +554,10 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         )
 
         static_analyser = StaticAnalyser()
-        static_result = await static_analyser.analyse(pydantic_chunk)
+        static_result = await static_analyser.analyse(
+            pydantic_chunk,
+            target_language=target_language,
+        )
         project.chunk_static_analysis[chunk_id] = dataclasses.asdict(static_result)
 
         await ws_manager.emit(
@@ -550,6 +596,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             business_rule=_business_rule,
             static_analysis=static_result,
             source_language=chunk_dict.get("language", "cobol"),
+            target_language=target_language,
         )
 
         ai_result = await _ai_review(_ai_review_input)
@@ -585,6 +632,8 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             migrated_code=result.migrated_code,
             business_rule=_business_rule,
             ai_review=ai_result,
+            target_language=target_language,
+            target_profile=target_profile,
         )
 
         await ws_manager.emit(
@@ -628,7 +677,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             chunk_id=chunk_id,
             diff=(
                 f"--- {chunk_dict.get('name', chunk_id)}\n"
-                "+++ migrated.py\n"
+                f"+++ migrated{get_target_language(target_language).extension}\n"
                 f"{result.migrated_code}"
             ),
         )
@@ -1035,13 +1084,23 @@ class MigrationPipeline:
 
             registry = GotchaRegistry()
             gotchas = await registry.get_gotchas(project.source_language, project.target_language)
+            profile_ctx = target_profile_payload(project.target_language)
 
             profile = TargetProfile(
-                language=project.target_language,
-                version=docs.get("version", "3.12"),
+                language=profile_ctx["language"],
+                version=(
+                    docs.get("version")
+                    if docs.get("version") and docs.get("version") != "unknown"
+                    else profile_ctx["version"]
+                ),
                 deprecated_patterns=deprecated,
                 gotchas=gotchas,
-                recommended_libraries=docs.get("libraries", []),
+                recommended_libraries=docs.get("libraries") or profile_ctx["recommended_libraries"],
+                style_guide=profile_ctx["style_guide"],
+                type_system=profile_ctx["type_system"],
+                async_model=profile_ctx["async_model"],
+                test_framework=profile_ctx["test_framework"],
+                notes=profile_ctx["notes"],
             )
 
             await self.manager.emit(
@@ -1057,12 +1116,18 @@ class MigrationPipeline:
             await self.manager.emit_error(
                 project.id, "Layer0.5", str(exc), recoverable=True
             )
+            profile_ctx = target_profile_payload(project.target_language)
             return TargetProfile(
-                language=project.target_language,
-                version="3.12",
+                language=profile_ctx["language"],
+                version=profile_ctx["version"],
                 deprecated_patterns=[],
                 gotchas=[],
-                recommended_libraries=["decimal", "datetime"],
+                recommended_libraries=profile_ctx["recommended_libraries"],
+                style_guide=profile_ctx["style_guide"],
+                type_system=profile_ctx["type_system"],
+                async_model=profile_ctx["async_model"],
+                test_framework=profile_ctx["test_framework"],
+                notes=profile_ctx["notes"],
             )
 
     # -----------------------------------------------------------------------
@@ -1096,8 +1161,10 @@ class MigrationPipeline:
             project.id, "chunk_started", chunk_id=chunk.id, name=chunk.name
         )
 
+        target_language, target_profile = _resolve_chunk_target(project, chunk.source_file)
+
         # --- Layer 1: Static Analysis ---
-        static_result = await self.run_layer1(chunk)
+        static_result = await self.run_layer1(chunk, target_language=target_language)
         chunk.static_analysis = static_result
         await self.manager.emit(
             project.id,
@@ -1107,7 +1174,7 @@ class MigrationPipeline:
         )
 
         # --- Layer 2: AI Review ---
-        ai_result = await self.run_layer2(chunk)
+        ai_result = await self.run_layer2(chunk, target_language=target_language)
         chunk.ai_review = ai_result
         await self.manager.emit(
             project.id,
@@ -1116,7 +1183,11 @@ class MigrationPipeline:
         )
 
         # --- Layer 3: Tests ---
-        test_results = await self.run_layer3(chunk)
+        test_results = await self.run_layer3(
+            chunk,
+            target_language=target_language,
+            target_profile=target_profile,
+        )
         chunk.test_results = test_results
 
         passed_count = sum(1 for t in test_results if t.passed)
@@ -1157,7 +1228,11 @@ class MigrationPipeline:
     # Layer 1 — Static Analysis
     # -----------------------------------------------------------------------
 
-    async def run_layer1(self, chunk: MigrationChunk) -> StaticAnalysisResult:
+    async def run_layer1(
+        self,
+        chunk: MigrationChunk,
+        target_language: str = "Python",
+    ) -> StaticAnalysisResult:
         """
         Run static analysis on the migrated code for a single chunk.
 
@@ -1172,7 +1247,10 @@ class MigrationPipeline:
         """
         self._stage_log(f"Layer 1: Static Analysis [{chunk.name}]")
         try:
-            result = await self._static_analyser.analyse(chunk)
+            result = await self._static_analyser.analyse(
+                chunk,
+                target_language=target_language,
+            )
             self.validation_history.append(
                 ValidationResult(
                     layer="Layer1",
@@ -1191,7 +1269,11 @@ class MigrationPipeline:
     # Layer 2 — AI Code Review
     # -----------------------------------------------------------------------
 
-    async def run_layer2(self, chunk: MigrationChunk) -> AIReviewResult:
+    async def run_layer2(
+        self,
+        chunk: MigrationChunk,
+        target_language: str = "Python",
+    ) -> AIReviewResult:
         """
         Run AI semantic review comparing legacy source to migrated code.
 
@@ -1206,7 +1288,10 @@ class MigrationPipeline:
         """
         self._stage_log(f"Layer 2: AI Review [{chunk.name}]")
         try:
-            result = await self._ai_reviewer.review(chunk)
+            result = await self._ai_reviewer.review(
+                chunk,
+                target_language=target_language,
+            )
             self.validation_history.append(
                 ValidationResult(
                     layer="Layer2",
@@ -1225,7 +1310,12 @@ class MigrationPipeline:
     # Layer 3 — Test Generation & Execution
     # -----------------------------------------------------------------------
 
-    async def run_layer3(self, chunk: MigrationChunk) -> list:
+    async def run_layer3(
+        self,
+        chunk: MigrationChunk,
+        target_language: str = "Python",
+        target_profile: dict | None = None,
+    ) -> list:
         """
         Generate and run tests for the migrated chunk.
 
@@ -1236,14 +1326,16 @@ class MigrationPipeline:
             List of TestResult objects (one per generated test case).
 
         TODO (implementer): connect to test_generator.py which should:
-          1. Ask the LLM to write pytest cases that exercise the migrated code
-          2. Write them to a temp file
-          3. Run pytest programmatically with subprocess or pytest.main()
-          4. Parse the JUnit XML output into TestResult objects
+          1. Ask the LLM to write target-framework cases for the migrated code.
+          2. Return them for manual verification until sandbox execution exists.
         """
         self._stage_log(f"Layer 3: Tests [{chunk.name}]")
         try:
-            results = await self._test_generator.generate_and_run(chunk)
+            results = await self._test_generator.generate_and_run(
+                chunk,
+                target_language=target_language,
+                target_profile=target_profile,
+            )
             await self.manager.emit(
                 self.project.id, "tests_running", total=len(results)
             )

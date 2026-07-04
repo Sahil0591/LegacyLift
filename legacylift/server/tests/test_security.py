@@ -124,6 +124,78 @@ class TestWebSocketTenantIsolation:
                     ws.receive_json()
 
 
+class TestTargetLanguageValidation:
+    def test_create_project_rejects_unsupported_target(self):
+        client = _client_for(OWNER_ID)
+        r = client.post(
+            "/project",
+            json={
+                "name": "Unsupported Target",
+                "source_language": "cobol",
+                "target_language": "Brainfuck",
+            },
+        )
+
+        assert r.status_code == 422
+        assert "Unsupported target language" in r.text
+
+    def test_import_project_rejects_unsupported_target_config(self):
+        client = _client_for(OWNER_ID)
+        r = client.post(
+            "/project/import",
+            json={
+                "analysis": {"chunks": [], "summary": {}, "targetProfile": {}},
+                "config": {"targets": {"default": "Brainfuck"}},
+            },
+        )
+
+        assert r.status_code == 422
+        assert "Unsupported target language" in r.text
+
+    def test_import_project_rejects_unsupported_per_file_target_config(self):
+        client = _client_for(OWNER_ID)
+        r = client.post(
+            "/project/import",
+            json={
+                "analysis": {"chunks": [], "summary": {}, "targetProfile": {}},
+                "config": {
+                    "targets": {
+                        "default": "Python",
+                        "perFile": {"interest.cbl": "Brainfuck"},
+                    }
+                },
+            },
+        )
+
+        assert r.status_code == 422
+        assert "Unsupported target language for interest.cbl" in r.text
+
+    def test_save_progress_rejects_unsupported_per_file_target_before_mutating(self):
+        project = _make_project(OWNER_ID)
+        project.chunk_migrations = {"chunk-1": "keep this migration"}
+        project.client_config = {"targets": {"default": "Python"}}
+
+        client = _client_for(OWNER_ID)
+        r = client.put(
+            f"/project/{project.id}/progress",
+            json={
+                "chunks": [],
+                "finalized_files": {},
+                "config": {
+                    "targets": {
+                        "default": "Python",
+                        "perFile": {"interest.cbl": "Brainfuck"},
+                    }
+                },
+            },
+        )
+
+        assert r.status_code == 422
+        assert "Unsupported target language for interest.cbl" in r.text
+        assert project.chunk_migrations == {"chunk-1": "keep this migration"}
+        assert project.client_config == {"targets": {"default": "Python"}}
+
+
 # ===========================================================================
 # Upload — file count, size, extension, and duplicate limits (issue #4)
 # ===========================================================================

@@ -1,9 +1,9 @@
 """
 core/layer0_5/target_profile_registry.py - Enterprise target profile catalog.
 
-This registry is deliberately metadata-only in PR1. It lets the backend name
-target generation profiles without wiring generation, prompts, API selectors,
-or pair-specific gotchas yet.
+This registry is the backend source of truth for target rollout state. Profiles
+marked codegen_supported have target-aware generation, static validation, and a
+CI smoke fixture; non-Python targets are still explicitly experimental.
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ _PROFILES: tuple[TargetProfileDefinition, ...] = (
             "py3",
         ),
         status=TargetProfileStatus.ACTIVE,
-        codegen_supported=False,
+        codegen_supported=True,
     ),
     TargetProfileDefinition(
         id=TargetProfileId.JAVA_21,
@@ -154,8 +154,8 @@ _PROFILES: tuple[TargetProfileDefinition, ...] = (
             "Java 25",
             "JVM",
         ),
-        status=TargetProfileStatus.STUB,
-        codegen_supported=False,
+        status=TargetProfileStatus.ACTIVE_EXPERIMENTAL,
+        codegen_supported=True,
     ),
     TargetProfileDefinition(
         id=TargetProfileId.CSHARP_DOTNET,
@@ -214,8 +214,8 @@ _PROFILES: tuple[TargetProfileDefinition, ...] = (
             ".NET",
             "dotnet",
         ),
-        status=TargetProfileStatus.STUB,
-        codegen_supported=False,
+        status=TargetProfileStatus.ACTIVE_EXPERIMENTAL,
+        codegen_supported=True,
     ),
     TargetProfileDefinition(
         id=TargetProfileId.CPP_23,
@@ -273,8 +273,8 @@ _PROFILES: tuple[TargetProfileDefinition, ...] = (
             "CPP",
             "CPP23",
         ),
-        status=TargetProfileStatus.STUB,
-        codegen_supported=False,
+        status=TargetProfileStatus.ACTIVE_EXPERIMENTAL,
+        codegen_supported=True,
     ),
     TargetProfileDefinition(
         id=TargetProfileId.RUST_2024,
@@ -331,8 +331,8 @@ _PROFILES: tuple[TargetProfileDefinition, ...] = (
             "Rust 2024",
             "Rust edition 2024",
         ),
-        status=TargetProfileStatus.STUB,
-        codegen_supported=False,
+        status=TargetProfileStatus.ACTIVE_EXPERIMENTAL,
+        codegen_supported=True,
     ),
     TargetProfileDefinition(
         id=TargetProfileId.SQL_PLSQL,
@@ -391,8 +391,123 @@ _PROFILES: tuple[TargetProfileDefinition, ...] = (
             "TSQL",
             "Stored Procedures",
         ),
-        status=TargetProfileStatus.STUB,
-        codegen_supported=False,
+        status=TargetProfileStatus.ACTIVE_EXPERIMENTAL,
+        codegen_supported=True,
+    ),
+    TargetProfileDefinition(
+        id=TargetProfileId.GO_1X,
+        display_name="Go",
+        language="Go",
+        version="1.22+",
+        tagline="Experimental target for modern services and operational tooling.",
+        use_cases=(
+            "Service modernization",
+            "Batch tooling",
+            "Platform integrations",
+        ),
+        runtime_description=(
+            "Go runtime profile for teams that want simple deployable services, "
+            "explicit error handling, and straightforward concurrency."
+        ),
+        numeric_policy=(
+            "Use integer minor units or a decimal library for money. Avoid float64 "
+            "for financial values, balances, reconciliation, or settlement."
+        ),
+        date_policy=(
+            "Use time.Time with explicit locations and parsing policy. Avoid "
+            "implicit local-time assumptions."
+        ),
+        test_framework="go test",
+        style_guide="Effective Go with gofmt, small interfaces, and explicit error wrapping.",
+        type_system_guidance=(
+            "Use explicit structs and typed errors. Keep interfaces small and avoid "
+            "interface{} or any for domain data."
+        ),
+        async_concurrency_model=(
+            "Use goroutines and channels for concurrency. Carry context.Context "
+            "through I/O boundaries and guard shared state with sync primitives."
+        ),
+        migration_guidance=(
+            "Keep business rules in pure functions where possible.",
+            "Isolate I/O behind interfaces so generated logic remains reviewable.",
+            "Return errors explicitly and wrap them with context.",
+        ),
+        risk_check_focus=(
+            "float64 used for money",
+            "nil pointer or nil interface handling",
+            "goroutine leaks",
+            "error propagation",
+        ),
+        recommended_libraries=(
+            "time",
+            "testing",
+            "testify",
+            "shopspring/decimal",
+        ),
+        aliases=(
+            "Go",
+            "Golang",
+            "go-1x",
+        ),
+        status=TargetProfileStatus.ACTIVE_EXPERIMENTAL,
+        codegen_supported=True,
+    ),
+    TargetProfileDefinition(
+        id=TargetProfileId.TYPESCRIPT_5X,
+        display_name="TypeScript",
+        language="TypeScript",
+        version="5.x",
+        tagline="Experimental target for web and service modernization.",
+        use_cases=(
+            "Web/service modernization",
+            "Typed business-rule packages",
+            "Frontend-adjacent workflows",
+        ),
+        runtime_description=(
+            "TypeScript profile for teams that need strict typing, packageable "
+            "business rules, and integration with JavaScript service ecosystems."
+        ),
+        numeric_policy=(
+            "Use decimal.js or bigint minor units for money. Never use the JS "
+            "number type for financial calculations."
+        ),
+        date_policy=(
+            "Use typed date libraries or Temporal with explicit timezone handling. "
+            "Avoid ambiguous Date parsing."
+        ),
+        test_framework="vitest",
+        style_guide="Strict tsconfig with ESLint/Prettier and exhaustive switch handling.",
+        type_system_guidance=(
+            "Use discriminated unions for state, branded types for identifiers "
+            "and money, and avoid any."
+        ),
+        async_concurrency_model=(
+            "Use async/await with typed Promises. Do not leave promises floating."
+        ),
+        migration_guidance=(
+            "Separate pure business rules from framework and I/O code.",
+            "Use runtime validation only at integration boundaries.",
+            "Keep generated modules tree-shakeable and reviewable.",
+        ),
+        risk_check_focus=(
+            "number type used for money",
+            "floating promises",
+            "any leaks",
+            "timezone-ambiguous Date parsing",
+        ),
+        recommended_libraries=(
+            "decimal.js",
+            "zod",
+            "vitest",
+            "date-fns",
+        ),
+        aliases=(
+            "TypeScript",
+            "TS",
+            "typescript-5x",
+        ),
+        status=TargetProfileStatus.ACTIVE_EXPERIMENTAL,
+        codegen_supported=True,
     ),
 )
 

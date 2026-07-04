@@ -11,7 +11,7 @@ LegacyLift is a workbench that guides a team through modernizing legacy code, on
 1. **Upload** the old source files (COBOL, Java, VB6, SQL, and related formats).
 2. **Understand** — LegacyLift reads the code, explains the business rules hidden inside it in plain English, maps how everything connects, and flags the riskiest parts.
 3. **Assign & confirm** — a domain expert confirms who owns each business rule before anything is touched, so institutional knowledge is captured, not lost.
-4. **Migrate & check** — the AI rewrites each approved piece into modern Python, then automatically runs quality checks, an AI "second opinion" review, and generated tests.
+4. **Migrate & check** — the AI rewrites each approved piece into the selected target language, then runs language-aware quality checks, an AI "second opinion" review, and generated tests for manual verification.
 5. **Approve** — a human gives the final sign-off on each piece. Nothing is accepted automatically.
 
 The result is a modernization process that is **auditable, resumable, and safe** — every decision, review, and test result is recorded.

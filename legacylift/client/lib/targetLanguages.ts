@@ -6,10 +6,11 @@
 // *idiomatic* target code (not "Python with a different name") — numeric/money
 // policy, date handling, typing, style, concurrency, and the test framework.
 //
-// The first six entries are ported verbatim from the backend catalog a
-// colleague built and a co-founder validated
-// (server/core/layer0_5/target_profile_registry.py). Go and TypeScript are
-// added here as common modern service targets.
+// Mirrors the backend MVP target catalog. Python is the active baseline; the
+// other targets are explicit experimental MVP targets until sandboxed execution
+// and deeper project-level dependency resolution are implemented.
+
+export type TargetLanguageStatus = "active" | "active_experimental";
 
 export interface TargetLanguage {
   /** Stable id, persisted in project config (never render this). */
@@ -23,6 +24,10 @@ export interface TargetLanguage {
   extension: string;
   /** Line-comment prefix for generated file headers. */
   commentPrefix: string;
+  /** Product maturity shown in UI; non-Python MVP targets are experimental. */
+  status: TargetLanguageStatus;
+  /** True only when generation, static validation, and CI fixtures exist. */
+  codegenSupported: boolean;
   testFramework: string;
   styleGuide: string;
   typeSystem: string;
@@ -58,6 +63,8 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     version: "3.12",
     extension: ".py",
     commentPrefix: "#",
+    status: "active",
+    codegenSupported: true,
     testFramework: "pytest",
     styleGuide: "PEP 8, formatted with Black; small, typed modules.",
     typeSystem:
@@ -84,6 +91,8 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     version: "21",
     extension: ".java",
     commentPrefix: "//",
+    status: "active_experimental",
+    codegenSupported: true,
     testFramework: "JUnit 5",
     styleGuide:
       "Modern Java service style — clear packages, records where appropriate, explicit domain types.",
@@ -112,6 +121,8 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     version: ".NET 8",
     extension: ".cs",
     commentPrefix: "//",
+    status: "active_experimental",
+    codegenSupported: true,
     testFramework: "xUnit",
     styleGuide: "Microsoft C# conventions with nullable reference types enabled.",
     typeSystem:
@@ -139,6 +150,8 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     version: "23",
     extension: ".cpp",
     commentPrefix: "//",
+    status: "active_experimental",
+    codegenSupported: true,
     testFramework: "GoogleTest",
     styleGuide: "C++ Core Guidelines — RAII, narrow interfaces, explicit ownership.",
     typeSystem:
@@ -166,6 +179,8 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     version: "2024 edition",
     extension: ".rs",
     commentPrefix: "//",
+    status: "active_experimental",
+    codegenSupported: true,
     testFramework: "cargo test",
     styleGuide: "Rust API guidelines; clippy and rustfmt clean.",
     typeSystem:
@@ -193,6 +208,8 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     version: "PL/SQL · T-SQL",
     extension: ".sql",
     commentPrefix: "--",
+    status: "active_experimental",
+    codegenSupported: true,
     testFramework: "tSQLt / utPLSQL",
     styleGuide:
       "Dialect-specific SQL style with named transactions and reviewable stored-procedure boundaries.",
@@ -221,6 +238,8 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     version: "1.22",
     extension: ".go",
     commentPrefix: "//",
+    status: "active_experimental",
+    codegenSupported: true,
     testFramework: "go test",
     styleGuide: "Effective Go / gofmt; return errors explicitly and wrap with %w.",
     typeSystem:
@@ -247,6 +266,8 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     version: "5.x",
     extension: ".ts",
     commentPrefix: "//",
+    status: "active_experimental",
+    codegenSupported: true,
     testFramework: "vitest",
     styleGuide: "ESLint + Prettier; exhaustive switch over discriminated unions.",
     typeSystem:

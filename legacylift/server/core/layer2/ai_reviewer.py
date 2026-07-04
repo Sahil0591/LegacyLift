@@ -3,7 +3,7 @@ core/layer2/ai_reviewer.py — adversarial AI semantic reviewer (Layer 2).
 
 Layer 2 is the expensive semantic quality gate.  It runs after Layer 1
 (deterministic static analysis) and uses the Venice AI LLM to find behaviour
-differences between the original legacy code and the migrated Python that
+differences between the original legacy code and the migrated target code that
 cheap structural checks cannot catch.
 
 Design principle: adversarial, not helpful.
@@ -48,10 +48,11 @@ DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 @dataclass
 class AIReviewInput:
     chunk: CodeChunk          # original parsed chunk from Layer 0
-    migrated_code: str        # the proposed Python migration
+    migrated_code: str        # the proposed target-language migration
     business_rule: BusinessRule   # confirmed rule — the specification
     static_analysis: Any      # StaticAnalysisResult (Pydantic or dataclass)
     source_language: str      # "cobol" | "java"
+    target_language: str = "Python"
 
 
 @dataclass
@@ -101,7 +102,7 @@ def _build_user_prompt(inp: AIReviewInput) -> str:
 === ORIGINAL {inp.source_language.upper()} SOURCE CODE ===
 {inp.chunk.source}
 
-=== MIGRATED PYTHON CODE ===
+=== MIGRATED {inp.target_language.upper()} CODE ===
 {inp.migrated_code}
 
 === BUSINESS RULE SPECIFICATION ===
@@ -110,29 +111,28 @@ The migrated code should implement exactly this rule, nothing more, nothing less
 
 === CATEGORIES TO CHECK ===
 
-ARITHMETIC: Integer vs float division differences. COBOL truncates on integer \
-division, Python / returns float. Check every division operation.
+ARITHMETIC: Integer, decimal, and binary floating-point differences. Check every \
+division operation and every conversion between numeric types.
 
 DATE_TIME: Date format differences. COBOL often stores dates as YYYYMMDD integers. \
 Check date parsing, comparison, and arithmetic for off-by-one or format errors.
 
-STRING_HANDLING: COBOL pads strings to fixed length with spaces. Python strings are \
-variable length. Check for comparison bugs from untrimmed padding, and truncation \
-differences.
+STRING_HANDLING: COBOL pads strings to fixed length with spaces. Check for \
+comparison bugs from untrimmed padding, target-language string semantics, and \
+truncation differences.
 
-NULL_HANDLING: COBOL has no concept of null the way Python does. Check how \
-empty/zero/space values are handled and whether the migration introduces None where \
-COBOL would have used a default value, or vice versa.
+NULL_HANDLING: COBOL has no concept of null the way modern targets do. Check how \
+empty/zero/space values are handled and whether the migration introduces null-like \
+values where COBOL would have used a default value, or vice versa.
 
 ROUNDING: Financial calculations must use exact decimal arithmetic. Check every \
-rounding operation matches COBOL's ROUNDED clause behaviour (round half up) versus \
-Python's default (round half to even).
+rounding operation matches COBOL's ROUNDED clause behaviour (round half up) and \
+the selected target profile's numeric policy.
 
-LOOP_BOUNDARY: COBOL PERFORM UNTIL checks the condition AFTER the first iteration \
-(post-test). Python while checks BEFORE (pre-test). Check every loop boundary for \
-off-by-one differences.
+LOOP_BOUNDARY: COBOL PERFORM UNTIL and source-language loop forms can differ from \
+the target language. Check every loop boundary for off-by-one differences.
 
-EXCEPTION_HANDLING: COBOL has no exceptions in the Python sense. Check that error \
+EXCEPTION_HANDLING: COBOL has no exceptions in the modern target-language sense. Check that error \
 conditions the original code handled (file not found, invalid data, division by zero) \
 are still handled correctly in the migration, not silently swallowed or differently raised.
 
@@ -264,7 +264,7 @@ def _demo_result(inp: AIReviewInput, elapsed: float) -> AIReviewResult:
             reviewer_confidence="Medium",
             reviewer_summary=(
                 "Demo review completed locally. Static analysis passed and the "
-                "generated code uses Decimal arithmetic for the confirmed rule."
+                f"generated {inp.target_language} code follows the configured target profile."
             ),
             checked_categories=checked,
             review_time_seconds=elapsed,
@@ -298,7 +298,7 @@ def _demo_result(inp: AIReviewInput, elapsed: float) -> AIReviewResult:
 
 async def review(inp: AIReviewInput) -> AIReviewResult:
     """
-    Run an adversarial LLM review comparing original source to migrated Python.
+    Run an adversarial LLM review comparing original source to migrated target code.
 
     Never raises.  Returns an AIReviewResult with reviewer_confidence="Low"
     and a descriptive issue if the review cannot be completed for any reason.
@@ -388,11 +388,11 @@ async def review(inp: AIReviewInput) -> AIReviewResult:
 # ---------------------------------------------------------------------------
 
 _LEGACY_SYSTEM = """\
-You are an expert code migration reviewer specialising in legacy COBOL/Java/VB6
-to Python migrations.
+You are an expert code migration reviewer specialising in legacy system
+migrations to modern target languages.
 
-Your job is to compare the original legacy code with the migrated Python code
-and identify any SEMANTIC differences — cases where the Python code would
+Your job is to compare the original legacy code with the migrated target code
+and identify any SEMANTIC differences — cases where the target code would
 produce a different result than the original.
 
 You are also given a list of known migration gotchas to watch for.
@@ -420,7 +420,7 @@ Review this migration for semantic correctness.
 === ORIGINAL LEGACY CODE ===
 {source_code}
 
-=== MIGRATED PYTHON CODE ===
+=== MIGRATED {target_language} CODE ===
 {migrated_code}
 
 === KNOWN MIGRATION GOTCHAS TO CHECK ===
@@ -449,7 +449,11 @@ class AIReviewer:
         self.gotchas: list[str] = []
         self.business_rule_descriptions: list[str] = []
 
-    async def review(self, chunk: MigrationChunk) -> _LegacyAIReviewResult:
+    async def review(
+        self,
+        chunk: MigrationChunk,
+        target_language: str = "Python",
+    ) -> _LegacyAIReviewResult:
         if DEMO_MODE:
             console.print(
                 f"[dim]AIReviewer.review() → reviewing chunk [{chunk.name}][/dim]"
@@ -462,6 +466,7 @@ class AIReviewer:
             user_prompt = _LEGACY_REVIEW_TEMPLATE.format(
                 source_code=chunk.source_code[:3000],
                 migrated_code=chunk.migrated_code[:3000],
+                target_language=target_language,
                 gotchas="\n".join(f"- {g}" for g in self.gotchas) or "None listed.",
                 business_rules=(
                     "\n".join(f"- {r}" for r in self.business_rule_descriptions)

@@ -57,6 +57,7 @@ from api.github_overlay import router as github_overlay_router
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition, _add_lesson
 from core.storage import storage
+from core.target_languages import is_supported_target_language
 from db.session import get_database_url, get_session, init_db, validate_database_url
 from integrations.github_app import (
     GitHubAppAuthError,
@@ -278,6 +279,13 @@ class CreateProjectRequest(BaseModel):
     def normalise_source_language(cls, value):
         if isinstance(value, str) and value.lower() == "cobol":
             return SourceLanguage.COBOL
+        return value
+
+    @field_validator("target_language")
+    @classmethod
+    def validate_target_language(cls, value: str):
+        if not is_supported_target_language(value):
+            raise ValueError(f"Unsupported target language: {value}")
         return value
 
 
@@ -1285,6 +1293,52 @@ def _detect_source_language(analysis: dict, fallback: SourceLanguage) -> SourceL
     return fallback
 
 
+def _require_supported_target_language(value: str) -> str:
+    if not is_supported_target_language(value):
+        raise HTTPException(status_code=422, detail=f"Unsupported target language: {value}")
+    return value
+
+
+def _validate_target_config(config: Optional[dict]) -> None:
+    """Reject malformed or unsupported target config before persisting it."""
+
+    if not isinstance(config, dict):
+        return
+
+    targets = config.get("targets")
+    if targets is None:
+        return
+    if not isinstance(targets, dict):
+        raise HTTPException(status_code=422, detail="targets must be an object")
+
+    default_target = targets.get("default")
+    if default_target is not None:
+        if not isinstance(default_target, str) or not default_target.strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported target language: {default_target}",
+            )
+        _require_supported_target_language(default_target)
+
+    per_file = targets.get("perFile")
+    if per_file is None:
+        return
+    if not isinstance(per_file, dict):
+        raise HTTPException(status_code=422, detail="targets.perFile must be an object")
+
+    for filename, target in per_file.items():
+        if not isinstance(target, str) or not target.strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported target language for {filename}: {target}",
+            )
+        if not is_supported_target_language(target):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported target language for {filename}: {target}",
+            )
+
+
 @app.post("/project/import", status_code=201)
 async def import_project(body: ImportProjectRequest, user_id: str = Depends(get_current_user_id)):
     """Persist a browser-computed AnalyzeResult as a new cloud project owned by
@@ -1300,6 +1354,7 @@ async def import_project(body: ImportProjectRequest, user_id: str = Depends(get_
     summary = analysis.get("summary") or {}
     profile = analysis.get("targetProfile") or {}
     config = body.config if isinstance(body.config, dict) else None
+    _validate_target_config(config)
 
     # Prefer the human-chosen default target from config; fall back to the
     # analysis profile's language, then Python.
@@ -1307,16 +1362,21 @@ async def import_project(body: ImportProjectRequest, user_id: str = Depends(get_
     if config and isinstance(config.get("targets"), dict):
         config_default_target = config["targets"].get("default")
 
+    selected_target = (
+        config_default_target
+        or (profile.get("language") if isinstance(profile, dict) else None)
+        or "Python"
+    )
+    if not isinstance(selected_target, str) or not selected_target.strip():
+        selected_target = "Python"
+    selected_target = _require_supported_target_language(selected_target)
+
     project = Project(
         id=f"cloud-{uuid.uuid4().hex[:8]}",
         owner_id=user_id,
         name=(body.name or analysis.get("projectName") or "Untitled").strip() or "Untitled",
         source_language=_detect_source_language(analysis, body.source_language),
-        target_language=(
-            config_default_target
-            or (profile.get("language") if isinstance(profile, dict) else None)
-            or "Python"
-        ),
+        target_language=selected_target,
         status="ready",
         chunk_count=len(chunks),
         risk_summary=summary.get("byLevel") or {},
@@ -1341,6 +1401,8 @@ def _apply_progress(project: Project, body: SaveProgressRequest) -> None:
     """Fold the client's per-chunk progress into both the verbatim blob (for
     loss-less rehydrate) and the normalized Project dicts (so the workbench_*
     tables, list counts, and status stay correct)."""
+    _validate_target_config(body.config)
+
     progress: dict[str, dict] = {}
     project.chunk_migrations = {}
     project.chunk_approvals = {}
@@ -1383,7 +1445,7 @@ def _apply_progress(project: Project, body: SaveProgressRequest) -> None:
             else None
         )
         if isinstance(default_target, str) and default_target.strip():
-            project.target_language = default_target
+            project.target_language = _require_supported_target_language(default_target)
 
     total = len(body.chunks)
     if total > 0 and approved == total:
@@ -1509,6 +1571,13 @@ class MigrateUnitRequest(BaseModel):
     lessons_learned: Optional[str] = Field(None, max_length=4_000)
     institutional_context: Optional[str] = Field(None, max_length=12_000)
 
+    @field_validator("target_lang")
+    @classmethod
+    def validate_target_lang(cls, value: str):
+        if not is_supported_target_language(value):
+            raise ValueError(f"Unsupported target language: {value}")
+        return value
+
 
 class ReviewUnitRequest(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
@@ -1521,6 +1590,13 @@ class ReviewUnitRequest(BaseModel):
     target_profile: Optional[_TargetProfileIn] = None
     institutional_context: Optional[str] = Field(None, max_length=12_000)
 
+    @field_validator("target_lang")
+    @classmethod
+    def validate_target_lang(cls, value: str):
+        if not is_supported_target_language(value):
+            raise ValueError(f"Unsupported target language: {value}")
+        return value
+
 
 class TestsUnitRequest(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
@@ -1529,6 +1605,13 @@ class TestsUnitRequest(BaseModel):
     migrated_code: str = Field(..., min_length=1, max_length=120_000)
     target_lang: str = Field("Python", max_length=32)
     target_profile: Optional[_TargetProfileIn] = None
+
+    @field_validator("target_lang")
+    @classmethod
+    def validate_target_lang(cls, value: str):
+        if not is_supported_target_language(value):
+            raise ValueError(f"Unsupported target language: {value}")
+        return value
 
 
 class SummarizeFileRequest(BaseModel):

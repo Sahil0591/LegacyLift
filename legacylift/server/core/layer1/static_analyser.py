@@ -2,8 +2,8 @@
 core/layer1/static_analyser.py — Static structural analysis of migrated code.
 
 Layer 1 is the first quality gate after a human selects a chunk and an LLM
-proposes a Python migration.  It is fast, deterministic, and makes NO LLM
-calls and NO external API calls.
+proposes a target-language migration. It is fast, deterministic, and makes NO
+LLM calls and NO external API calls.
 
 Checks (execution order):
   5. Empty output detection    — BLOCKING  (short-circuits all other checks)
@@ -36,6 +36,7 @@ from models.business_rule import BusinessRule
 from models.chunk import MigrationChunk
 from models.chunk import StaticAnalysisResult as _LegacyStaticAnalysisResult
 from utils.code_parser import CodeChunk
+from core.layer1.language_validators import validate_target_code
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -84,6 +85,10 @@ class StaticAnalysisResult:
 def analyse(inp: StaticAnalysisInput) -> StaticAnalysisResult:
     """
     Run all static checks on a proposed Python migration.
+
+    This dataclass path is still the Python-specific analyzer used by older
+    call sites. The class wrapper below dispatches non-Python targets to the
+    language-aware validator layer.
 
     Never raises.  On unexpected crash returns a failed result with
     ANALYSER_ERROR so the pipeline can retry without an unhandled exception.
@@ -425,11 +430,35 @@ class StaticAnalyser:
     Returns the Pydantic StaticAnalysisResult from models.chunk.
     """
 
-    async def analyse(self, chunk: MigrationChunk) -> _LegacyStaticAnalysisResult:
+    async def analyse(
+        self,
+        chunk: MigrationChunk,
+        target_language: str = "Python",
+    ) -> _LegacyStaticAnalysisResult:
         if DEMO_MODE:
-            console.print(f"[dim]StaticAnalyser.analyse() → checking chunk [{chunk.name}][/dim]")
+            console.print(
+                f"[dim]StaticAnalyser.analyse() -> checking {target_language} "
+                f"chunk [{chunk.name}][/dim]"
+            )
 
         code = chunk.migrated_code or "pass"
+        validation = validate_target_code(target_language, code)
+        if validation.target.id != "python-3x":
+            issues = [*validation.issues, *validation.warnings]
+            result = _LegacyStaticAnalysisResult(
+                passed=validation.passed,
+                issues=issues,
+                complexity_score=validation.complexity_score,
+                line_count=validation.line_count,
+            )
+            if DEMO_MODE:
+                status = "[green]PASS[/green]" if result.passed else "[red]FAIL[/red]"
+                console.print(
+                    f"  Static analysis ({validation.validator}): {status} | "
+                    f"issues={len(issues)} | complexity={result.complexity_score:.1f}"
+                )
+            return result
+
         issues: list[str] = []
         critical_found = False
 
