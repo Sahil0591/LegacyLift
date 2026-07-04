@@ -101,7 +101,7 @@ export function Hero() {
         >
           <span>tree-sitter parsing</span>
           <span className="text-ink/30">·</span>
-          <span>GPT-4o reasoning</span>
+          <span>GPT-5.2 Codex reasoning</span>
           <span className="text-ink/30">·</span>
           <span>pytest verification</span>
           <span className="text-ink/30">·</span>

@@ -185,8 +185,8 @@ export function CTASection() {
           </div>
 
           <p className="mt-5 text-center text-xs leading-relaxed text-sub/70 sm:mt-7">
-            tree-sitter parsing · GPT-4o reasoning · tests generated from confirmed
-            rules, not code
+            tree-sitter parsing · GPT-5.2 Codex reasoning · tests generated from
+            confirmed rules, not code
           </p>
         </div>
       </motion.div>
