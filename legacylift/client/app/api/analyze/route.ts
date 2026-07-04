@@ -5,17 +5,13 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { analyzeFiles, type InputFile } from "@/lib/analyze";
-import { clerkEnabled, hasConfiguredValue } from "@/lib/authMode";
 import { fetchRepoFiles, GithubError } from "@/lib/github";
 import { rateLimit } from "@/lib/rateLimit";
-
-const serverAuthEnabled =
-  clerkEnabled && hasConfiguredValue(process.env.CLERK_SECRET_KEY);
 
 export async function POST(req: Request) {
   // Defense-in-depth: middleware already gates /api/analyze, but enforce here
   // too so the handler can't run unauthenticated if the matcher ever drifts.
-  const userId = serverAuthEnabled ? (await auth()).userId : "local-demo";
+  const { userId } = await auth();
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

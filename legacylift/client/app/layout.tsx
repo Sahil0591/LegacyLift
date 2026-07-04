@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
-import { clerkEnabled } from "@/lib/authMode";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -22,22 +21,18 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const document = (
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
-      <body
-        className={`${inter.variable} font-sans bg-base text-ink antialiased min-h-screen`}
-      >
-        {children}
-      </body>
-    </html>
-  );
-
-  return clerkEnabled ? (
-    <ClerkProvider afterSignOutUrl="/">{document}</ClerkProvider>
-  ) : (
-    document
+  return (
+    <ClerkProvider afterSignOutUrl="/">
+      <html lang="en" suppressHydrationWarning>
+        <head>
+          <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        </head>
+        <body
+          className={`${inter.variable} font-sans bg-base text-ink antialiased min-h-screen`}
+        >
+          {children}
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }

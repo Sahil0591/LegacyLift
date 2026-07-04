@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
-import { clerkEnabled } from "@/lib/authMode";
 
 export type WorkbenchView = "overview" | "review";
 
@@ -205,7 +204,7 @@ export function WorkbenchHeader({
       )}
 
       <ThemeToggle />
-      {clerkEnabled && <UserButton />}
+      <UserButton />
     </header>
   );
 }
