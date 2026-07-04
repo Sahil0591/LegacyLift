@@ -82,17 +82,27 @@ function cobolLine(raw: string): { indicator: string; content: string } {
   return { indicator: raw[lead] === "*" ? "*" : " ", content: raw };
 }
 
-const COBOL_PARA = /^([A-Z0-9][A-Z0-9-]*)\s*\.\s*$/;
-const COBOL_SECTION = /^([A-Z0-9][A-Z0-9-]*)\s+SECTION\s*\.\s*$/i;
+// Case-insensitive char classes so lowercase / free-format COBOL (very common
+// in GnuCOBOL repos) is recognised, not only upper-case fixed-format source.
+const COBOL_PARA = /^([A-Za-z0-9][A-Za-z0-9-]*)\s*\.\s*$/;
+const COBOL_SECTION = /^([A-Za-z0-9][A-Za-z0-9-]*)\s+SECTION\s*\.\s*$/i;
+
+// Division/section keywords and lone statement verbs that match the bare
+// "WORD." shape of a paragraph header but are not paragraphs. Names are
+// upper-cased before lookup; scope terminators (END-IF. etc.) are excluded
+// separately via an "END-" prefix test.
 const NON_PARA = new Set([
-  "IDENTIFICATION",
-  "ENVIRONMENT",
-  "DATA",
-  "PROCEDURE",
-  "WORKING-STORAGE",
-  "LINKAGE",
-  "FILE",
-  "END",
+  "IDENTIFICATION", "ENVIRONMENT", "DATA", "PROCEDURE",
+  "WORKING-STORAGE", "LOCAL-STORAGE", "LINKAGE", "FILE",
+  "REPORT", "SCREEN", "CONFIGURATION", "INPUT-OUTPUT", "COMMUNICATION",
+  "END", "GOBACK", "EXIT", "CONTINUE", "STOP",
+]);
+
+// SECTION names that belong to the DATA / ENVIRONMENT divisions — never the
+// PROCEDURE division, so they must never become graph nodes.
+const NON_PROC_SECTION = new Set([
+  "WORKING-STORAGE", "LOCAL-STORAGE", "LINKAGE", "FILE",
+  "REPORT", "SCREEN", "CONFIGURATION", "INPUT-OUTPUT", "COMMUNICATION",
 ]);
 
 function splitCobol(file: string, content: string): CodeUnit[] {
@@ -106,23 +116,43 @@ function splitCobol(file: string, content: string): CodeUnit[] {
     const trimmed = content.trim();
     if (!trimmed) continue;
 
+    // A new program header, or END PROGRAM, leaves the procedure division.
+    // Without this reset inProcedure latches on at the first PROCEDURE DIVISION
+    // and every later (nested / batched) program's DATA DIVISION sections leak
+    // in as bogus "WORKING-STORAGE SECTION" nodes.
+    if (
+      /^(IDENTIFICATION|ENVIRONMENT|DATA)\s+DIVISION/i.test(trimmed) ||
+      /^END\s+PROGRAM\b/i.test(trimmed)
+    ) {
+      inProcedure = false;
+      continue;
+    }
     if (/PROCEDURE\s+DIVISION/i.test(trimmed)) {
       inProcedure = true;
       continue;
     }
     if (!inProcedure) continue;
-    // Headers start in Area A — the first content column (col 8) is non-space.
-    if (content[0] === " " || content[0] === "\t") continue;
+
+    // Header must sit in/near Area A. Fixed-format cols 8-11 map to 0-3 leading
+    // spaces here; the small tolerance also admits free-format paragraphs
+    // indented a space or two, while excluding Area-B statements that share the
+    // bare "WORD." shape (END-IF., GOBACK.).
+    if (content.length - content.trimStart().length > 3) continue;
 
     const sec = trimmed.match(COBOL_SECTION);
     if (sec) {
-      headers.push({ name: `${sec[1].toUpperCase()} SECTION`, line: i + 1 });
+      const base = sec[1].toUpperCase();
+      if (!NON_PROC_SECTION.has(base)) {
+        headers.push({ name: `${base} SECTION`, line: i + 1 });
+      }
       continue;
     }
     const para = trimmed.match(COBOL_PARA);
     if (para) {
       const name = para[1].toUpperCase();
-      if (!NON_PARA.has(name)) headers.push({ name, line: i + 1 });
+      if (!NON_PARA.has(name) && !name.startsWith("END-")) {
+        headers.push({ name, line: i + 1 });
+      }
     }
   }
 
@@ -326,6 +356,44 @@ function nodeType(unit: CodeUnit): DependencyNode["type"] {
   return unit.name.endsWith("SECTION") ? "section" : "paragraph";
 }
 
+// Resolve a PERFORM / CALL / GO TO target name to the unit it actually refers
+// to. A plain name-equality check misses the two most common real-world COBOL
+// shapes, which is why repos rendered as nodes with no connecting edges:
+//   • SECTION units are stored as "NAME SECTION" but performed as just "NAME".
+//   • Cross-program CALL 'PROG' targets a PROGRAM-ID / file, not a paragraph.
+// Paragraph and section names are registered first so an exact paragraph match
+// always wins over a program-level (PROGRAM-ID / filename) fallback.
+function buildCallResolver(
+  units: CodeUnit[],
+  files: InputFile[],
+): Map<string, CodeUnit> {
+  const resolve = new Map<string, CodeUnit>();
+  const reg = (key: string, u: CodeUnit) => {
+    const k = key.toUpperCase();
+    if (k && !resolve.has(k)) resolve.set(k, u);
+  };
+
+  for (const u of units) {
+    reg(u.name, u);
+    const bare = u.name.replace(/\s+SECTION$/i, "");
+    if (bare !== u.name) reg(bare, u);
+  }
+
+  // Program-level entry points: PROGRAM-ID and file stem → that file's first
+  // unit, so a cross-program CALL lands on the callee's entry paragraph.
+  const entryByFile = new Map<string, CodeUnit>();
+  for (const u of units) if (!entryByFile.has(u.file)) entryByFile.set(u.file, u);
+  for (const f of files) {
+    const entry = entryByFile.get(f.filename);
+    if (!entry) continue;
+    const pid = f.content.match(/\bPROGRAM-ID\.\s*([A-Z0-9][A-Z0-9-]*)/i)?.[1];
+    if (pid) reg(pid, entry);
+    reg(f.filename.replace(/\.[^.]+$/, ""), entry);
+  }
+
+  return resolve;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public entry point
 // ─────────────────────────────────────────────────────────────────────────────
@@ -355,13 +423,16 @@ export function analyzeFiles(
     );
   }
 
-  // Fan-in: how many units call each unit name.
-  const byName = new Map<string, CodeUnit>();
-  for (const u of units) byName.set(u.name, u);
+  // Fan-in: how many units call each unit. Resolve targets through the same
+  // resolver used for edges so section / cross-program calls are counted too.
+  const resolveCall = buildCallResolver(units, usable);
   const fanIn = new Map<string, number>();
   for (const u of units) {
     for (const c of u.calls) {
-      if (byName.has(c)) fanIn.set(c, (fanIn.get(c) ?? 0) + 1);
+      const target = resolveCall.get(c);
+      if (target && target.name !== u.name) {
+        fanIn.set(target.name, (fanIn.get(target.name) ?? 0) + 1);
+      }
     }
   }
 
@@ -428,12 +499,16 @@ export function analyzeFiles(
     file: u.file,
     type: nodeType(u),
   }));
-  const edges = [];
+  const edges: { source: string; target: string }[] = [];
+  const seenEdges = new Set<string>();
   for (const u of units) {
     for (const c of u.calls) {
-      if (byName.has(c) && c !== u.name) {
-        edges.push({ source: u.name, target: c });
-      }
+      const target = resolveCall.get(c);
+      if (!target || target.name === u.name) continue;
+      const key = `${u.name} ${target.name}`;
+      if (seenEdges.has(key)) continue;
+      seenEdges.add(key);
+      edges.push({ source: u.name, target: target.name });
     }
   }
 
