@@ -17,6 +17,17 @@ import type { ProjectLanguage } from "@/types/legacylift";
 export const SAMPLE_REPO =
   "github.com/aws-samples/aws-mainframe-modernization-carddemo";
 
+/** Fixed, non-editable prefix rendered before the editable repo path. */
+export const REPO_PREFIX = "github.com/";
+
+/**
+ * Strip any leading github.com/ (with optional scheme/www) so a repo input only
+ * ever holds the editable "org/repo" path. Pairs with REPO_PREFIX in the UI.
+ */
+export function stripRepoPrefix(url: string): string {
+  return url.replace(/^(https?:\/\/)?(www\.)?github\.com\//i, "");
+}
+
 export interface StartMigrationOptions {
   repoUrl?: string;
   files?: { filename: string; content: string }[];

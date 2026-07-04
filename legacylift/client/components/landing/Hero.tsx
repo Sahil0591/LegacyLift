@@ -4,22 +4,24 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Github, ArrowRight } from "lucide-react";
-import { SAMPLE_REPO } from "@/lib/startMigration";
+import { REPO_PREFIX, SAMPLE_REPO, stripRepoPrefix } from "@/lib/startMigration";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
 export function Hero() {
   const router = useRouter();
-  const [repoUrl, setRepoUrl] = useState(SAMPLE_REPO);
+  // The input only holds the editable "org/repo" path; github.com/ is a fixed
+  // prefix the user can't backspace into.
+  const [repoPath, setRepoPath] = useState(stripRepoPrefix(SAMPLE_REPO));
 
   // Hand the typed repo off to the migration page with the URL prefilled - the
   // user picks source/target language there and kicks off the analysis, so the
   // landing page stays a fast, no-network entry point.
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const url = repoUrl.trim();
-    if (!url) return;
-    router.push(`/demo?repo=${encodeURIComponent(url)}`);
+    const path = stripRepoPrefix(repoPath.trim());
+    if (!path) return;
+    router.push(`/demo?repo=${encodeURIComponent(`${REPO_PREFIX}${path}`)}`);
   };
 
   return (
@@ -69,18 +71,21 @@ export function Hero() {
         >
           <div className="glass flex flex-1 items-center gap-2.5 rounded-xl px-4 py-3 transition-colors focus-within:ring-1 focus-within:ring-[#7C3AED]/50">
             <Github className="h-4 w-4 shrink-0 text-sub" />
-            <input
-              value={repoUrl}
-              onChange={(e) => setRepoUrl(e.target.value)}
-              spellCheck={false}
-              placeholder="github.com/org/repo"
-              aria-label="Repository URL"
-              className="w-full bg-transparent font-mono text-sm text-ink outline-none placeholder:text-[#a8a29e]"
-            />
+            <div className="flex flex-1 items-center font-mono text-sm">
+              <span className="shrink-0 select-none text-sub">{REPO_PREFIX}</span>
+              <input
+                value={repoPath}
+                onChange={(e) => setRepoPath(stripRepoPrefix(e.target.value))}
+                spellCheck={false}
+                placeholder="org/repo"
+                aria-label="Repository path"
+                className="w-full bg-transparent text-ink outline-none placeholder:text-[#a8a29e]"
+              />
+            </div>
           </div>
           <button
             type="submit"
-            disabled={repoUrl.trim().length === 0}
+            disabled={repoPath.trim().length === 0}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#7C3AED] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-[#6D28D9] disabled:cursor-not-allowed disabled:opacity-50"
           >
             Map my codebase
