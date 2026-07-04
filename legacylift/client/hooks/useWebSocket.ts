@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@clerk/nextjs";
 import { createWebSocketClient, type WebSocketClient } from "@/lib/websocket";
-import { clerkEnabled } from "@/lib/authMode";
 import type { ConnectionStatus, WSEvent, WSEventName } from "@/types/legacylift";
 
 interface UseWebSocketReturn {
@@ -17,10 +17,7 @@ interface UseWebSocketReturn {
 export function useWebSocket(projectId: string | null): UseWebSocketReturn {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const clientRef = useRef<WebSocketClient | null>(null);
-  const getToken = useCallback(async () => {
-    if (!clerkEnabled || typeof window === "undefined") return null;
-    return ((window as any).Clerk?.session?.getToken?.() as Promise<string | null> | undefined) ?? null;
-  }, []);
+  const { getToken } = useAuth();
 
   useEffect(() => {
     if (!projectId) return;
