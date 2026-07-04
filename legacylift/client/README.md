@@ -1,6 +1,6 @@
 # LegacyLift Frontend
 
-> AI-assisted legacy code migration workbench — Next.js 14 frontend.
+> AI-assisted legacy code migration workbench - Next.js 14 frontend.
 > Built for the **Conduct AI Hackathon 2026**.
 
 ---
@@ -81,8 +81,8 @@ All state flows from `usePipeline` → props → components. No global state lib
 - Design system: dark theme, risk colours, ownership colours, status badges
 
 **Needs real implementation:**
-- `DependencyGraph`: layout uses a naive grid — replace with `dagre` for proper DAG layout
-- `DeprecationMap` + `GotchaRegistry`: data is hardcoded — wire to `target_profile_ready` payload
+- `DependencyGraph`: layout uses a naive grid - replace with `dagre` for proper DAG layout
+- `DeprecationMap` + `GotchaRegistry`: data is hardcoded - wire to `target_profile_ready` payload
 - Demo COBOL file: create `public/assets/demo/PAYROLL.cbl` with a real sample file
 - `MigrationComplete` download button: wire to `GET /api/projects/{id}/export`
 - Business rule inline edit form (status → Edited with corrected description)
@@ -117,9 +117,9 @@ vercel deploy
 
 The frontend runs **fully in demo mode** without the backend:
 
-1. Landing page (`/`) — full animation, all sections render
-2. Demo page (`/demo`) — file upload UI works; submitting will show an API error since no backend is running, which is expected
-3. Project page (`/project/anything`) — all panels render with placeholder data
+1. Landing page (`/`) - full animation, all sections render
+2. Demo page (`/demo`) - file upload UI works; submitting will show an API error since no backend is running, which is expected
+3. Project page (`/project/anything`) - all panels render with placeholder data
 
 To see the live pipeline, run the backend:
 ```bash

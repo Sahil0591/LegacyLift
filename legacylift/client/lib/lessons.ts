@@ -1,8 +1,8 @@
-// lib/lessons.ts — The "reinforced learning" loop, in practice: Venice is a
+// lib/lessons.ts - The "reinforced learning" loop, in practice: Venice is a
 // hosted third-party model with no fine-tuning access, so there's no weight
 // training here. Instead, every rejection reason and every review finding
 // (chunk/file/project level) is captured as a persistent "lesson" and
-// re-injected into future migration prompts — in-context learning across
+// re-injected into future migration prompts - in-context learning across
 // regenerations, not model training.
 
 export type LessonSource = "rejection" | "ai_review" | "file_check" | "project_review";

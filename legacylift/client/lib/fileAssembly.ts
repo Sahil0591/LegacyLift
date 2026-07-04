@@ -1,4 +1,4 @@
-// lib/fileAssembly.ts — Deterministically reassemble one source file's
+// lib/fileAssembly.ts - Deterministically reassemble one source file's
 // approved chunks into a single migrated module, in original line order, in the
 // file's chosen target language. Used by the per-file finalize flow and by the
 // download helpers.
@@ -31,7 +31,7 @@ export function assembleFile(
 
   const header = [
     comment(target, RULE),
-    comment(target, `${filename} — migrated by LegacyLift → ${target.label}`),
+    comment(target, `${filename} - migrated by LegacyLift → ${target.label}`),
     comment(
       target,
       `${ordered.length} unit${ordered.length === 1 ? "" : "s"} assembled from approved chunks.`,

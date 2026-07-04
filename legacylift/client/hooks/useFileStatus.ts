@@ -1,6 +1,6 @@
-// hooks/useFileStatus.ts — Groups chunks by their source file and derives a
+// hooks/useFileStatus.ts - Groups chunks by their source file and derives a
 // per-file status (in progress / ready to finalize / finalizing / finalized).
-// Finalized is the only piece of state not derivable from chunks alone — it's
+// Finalized is the only piece of state not derivable from chunks alone - it's
 // tracked in usePipeline and passed in here. Files are also grouped into
 // dependency-graph connected clusters so a file can't finalize until every
 // file it's transitively linked to is also ready.
@@ -35,7 +35,7 @@ export interface FileGroup {
   clusterFiles: string[];
   /** True iff every file in this file's cluster has all its chunks approved. */
   clusterReady: boolean;
-  /** Cluster-mate filenames not yet ready — surfaced in the disabled-button tooltip. */
+  /** Cluster-mate filenames not yet ready - surfaced in the disabled-button tooltip. */
   blockedBy: string[];
   /** Resolved target language this file migrates into (override ?? default). */
   target: TargetLanguage;

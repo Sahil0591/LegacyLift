@@ -7,6 +7,7 @@ import { Cpu, Menu, X } from "lucide-react";
 import { SignInButton, UserButton, useUser } from "@clerk/nextjs";
 import { WebSocketStatus } from "@/components/shared/WebSocketStatus";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
+import { clerkEnabled } from "@/lib/authMode";
 import type { ConnectionStatus } from "@/types/legacylift";
 
 interface NavbarProps {
@@ -15,7 +16,40 @@ interface NavbarProps {
 }
 
 export function Navbar({ wsStatus, projectId }: NavbarProps) {
+  if (clerkEnabled) return <NavbarWithClerk wsStatus={wsStatus} projectId={projectId} />;
+  return (
+    <NavbarChrome
+      wsStatus={wsStatus}
+      projectId={projectId}
+      isSignedIn={false}
+      showAuthControls={false}
+    />
+  );
+}
+
+function NavbarWithClerk({ wsStatus, projectId }: NavbarProps) {
   const { isSignedIn } = useUser();
+  return (
+    <NavbarChrome
+      wsStatus={wsStatus}
+      projectId={projectId}
+      isSignedIn={!!isSignedIn}
+      showAuthControls
+    />
+  );
+}
+
+interface NavbarChromeProps extends NavbarProps {
+  isSignedIn: boolean;
+  showAuthControls: boolean;
+}
+
+function NavbarChrome({
+  wsStatus,
+  projectId,
+  isSignedIn,
+  showAuthControls,
+}: NavbarChromeProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -53,22 +87,22 @@ export function Navbar({ wsStatus, projectId }: NavbarProps) {
           >
             New Migration
           </Link>
-          {isSignedIn ? (
+          {showAuthControls && isSignedIn ? (
             <UserButton />
-          ) : (
+          ) : showAuthControls ? (
             <SignInButton mode="redirect">
               <button className="rounded-full border border-ink/20 px-4 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-ink/[0.06]">
                 Sign in
               </button>
             </SignInButton>
-          )}
+          ) : null}
         </div>
 
         {/* Mobile controls */}
         <div className="flex items-center gap-2 sm:hidden">
           {projectId && wsStatus && <WebSocketStatus status={wsStatus} />}
           <ThemeToggle />
-          {isSignedIn && <UserButton />}
+          {showAuthControls && isSignedIn && <UserButton />}
           <button
             onClick={() => setMenuOpen((open) => !open)}
             aria-label={menuOpen ? "Close menu" : "Open menu"}
@@ -107,7 +141,7 @@ export function Navbar({ wsStatus, projectId }: NavbarProps) {
               >
                 New Migration
               </Link>
-              {!isSignedIn && (
+              {showAuthControls && !isSignedIn && (
                 <SignInButton mode="redirect">
                   <button
                     onClick={() => setMenuOpen(false)}

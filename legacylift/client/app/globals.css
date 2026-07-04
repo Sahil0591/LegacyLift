@@ -6,7 +6,7 @@
   :root {
     --radius: 0.75rem;
 
-    /* Theme tokens — space-separated RGB channels (consumed via rgb(var(--x) / a)) */
+    /* Theme tokens - space-separated RGB channels (consumed via rgb(var(--x) / a)) */
     --c-bg: 250 250 249; /* #FAFAF9 warm off-white */
     --c-surface: 255 255 255; /* solid cards / inputs */
     --c-text: 28 25 23; /* #1c1917 near-black ink */
@@ -109,7 +109,7 @@
   }
 }
 
-/* ReactFlow — inherits the page theme */
+/* ReactFlow - inherits the page theme */
 .react-flow__background {
   background-color: rgb(var(--c-bg)) !important;
 }

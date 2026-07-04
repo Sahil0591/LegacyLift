@@ -1,4 +1,4 @@
-// Footer — light glass footer for the public landing page.
+// Footer - light glass footer for the public landing page.
 
 import Link from "next/link";
 import { Cpu, Github } from "lucide-react";
@@ -12,7 +12,7 @@ export function Footer() {
           <Cpu className="h-4 w-4 text-[#7C3AED]" />
           <span className="text-sm font-semibold text-ink">LegacyLift</span>
           <span className="text-sm text-sub">
-            — Legacy code. Finally understood.
+            - Legacy code. Finally understood.
           </span>
         </div>
 

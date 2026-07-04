@@ -1,4 +1,4 @@
-// lib/manifest.ts — Builds a lightweight, plain-text summary of the rest of
+// lib/manifest.ts - Builds a lightweight, plain-text summary of the rest of
 // the file tree (dependency edges + extracted business rules) to give the
 // migration LLM cross-file awareness without sending every other file's raw
 // content. Pass "" as currentFilename to include every file (used for the

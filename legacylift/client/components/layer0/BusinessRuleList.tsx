@@ -1,5 +1,5 @@
 "use client";
-// BusinessRuleList — Scrollable list of BusinessRuleCards with filter/sort controls.
+// BusinessRuleList - Scrollable list of BusinessRuleCards with filter/sort controls.
 // Filters by status and ownership category. Shows a live counter of pending rules.
 //
 // TODO: Add a "Confirm all" bulk action for trusted high-confidence rules.

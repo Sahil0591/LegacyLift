@@ -1,5 +1,5 @@
 "use client";
-// FileFinalizeModal — the per-file "finish line": shows the assembled target
+// FileFinalizeModal - the per-file "finish line": shows the assembled target
 // file next to the original source, lets the reviewer run one last AI
 // consistency check across every chunk in the file, and gates a "Finalize
 // file" action behind it. Mirrors the visual language of ChunkReview's Checks.
@@ -84,7 +84,7 @@ export function FileFinalizeModal({
       setCheckError(
         err instanceof Error
           ? err.message
-          : "File too large for a single consistency pass — per-chunk reviews already ran.",
+          : "File too large for a single consistency pass - per-chunk reviews already ran.",
       );
     } finally {
       setChecking(false);
@@ -186,7 +186,7 @@ export function FileFinalizeModal({
               )}
               {!review && !checkError && !checking && !hasChecked && (
                 <div className="text-xs text-sub">
-                  Optional — reviews every chunk in this file together for
+                  Optional - reviews every chunk in this file together for
                   naming/consistency issues a per-chunk review can't catch.
                 </div>
               )}

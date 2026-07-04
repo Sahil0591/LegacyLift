@@ -1,5 +1,5 @@
 "use client";
-// WorkbenchHeader — app-style top bar for the review workbench. Repo identity,
+// WorkbenchHeader - app-style top bar for the review workbench. Repo identity,
 // an Overview/Review switch, and live migration progress.
 
 import Link from "next/link";
@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
+import { clerkEnabled } from "@/lib/authMode";
 
 export type WorkbenchView = "overview" | "review";
 
@@ -36,7 +37,7 @@ interface WorkbenchHeaderProps {
   total: number;
   onDownload?: () => void;
   canDownload?: boolean;
-  /** Remaining/max daily AI-call quota — every migrate/review/tests call shares it. */
+  /** Remaining/max daily AI-call quota - every migrate/review/tests call shares it. */
   quotaRemaining?: number | null;
   quotaMax?: number | null;
   /** A chunk generating/testing in the background while the user is elsewhere. */
@@ -169,7 +170,7 @@ export function WorkbenchHeader({
         <span
           className="hidden shrink-0 rounded-full border px-2 py-0.5 font-mono text-[11px] font-medium md:inline"
           style={{ borderColor: `${quotaColor}40`, color: quotaColor }}
-          title="Daily AI-call budget remaining — every generate/review/test call shares it"
+          title="Daily AI-call budget remaining - every generate/review/test call shares it"
         >
           {quotaRemaining}/{quotaMax} AI calls left
         </span>
@@ -204,7 +205,7 @@ export function WorkbenchHeader({
       )}
 
       <ThemeToggle />
-      <UserButton />
+      {clerkEnabled && <UserButton />}
     </header>
   );
 }

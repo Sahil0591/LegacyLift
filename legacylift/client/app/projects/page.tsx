@@ -28,7 +28,7 @@ import {
 
 // The dashboard is DB-backed only: every card comes from /projects (owner-scoped
 // by the Clerk user), so the list is identical on every device the user signs
-// in on. localStorage projects are intentionally not merged in here — they can't
+// in on. localStorage projects are intentionally not merged in here - they can't
 // sync across devices, which is exactly the mismatch we want to avoid.
 type DashboardProject = ProjectIndexEntry;
 

@@ -1,4 +1,4 @@
-// lib/analyze.ts — Deterministic, rule-based analysis of uploaded legacy code.
+// lib/analyze.ts - Deterministic, rule-based analysis of uploaded legacy code.
 // Runs server-side (in /api/analyze). No LLM, no hardcoded per-file scores:
 // every risk tier comes from explicit signals so it's auditable.
 //
@@ -37,7 +37,7 @@ export interface AnalyzeResult {
     units: number;
     avgRisk: number;
     byLevel: Record<RiskLevel, number>;
-    /** Filenames dropped entirely because MAX_UNITS was reached — empty in the common case. */
+    /** Filenames dropped entirely because MAX_UNITS was reached - empty in the common case. */
     filesSkipped: string[];
   };
 }
@@ -60,7 +60,7 @@ interface CodeUnit {
   startLine: number;
   endLine: number;
   calls: string[];
-  /** VB6 only: owning module/class/form (VB_Name) — used for intra-module call resolution. */
+  /** VB6 only: owning module/class/form (VB_Name) - used for intra-module call resolution. */
   module?: string;
 }
 
@@ -103,7 +103,7 @@ const NON_PARA = new Set([
   "END", "GOBACK", "EXIT", "CONTINUE", "STOP",
 ]);
 
-// SECTION names that belong to the DATA / ENVIRONMENT divisions — never the
+// SECTION names that belong to the DATA / ENVIRONMENT divisions - never the
 // PROCEDURE division, so they must never become graph nodes.
 const NON_PROC_SECTION = new Set([
   "WORKING-STORAGE", "LOCAL-STORAGE", "LINKAGE", "FILE",
@@ -220,7 +220,7 @@ function splitFiles(files: InputFile[]): { units: CodeUnit[]; skipped: string[] 
               })()
             : [wholeFileUnit(f)];
 
-    // Never split a single file's units across the cap boundary — slicing
+    // Never split a single file's units across the cap boundary - slicing
     // mid-file silently drops paragraphs from whichever file happens to
     // cross the line, making it look like that file legitimately has only
     // a couple of chunks. Drop the whole file instead so it's visibly
@@ -249,7 +249,7 @@ function wholeFileUnit(f: InputFile): CodeUnit {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Java splitting — one unit per top-level type; edges via type references.
+// Java splitting - one unit per top-level type; edges via type references.
 // Java's real dependency structure is class-to-class (not COBOL's flat PERFORM
 // call graph), so we model it at class granularity: each class node links to
 // every OTHER project class it names by type (field/param/return/new/extends…).
@@ -296,7 +296,7 @@ function maskJava(content: string): string {
 
 // Capitalised identifiers referenced in a class body = its candidate type deps.
 // Edges only ever form to a KNOWN project class, so JDK/framework types (String,
-// List, @Override, …) are self-filtered out — no allow-list needed.
+// List, @Override, …) are self-filtered out - no allow-list needed.
 function javaTypeRefs(maskedBody: string, exclude: Set<string>): string[] {
   const refs = new Set<string>();
   const re = /\b([A-Z][\w$]*)\b/g;
@@ -327,7 +327,7 @@ function splitJava(file: string, content: string): CodeUnit[] {
 
   const tops = decls.filter((d) => d.top);
   if (tops.length === 0) {
-    // No type declaration (e.g. package-info.java) — keep as a single unit.
+    // No type declaration (e.g. package-info.java) - keep as a single unit.
     const name = file.replace(/\.[^.]+$/, "");
     return [{
       id: slug(file, name),
@@ -363,13 +363,13 @@ function splitJava(file: string, content: string): CodeUnit[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VB6 splitting — one unit per procedure (Sub / Function / Property), edges via
+// VB6 splitting - one unit per procedure (Sub / Function / Property), edges via
 // resolved call targets. VB6 legacy apps are procedural (like COBOL): modules
 // full of Subs/Functions that Call each other across .bas/.cls/.frm files, so
 // we model it as a procedure call graph, not a class-reference graph.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Statement/declaration keywords that can start a line — excluded when guessing
+// Statement/declaration keywords that can start a line - excluded when guessing
 // a bare (parenless) Sub call from the first token of a statement.
 const VB_KEYWORDS = new Set([
   "IF", "THEN", "ELSE", "ELSEIF", "END", "ENDIF", "FOR", "NEXT", "DO", "LOOP",
@@ -475,7 +475,7 @@ function splitVB6(file: string, content: string): CodeUnit[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Risk RULES — every tier is derived, nothing hardcoded
+// Risk RULES - every tier is derived, nothing hardcoded
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MONEY_WORDS =
@@ -516,34 +516,34 @@ function scoreUnit(unit: CodeUnit, fanIn: number): RiskResult {
   const reasons: string[] = [];
   let score = 0;
 
-  // Rule 1 — touches money.
+  // Rule 1 - touches money.
   if (MONEY_WORDS.test(src)) {
     score += 0.3;
     reasons.push("Touches money");
   }
-  // Rule 2 — packed-decimal precision.
+  // Rule 2 - packed-decimal precision.
   if (/COMP-3|COMPUTATIONAL-3|PACKED-DECIMAL/i.test(src)) {
     score += 0.18;
     reasons.push("Packed-decimal arithmetic");
   }
-  // Rule 3 — non-trivial financial arithmetic.
+  // Rule 3 - non-trivial financial arithmetic.
   if (/\b(COMPUTE|MULTIPLY|DIVIDE)\b/i.test(src)) {
     score += 0.12;
     reasons.push("Computed arithmetic");
   }
-  // Rule 4 — blast radius from inbound calls.
+  // Rule 4 - blast radius from inbound calls.
   if (fanIn >= 2) {
     score += clamp01(fanIn * 0.08);
     if (fanIn >= 3) reasons.push(`High fan-in (${fanIn} callers)`);
   }
-  // Rule 5 — magic numbers.
+  // Rule 5 - magic numbers.
   const values = magicNumbers(src);
   if (values.length >= 2) {
     score += Math.min(values.length * 0.025, 0.12);
     if (values.length >= 4)
       reasons.push(`${values.length} hardcoded values`);
   }
-  // Rule 6 — commented-out / dead code. The comment leader differs by language;
+  // Rule 6 - commented-out / dead code. The comment leader differs by language;
   // Java javadoc lines also start with "*", so skip Java to avoid misfires.
   const lines = src.split("\n");
   if (unit.language !== "java") {
@@ -558,14 +558,14 @@ function scoreUnit(unit: CodeUnit, fanIn: number): RiskResult {
       reasons.push("Commented-out code present");
     }
   }
-  // Rule 7 — external I/O / DB. Skipped for VB6, where CALL is a plain procedure
+  // Rule 7 - external I/O / DB. Skipped for VB6, where CALL is a plain procedure
   // invocation (not I/O) and would fire on nearly every unit; VB6 gets its own
   // DB-access signal below.
   if (unit.language !== "vb6" && /\b(EXEC\s+SQL|CALL|WRITE|READ|REWRITE|DELETE)\b/i.test(src)) {
     score += 0.08;
     reasons.push("External I/O");
   }
-  // Rule 8 — size.
+  // Rule 8 - size.
   score += Math.min(lines.length / 400, 0.1);
 
   // Java-specific signals.
@@ -682,7 +682,7 @@ function buildCallResolver(
 
 // Build all dependency edges + fan-in counts across languages. COBOL/generic
 // units resolve PERFORM/CALL targets through buildCallResolver; Java is modelled
-// at class granularity — each class links to every other project class it names.
+// at class granularity - each class links to every other project class it names.
 function buildGraphEdges(
   units: CodeUnit[],
   files: InputFile[],
@@ -699,7 +699,7 @@ function buildGraphEdges(
     fanIn.set(targetName, (fanIn.get(targetName) ?? 0) + 1);
   };
 
-  // COBOL (and generic fallback) — PERFORM/CALL/GO TO resolution.
+  // COBOL (and generic fallback) - PERFORM/CALL/GO TO resolution.
   const cobolResolve = buildCallResolver(
     units.filter((u) => u.language === "cobol" || u.language === "generic"),
     files,
@@ -712,7 +712,7 @@ function buildGraphEdges(
     }
   }
 
-  // Java — connect a class to every other project class it references by type.
+  // Java - connect a class to every other project class it references by type.
   const javaByName = new Map<string, CodeUnit>();
   for (const u of units) if (u.language === "java") javaByName.set(u.name, u);
   for (const u of units) {
@@ -723,7 +723,7 @@ function buildGraphEdges(
     }
   }
 
-  // VB6 — procedure call graph. Resolve a qualified Module.Proc precisely; a
+  // VB6 - procedure call graph. Resolve a qualified Module.Proc precisely; a
   // bare Proc resolves to the caller's own module first, then to any module.
   const vbByQualified = new Map<string, CodeUnit>();
   const vbByProc = new Map<string, CodeUnit>();
@@ -762,7 +762,7 @@ const DEFAULT_PROFILE: TargetProfile = {
   type_system: "Full type hints · mypy --strict",
   async_model: "Synchronous (batch jobs)",
   test_framework: "pytest",
-  notes: "All monetary math uses decimal.Decimal — never float.",
+  notes: "All monetary math uses decimal.Decimal - never float.",
 };
 
 export function analyzeFiles(
@@ -773,7 +773,7 @@ export function analyzeFiles(
   const { units, skipped: filesSkipped } = splitFiles(usable);
   if (filesSkipped.length > 0) {
     console.warn(
-      `analyzeFiles: MAX_UNITS (${MAX_UNITS}) reached — skipped entirely: ${filesSkipped.join(", ")}`,
+      `analyzeFiles: MAX_UNITS (${MAX_UNITS}) reached - skipped entirely: ${filesSkipped.join(", ")}`,
     );
   }
 

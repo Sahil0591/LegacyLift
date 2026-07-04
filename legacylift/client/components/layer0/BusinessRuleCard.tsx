@@ -1,5 +1,5 @@
 "use client";
-// BusinessRuleCard — Single card for one extracted business rule.
+// BusinessRuleCard - Single card for one extracted business rule.
 // Shows title, description, source location, confidence badge, warnings,
 // hardcoded values, and the OwnershipBadge. Inline Confirm/Edit/Flag actions.
 //

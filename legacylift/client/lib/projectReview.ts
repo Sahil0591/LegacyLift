@@ -1,5 +1,5 @@
-// lib/projectReview.ts — Whole-project AI review, run once every file has
-// been finalized. Calls POST /llm/review-project — the hard gate before the
+// lib/projectReview.ts - Whole-project AI review, run once every file has
+// been finalized. Calls POST /llm/review-project - the hard gate before the
 // bundled/zip download unlocks.
 
 import { apiPost } from "@/lib/api";

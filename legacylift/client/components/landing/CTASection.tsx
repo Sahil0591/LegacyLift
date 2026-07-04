@@ -52,7 +52,7 @@ export function CTASection() {
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-sub sm:mt-4 sm:text-[15px]">
               Migrating a legacy system usually means paying specialists £500/hour
-              to relearn code nobody documented. LegacyLift does the reading — you
+              to relearn code nobody documented. LegacyLift does the reading - you
               do the deciding.
             </p>
           </div>

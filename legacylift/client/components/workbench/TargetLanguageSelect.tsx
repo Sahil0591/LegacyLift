@@ -1,5 +1,5 @@
 "use client";
-// TargetLanguageSelect — reusable dropdown over the target-language catalog.
+// TargetLanguageSelect - reusable dropdown over the target-language catalog.
 // Used at project creation, for the project default on the Overview, and as a
 // per-file override on each file row.
 

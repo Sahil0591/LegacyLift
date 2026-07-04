@@ -1,10 +1,10 @@
 "use client";
-// CodeCompare — side-by-side "before / after" view for a migration.
+// CodeCompare - side-by-side "before / after" view for a migration.
 // A legacy→modern migration is a translation, not a line diff, so we show two
 // clean, independently-readable code panels with light syntax emphasis
 // (keywords + comments) rather than red/green word-diff noise. The panel
 // titles are driven by the project's real source/target languages, not
-// hardcoded — a file heading to Java reads "Migrated · Java 21".
+// hardcoded - a file heading to Java reads "Migrated · Java 21".
 
 import { useState, type ReactNode } from "react";
 import { ArrowRight, Pencil, X, Check } from "lucide-react";

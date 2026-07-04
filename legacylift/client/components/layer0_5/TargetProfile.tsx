@@ -1,5 +1,5 @@
 "use client";
-// TargetProfile — Shows the migration target language/version/style guide profile.
+// TargetProfile - Shows the migration target language/version/style guide profile.
 // Populated by the target_profile_ready WebSocket event from Layer 0.5.
 
 import { useState } from "react";
@@ -70,7 +70,7 @@ export function TargetProfile({ profile }: TargetProfileProps) {
                 <div className="mb-1.5 flex items-start justify-between gap-2">
                   <div>
                     <span className="text-xs font-semibold text-white">{lib.name}</span>
-                    <span className="mx-2 text-[#333333]">—</span>
+                    <span className="mx-2 text-[#333333]">-</span>
                     <span className="text-xs text-[#666666]">{lib.purpose}</span>
                   </div>
                 </div>

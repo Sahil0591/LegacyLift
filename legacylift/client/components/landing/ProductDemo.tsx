@@ -82,7 +82,7 @@ function RiskTag({ level }: { level: RiskLevel }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stage 1 — Connect
+// Stage 1 - Connect
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ConnectStage() {
@@ -134,7 +134,7 @@ function ConnectStage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stage 2 — Map
+// Stage 2 - Map
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FILES = [
@@ -244,7 +244,7 @@ function MapStage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stage 3 — Dependencies
+// Stage 3 - Dependencies
 // ─────────────────────────────────────────────────────────────────────────────
 
 const NODES = [
@@ -369,7 +369,7 @@ function DepsStage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stage 4 — Risk
+// Stage 4 - Risk
 // ─────────────────────────────────────────────────────────────────────────────
 
 const RISK_ROWS: {
@@ -414,7 +414,7 @@ function RiskStage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stage 5 & 6 — Migrate / Approve (share the diff)
+// Stage 5 & 6 - Migrate / Approve (share the diff)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const COBOL = [
@@ -757,7 +757,7 @@ export function ProductDemo() {
         </motion.div>
 
         <p className="mt-4 text-center text-xs text-sub">
-          A real run on a COBOL loan engine — paste a repo and watch the same flow.
+          A real run on a COBOL loan engine - paste a repo and watch the same flow.
         </p>
       </div>
     </section>

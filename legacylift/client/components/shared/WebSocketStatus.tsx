@@ -1,5 +1,5 @@
 "use client";
-// WebSocketStatus — Compact connection indicator dot shown in the Navbar.
+// WebSocketStatus - Compact connection indicator dot shown in the Navbar.
 // Green pulse = connected, amber = connecting, red = error/disconnected.
 //
 // TODO: Add a tooltip showing last event time and reconnect attempt count.

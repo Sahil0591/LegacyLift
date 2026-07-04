@@ -1,4 +1,4 @@
-// lib/rateLimit.ts — tiny in-memory rate limiter for the API routes.
+// lib/rateLimit.ts - tiny in-memory rate limiter for the API routes.
 // Fixed-window per key. Single-instance only (fine for the hackathon backend);
 // swap for Redis/Upstash if you ever run multiple instances.
 

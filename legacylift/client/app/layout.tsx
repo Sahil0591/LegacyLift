@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { clerkEnabled } from "@/lib/authMode";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "LegacyLift — Migrate legacy code without losing the why.",
+  title: "LegacyLift - Migrate legacy code without losing the why.",
   description:
     "AI-assisted legacy code migration workbench. Extract business rules, map dependencies, migrate chunk by chunk with human approval at every step.",
   keywords: ["COBOL migration", "legacy code", "AI migration", "LegacyLift"],
@@ -21,18 +22,22 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  return (
-    <ClerkProvider afterSignOutUrl="/">
-      <html lang="en" suppressHydrationWarning>
-        <head>
-          <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        </head>
-        <body
-          className={`${inter.variable} font-sans bg-base text-ink antialiased min-h-screen`}
-        >
-          {children}
-        </body>
-      </html>
-    </ClerkProvider>
+  const document = (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body
+        className={`${inter.variable} font-sans bg-base text-ink antialiased min-h-screen`}
+      >
+        {children}
+      </body>
+    </html>
+  );
+
+  return clerkEnabled ? (
+    <ClerkProvider afterSignOutUrl="/">{document}</ClerkProvider>
+  ) : (
+    document
   );
 }

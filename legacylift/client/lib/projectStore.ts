@@ -1,10 +1,10 @@
-// lib/projectStore.ts — Persistent local project storage via localStorage.
+// lib/projectStore.ts - Persistent local project storage via localStorage.
 // Projects survive page refreshes and browser restarts (unlike sessionStorage).
 //
 // Two layers:
-//   1. Lightweight index (legacylift:project-index) — list of metadata cards
+//   1. Lightweight index (legacylift:project-index) - list of metadata cards
 //      for the /projects dashboard. Small; always in sync.
-//   2. Full analysis blob (legacylift:analysis:<id>) — the complete AnalyzeResult
+//   2. Full analysis blob (legacylift:analysis:<id>) - the complete AnalyzeResult
 //      consumed by the workbench. Large; loaded on demand.
 
 import type { AnalyzeResult } from "@/lib/analyze";
@@ -52,7 +52,7 @@ function writeIndex(entries: ProjectIndexEntry[]): void {
   try {
     localStorage.setItem(INDEX_KEY, JSON.stringify(entries));
   } catch {
-    // localStorage quota exceeded — best-effort
+    // localStorage quota exceeded - best-effort
   }
 }
 
@@ -69,7 +69,7 @@ export function storeAnalysis(result: AnalyzeResult): string {
   try {
     localStorage.setItem(ANALYSIS_PREFIX + id, JSON.stringify(result));
   } catch {
-    // If storage is full, return the id anyway — workbench shows empty state.
+    // If storage is full, return the id anyway - workbench shows empty state.
     return id;
   }
 
@@ -135,11 +135,11 @@ export function deleteProject(id: string): void {
 // Chunk progress (persisted separately so the full analysis blob stays clean)
 // ---------------------------------------------------------------------------
 
-/** Saved per-chunk fields — just the parts that change during review. */
+/** Saved per-chunk fields - just the parts that change during review. */
 export interface ChunkProgressEntry {
   status: string;
   migrated_code: string;
-  // Checks-panel results — without these, a refresh mid-review wipes static
+  // Checks-panel results - without these, a refresh mid-review wipes static
   // analysis/AI review/test results and forces re-running checks from scratch.
   static_analysis: StaticAnalysisResult | null;
   ai_review: AIReviewResult | null;
@@ -215,7 +215,7 @@ export function loadFileStatus(projectId: string): Record<string, true> | null {
 }
 
 // ---------------------------------------------------------------------------
-// Lessons learned (local projects only) — the feedback loop's memory.
+// Lessons learned (local projects only) - the feedback loop's memory.
 // ---------------------------------------------------------------------------
 
 /** Persist accumulated lessons so a refresh doesn't lose the feedback loop. */
@@ -238,7 +238,7 @@ export function loadLessons(projectId: string): Lesson[] | null {
 }
 
 // ---------------------------------------------------------------------------
-// Project config (local projects only) — institutional context + per-file
+// Project config (local projects only) - institutional context + per-file
 // target languages authored on the Overview.
 // ---------------------------------------------------------------------------
 

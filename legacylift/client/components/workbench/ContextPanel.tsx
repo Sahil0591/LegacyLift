@@ -1,7 +1,7 @@
 "use client";
-// ContextPanel — the "README for the AI agent". Lets a domain expert author
+// ContextPanel - the "README for the AI agent". Lets a domain expert author
 // institutional context the AI can't infer from source (systems, copybooks,
-// regulatory caps, naming conventions, target architecture) — project-wide and
+// regulatory caps, naming conventions, target architecture) - project-wide and
 // per file. Everything here is injected, as authoritative context, into every
 // migration and review call for the relevant file.
 
@@ -21,8 +21,8 @@ const FILE_MAX = 3000;
 const GLOBAL_PLACEHOLDER = `Tell the AI how your organization's systems actually work. For example:
 
 • Systems & data: "COMP-3 money fields are GBP pence. Account numbers are 10 digits, zero-padded."
-• External systems: "RATE-TABLE is loaded from the quarterly regulatory feed — treat its values as config, not constants."
-• Compliance do-nots: "The £25.00 late-fee cap is a 2019 FCA limit — never change it."
+• External systems: "RATE-TABLE is loaded from the quarterly regulatory feed - treat its values as config, not constants."
+• Compliance do-nots: "The £25.00 late-fee cap is a 2019 FCA limit - never change it."
 • Target architecture: "Migrate into our service template; import shared money utils from acme.finance.money."
 • Conventions: "Prefer snake_case; keep business-rule names traceable to the copybook."`;
 
@@ -84,7 +84,7 @@ export function ContextPanel({
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-ink">Migration context &amp; instructions</h3>
           <p className="mt-0.5 text-xs text-sub">
-            Sent with every migration — like a README the AI reads before touching your code.
+            Sent with every migration - like a README the AI reads before touching your code.
           </p>
         </div>
         {open ? (
@@ -175,7 +175,7 @@ export function ContextPanel({
                           maxLength={FILE_MAX}
                           onChange={(e) => onFileChange(filename, e.target.value)}
                           rows={4}
-                          placeholder={`Anything the AI must know when migrating ${filename} specifically — copybooks it can't change, ordering it must preserve, the system it talks to…`}
+                          placeholder={`Anything the AI must know when migrating ${filename} specifically - copybooks it can't change, ordering it must preserve, the system it talks to…`}
                           className="w-full resize-y rounded-lg border border-ink/15 bg-base px-3 py-2 text-sm leading-relaxed text-ink outline-none transition-colors placeholder:text-sub/45 focus:border-[#7C3AED]"
                         />
                       </div>

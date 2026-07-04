@@ -1,5 +1,5 @@
 "use client";
-// ProgressSidebar — Left panel on the project workbench showing pipeline progress.
+// ProgressSidebar - Left panel on the project workbench showing pipeline progress.
 // Each layer is a collapsible section with sub-steps. Active layer is highlighted
 // in blue; completed layers show a green tick; pending layers are greyed out.
 //
@@ -18,7 +18,7 @@ interface LayerDef {
 const LAYERS: LayerDef[] = [
   {
     id: 0,
-    label: "Layer 0 — Archaeology",
+    label: "Layer 0 - Archaeology",
     subSteps: [
       "Parse source files",
       "Extract business rules",
@@ -28,7 +28,7 @@ const LAYERS: LayerDef[] = [
   },
   {
     id: 0.5,
-    label: "Layer 0.5 — Target Profile",
+    label: "Layer 0.5 - Target Profile",
     subSteps: [
       "Fetch migration docs",
       "Map deprecations",
@@ -37,22 +37,22 @@ const LAYERS: LayerDef[] = [
   },
   {
     id: 1,
-    label: "Layer 1 — Static Analysis",
+    label: "Layer 1 - Static Analysis",
     subSteps: ["Syntax check", "Type completeness", "Complexity score"],
   },
   {
     id: 2,
-    label: "Layer 2 — AI Review",
+    label: "Layer 2 - AI Review",
     subSteps: ["Semantic equivalence", "Edge case check", "Style review"],
   },
   {
     id: 3,
-    label: "Layer 3 — Test Generation",
+    label: "Layer 3 - Test Generation",
     subSteps: ["Generate test cases", "Run pytest", "Coverage check"],
   },
   {
     id: 4,
-    label: "Layer 4 — Integration Tests",
+    label: "Layer 4 - Integration Tests",
     subSteps: ["Full integration suite", "Regression check", "Final report"],
   },
 ];
@@ -115,7 +115,7 @@ export function ProgressSidebar({
                 <span className="font-medium">{layer.label}</span>
               </button>
 
-              {/* Sub-steps — only shown for active layer */}
+              {/* Sub-steps - only shown for active layer */}
               {state === "active" && (
                 <div className="ml-9 mt-1 flex flex-col gap-1">
                   {layer.subSteps.map((step) => (

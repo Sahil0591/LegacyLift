@@ -175,7 +175,7 @@ export function FileUpload({ onSubmit, loading }: FileUploadProps) {
             onChange={setTargetId}
             className="w-48"
             ariaLabel="Target language"
-            title="Default target language — override per file later on the Overview"
+            title="Default target language - override per file later on the Overview"
           />
         </div>
       </div>

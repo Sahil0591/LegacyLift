@@ -1,5 +1,5 @@
 "use client";
-// ChunkReview — the focused review of one migration unit: before/after code,
+// ChunkReview - the focused review of one migration unit: before/after code,
 // the checks that ran, and a clear approve / reject decision (like a PR review).
 
 import { useState } from "react";
@@ -32,9 +32,9 @@ interface ChunkReviewProps {
   onReopen?: (id: string) => void;
   /** Re-generate + re-review with Venice; optional reviewer guidance. */
   onRegenerate?: (instructions?: string) => void;
-  /** One-click "Fix with AI" on a specific AI review finding — regenerates using it as guidance. */
+  /** One-click "Fix with AI" on a specific AI review finding - regenerates using it as guidance. */
   onFixWithAI?: (instructions: string) => void;
-  /** Save a hand-edited version of the migrated code — bypasses the LLM entirely. */
+  /** Save a hand-edited version of the migrated code - bypasses the LLM entirely. */
   onManualEdit?: (code: string) => void;
   /** Re-run static analysis/AI review/tests on the current code without regenerating it. */
   onRunChecks?: () => void;
@@ -103,7 +103,7 @@ function FixWithAIButton({
       title={
         disabled
           ? "Checks are already running"
-          : "Fix with AI — regenerate this chunk using this finding as guidance"
+          : "Fix with AI - regenerate this chunk using this finding as guidance"
       }
       className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-[#7C3AED]/30 px-1.5 py-0.5 text-[10px] font-semibold text-[#7C3AED] transition-colors hover:bg-[#7C3AED]/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
     >
@@ -228,7 +228,7 @@ function Checks({
                   </button>
                 </div>
               )}
-              {/* Critical issues have no per-issue Fix button — the regenerate
+              {/* Critical issues have no per-issue Fix button - the regenerate
                   loop (page.tsx handleRegenerate) already auto-retries on
                   every critical finding, so a manual button here is redundant. */}
               {ai.critical_issues.map((c) => (
@@ -316,7 +316,7 @@ export function ChunkReview({
   const canApprove = codeReady && checksComplete && !regenerating;
   const criticalIssues = chunk.ai_review?.critical_issues ?? [];
   const approveBlockedReason = !codeReady
-    ? "No migrated code yet — generate before merging"
+    ? "No migrated code yet - generate before merging"
     : !checksComplete
       ? "Waiting for checks to finish"
       : regenerating
@@ -360,7 +360,7 @@ export function ChunkReview({
               disabled={regenerating || !codeReady}
               title={
                 codeReady
-                  ? "Re-run static analysis, AI review, and tests on the current code — no regeneration"
+                  ? "Re-run static analysis, AI review, and tests on the current code - no regeneration"
                   : "No migrated code to check yet"
               }
               className="inline-flex items-center gap-1.5 rounded-lg border border-ink/15 px-3 py-1.5 text-xs font-semibold text-ink/70 transition-colors hover:border-[#7C3AED]/50 hover:text-[#7C3AED] disabled:cursor-not-allowed disabled:opacity-50"
@@ -497,7 +497,7 @@ export function ChunkReview({
         ) : (
           <div className="flex items-center gap-3">
             <p className="mr-auto text-sm text-sub">
-              You're the final gate — nothing merges until you approve.
+              You're the final gate - nothing merges until you approve.
             </p>
             <button
               onClick={() => setRejecting(true)}

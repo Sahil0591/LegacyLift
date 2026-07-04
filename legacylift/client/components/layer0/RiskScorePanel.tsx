@@ -1,5 +1,5 @@
 "use client";
-// RiskScorePanel — Shows per-file risk scores as a sorted bar chart list.
+// RiskScorePanel - Shows per-file risk scores as a sorted bar chart list.
 // Populated by the risk_scores_ready WebSocket event.
 // Colour codes: low → green, medium → amber, high → red, critical → purple.
 //

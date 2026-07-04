@@ -1,7 +1,7 @@
-// lib/migration.ts — Client-side helpers for the on-demand "Regenerate" flow.
+// lib/migration.ts - Client-side helpers for the on-demand "Regenerate" flow.
 // These call the BACKEND's LLM endpoints (/llm/migrate, /llm/review, /llm/tests)
 // over the same authenticated channel as the rest of the API. The frontend holds
-// no Venice key, prompts, or SDK — all of that lives in the Python backend.
+// no Venice key, prompts, or SDK - all of that lives in the Python backend.
 
 import { apiPost } from "@/lib/api";
 import type { TargetProfilePayload } from "@/lib/targetLanguages";
@@ -30,7 +30,7 @@ export interface GenerateInput {
   targetProfile?: TargetProfilePayload | null;
   /** Reviewer guidance applied on a regeneration. */
   instructions?: string;
-  /** The chunk's last generated code — lets the model make a targeted edit
+  /** The chunk's last generated code - lets the model make a targeted edit
    *  instead of blind-rewriting from source, so a fix reliably sticks. */
   previousAttempt?: string;
   /** Full content of the file this chunk belongs to, for whole-file context. */
@@ -176,7 +176,7 @@ const MAX_FILE_SUMMARY_SOURCE = 120_000;
 
 /**
  * Ask the AI to explain what a WHOLE file does (not a single chunk), in two
- * registers — technical and plain-language — grounded in the file's extracted
+ * registers - technical and plain-language - grounded in the file's extracted
  * business rules and the human-authored institutional context.
  */
 export async function summarizeFile(input: {

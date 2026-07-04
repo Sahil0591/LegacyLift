@@ -1,4 +1,4 @@
-// lib/startMigration.ts — The one entry point into a migration: analyze a
+// lib/startMigration.ts - The one entry point into a migration: analyze a
 // public repo (or uploaded files) and land the caller on a workbench project.
 //
 // Shared by the landing-page hero and the /demo page so there's a single flow:

@@ -1,5 +1,5 @@
 "use client";
-// WalkthroughTour — a friendly, app-onboarding style guided tour for the
+// WalkthroughTour - a friendly, app-onboarding style guided tour for the
 // migration workbench. It spotlights real elements on the page (found by their
 // `data-tour="..."` attribute), pops a plain-language explanation next to each,
 // and walks a first-time (or non-technical) user through both the Overview and
@@ -22,7 +22,7 @@ import type { WorkbenchView } from "@/components/workbench/WorkbenchHeader";
 interface TourStep {
   /** The `data-tour` value of the element to spotlight. Omit for a centered card. */
   target?: string;
-  /** Which tab this step lives on — the tour switches to it automatically. */
+  /** Which tab this step lives on - the tour switches to it automatically. */
   view?: WorkbenchView;
   title: string;
   body: string;
@@ -31,7 +31,7 @@ interface TourStep {
 const STEPS: TourStep[] = [
   {
     title: "Welcome to LegacyLift 👋",
-    body: "This dashboard turns your legacy system into modern, tested code — with a real person approving every change. Here's a quick tour of how it all works.",
+    body: "This dashboard turns your legacy system into modern, tested code - with a real person approving every change. Here's a quick tour of how it all works.",
   },
   {
     target: "tab-overview",
@@ -49,55 +49,55 @@ const STEPS: TourStep[] = [
     target: "migration-context",
     view: "overview",
     title: "Brief the AI first",
-    body: "Think of this as a README the AI reads before touching your code. Add rules it can't guess — regulatory caps, systems, naming conventions — for the whole project or per file, and every migration respects them.",
+    body: "Think of this as a README the AI reads before touching your code. Add rules it can't guess - regulatory caps, systems, naming conventions - for the whole project or per file, and every migration respects them.",
   },
   {
     target: "files",
     view: "overview",
     title: "Your files",
-    body: "Each old file becomes modern code here. Every section on this page collapses — click its heading to tidy the view. When you're happy with a file, you 'Finalize' it; the counter tracks how many are done.",
+    body: "Each old file becomes modern code here. Every section on this page collapses - click its heading to tidy the view. When you're happy with a file, you 'Finalize' it; the counter tracks how many are done.",
   },
   {
     target: "targets",
     view: "overview",
     title: "Migrate into any language",
-    body: "Pick the language you're modernising into — Python, Java, Go, TypeScript and more. Set a project default here, or override it per file, so core banking can go to Java while analytics goes to Python.",
+    body: "Pick the language you're modernising into - Python, Java, Go, TypeScript and more. Set a project default here, or override it per file, so core banking can go to Java while analytics goes to Python.",
   },
   {
     target: "explain",
     view: "overview",
     title: "Not sure what a file does?",
-    body: "Hit 'Explain' on any file and the AI gives you both a developer summary and a plain-English one — grounded in that file's business rules and your context.",
+    body: "Hit 'Explain' on any file and the AI gives you both a developer summary and a plain-English one - grounded in that file's business rules and your context.",
   },
   {
     target: "risk",
     view: "overview",
     title: "Risk at a glance",
-    body: "Some code is trickier than others. This bar shows how much is low, medium, high or critical risk — so you know where to look most carefully.",
+    body: "Some code is trickier than others. This bar shows how much is low, medium, high or critical risk - so you know where to look most carefully.",
   },
   {
     target: "graph",
     view: "overview",
     title: "How it all connects",
-    body: "This map shows how the pieces of your system depend on one another — handy for understanding the knock-on effects of a change.",
+    body: "This map shows how the pieces of your system depend on one another - handy for understanding the knock-on effects of a change.",
   },
   {
     target: "rules",
     view: "overview",
     title: "The business rules we found",
-    body: "These are the important real-world rules hidden in your old code — things like fees or eligibility checks. We carry them into the new code, unchanged.",
+    body: "These are the important real-world rules hidden in your old code - things like fees or eligibility checks. We carry them into the new code, unchanged.",
   },
   {
     target: "tab-review",
     view: "review",
     title: "Now the Review tab",
-    body: "This is where the real checking happens. You go through the new code one piece at a time — just like reviewing changes before they go live.",
+    body: "This is where the real checking happens. You go through the new code one piece at a time - just like reviewing changes before they go live.",
   },
   {
     target: "queue",
     view: "review",
     title: "The to-do list",
-    body: "Every piece waiting for your review is listed here, grouped by file. Click any item to open it — and you can search or filter to find things fast.",
+    body: "Every piece waiting for your review is listed here, grouped by file. Click any item to open it - and you can search or filter to find things fast.",
   },
   {
     target: "review-main",
@@ -176,7 +176,7 @@ export function WalkthroughTour({
     const el = document.querySelector<HTMLElement>(`[data-tour="${sel}"]`);
     const rect = el?.getBoundingClientRect();
     if (!el || !rect || (rect.width === 0 && rect.height === 0)) {
-      // Target isn't on screen (e.g. hidden on a narrow layout) — fall back to
+      // Target isn't on screen (e.g. hidden on a narrow layout) - fall back to
       // a centered card so the explanation still shows.
       setSpot(null);
       setCentered(true);
@@ -224,7 +224,7 @@ export function WalkthroughTour({
       left = rect.left - GAP - cardW;
       top = clampY(midY);
     } else {
-      // Target is bigger than the viewport in both axes — tuck the card into
+      // Target is bigger than the viewport in both axes - tuck the card into
       // whichever side has more room so it covers as little as possible.
       left = vw - rect.right >= rect.left ? clampX(vw - cardW - MARGIN) : clampX(MARGIN);
       top = clampY(midY);
@@ -244,7 +244,7 @@ export function WalkthroughTour({
     let raf = 0;
     let tries = 0;
     // The card fades in via AnimatePresence, so its real height isn't known for
-    // a few frames — re-measure a couple of times so its final position (which
+    // a few frames - re-measure a couple of times so its final position (which
     // depends on that height) is correct.
     const timers = [
       window.setTimeout(measure, 220),

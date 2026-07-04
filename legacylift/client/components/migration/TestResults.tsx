@@ -1,5 +1,5 @@
 "use client";
-// TestResults — Pass/fail grid for each auto-generated test case.
+// TestResults - Pass/fail grid for each auto-generated test case.
 // Updates in real time as test_result WebSocket events stream in during Layer 3.
 // Shows test name, pass/fail icon, and duration. Failed tests show error details.
 //

@@ -1,5 +1,5 @@
 "use client";
-// DeprecationMap — Table mapping legacy constructs to their Python equivalents.
+// DeprecationMap - Table mapping legacy constructs to their Python equivalents.
 // Populated by the target_profile_ready WebSocket event from Layer 0.5.
 
 import type { DeprecatedPattern } from "@/types/legacylift";

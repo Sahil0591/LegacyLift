@@ -1,7 +1,7 @@
 "use client";
-// useToasts — lightweight toast queue for background job feedback (generation
+// useToasts - lightweight toast queue for background job feedback (generation
 // finishing, checks failing, etc.) while the user has navigated elsewhere.
-// No portal/animation library — ToastStack renders the list directly.
+// No portal/animation library - ToastStack renders the list directly.
 
 import { useCallback, useRef, useState } from "react";
 

@@ -1,4 +1,4 @@
-// lib/download.ts — export the migrated code from the workbench.
+// lib/download.ts - export the migrated code from the workbench.
 // Each file is assembled in its own chosen target language (a project can be
 // genuinely multi-language), named with that language's extension, and either
 // saved individually or bundled into a zip.
@@ -43,9 +43,9 @@ export function buildMigratedFile(
       : "";
   const header = [
     bar,
-    `${c} Migrated by LegacyLift — ${projectName} → ${target.label}`,
+    `${c} Migrated by LegacyLift - ${projectName} → ${target.label}`,
     `${c} ${done.length} of ${chunks.length} units generated.`,
-    `${c} Generated code is a starting point — review every unit before use.`,
+    `${c} Generated code is a starting point - review every unit before use.`,
     bar,
     preamble,
     "",
@@ -145,10 +145,10 @@ export async function downloadProjectZip(
   zip.file(
     "_MIGRATION_SUMMARY.txt",
     [
-      `Migrated by LegacyLift — ${projectName}`,
+      `Migrated by LegacyLift - ${projectName}`,
       `${finalized.length} file(s) finalized · ${approved}/${total} units approved.`,
       targetLine ? `Target language(s): ${targetLine}.` : "",
-      "Generated code is a starting point — review every unit before use.",
+      "Generated code is a starting point - review every unit before use.",
       "",
     ]
       .filter(Boolean)

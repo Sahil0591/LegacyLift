@@ -1,4 +1,4 @@
-// OwnershipBadge — Compact ownership summary block for a single business rule.
+// OwnershipBadge - Compact ownership summary block for a single business rule.
 // Shows primary category (colour-coded), confidence level, evidence text,
 // and the actual person name/email if found in git history or docs.
 //

@@ -238,7 +238,7 @@ export async function listServerProjects(): Promise<ServerProject[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Cloud (DB-backed) workbench persistence — the signed-in New Migration flow.
+// Cloud (DB-backed) workbench persistence - the signed-in New Migration flow.
 // Mirrors client/lib/projectStore.ts's localStorage API, but every blob is
 // stored server-side against the authenticated user via the /project/import,
 // /progress, and /workbench endpoints.

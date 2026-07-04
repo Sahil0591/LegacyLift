@@ -1,4 +1,4 @@
-// lib/demoData.ts — Seed data for the demo workbench.
+// lib/demoData.ts - Seed data for the demo workbench.
 // Lets /project/demo-* render a fully populated, navigable pipeline without a
 // backend. A COBOL loan engine (acme-bank/loan-engine) migrated to Python 3.12.
 
@@ -38,7 +38,7 @@ const RULES: BusinessRule[] = [
     source_lines: [128, 156],
     confidence: "High",
     hardcoded_values: ["365", "WS-MAX-INT"],
-    warnings: ["Uses a 365-day year — leap years are not handled."],
+    warnings: ["Uses a 365-day year - leap years are not handled."],
     status: "Pending",
     ownership_category: "Finance",
     ownership_evidence: "Last changed in PR #142 by the Finance platform team.",
@@ -54,10 +54,10 @@ const RULES: BusinessRule[] = [
     source_lines: [88, 140],
     confidence: "High",
     hardcoded_values: ["0.15", "25.00"],
-    warnings: ["Regulatory cap of £25.00 is hardcoded — confirm it is current."],
+    warnings: ["Regulatory cap of £25.00 is hardcoded - confirm it is current."],
     status: "Pending",
     ownership_category: "Compliance",
-    ownership_evidence: "Decided in PR #142 — 'regulatory cap, 2019'.",
+    ownership_evidence: "Decided in PR #142 - 'regulatory cap, 2019'.",
     ownership_confidence: "High",
     ownership_detail: null,
   },
@@ -70,7 +70,7 @@ const RULES: BusinessRule[] = [
     source_lines: [40, 75],
     confidence: "Medium",
     hardcoded_values: [],
-    warnings: ["Reads external config — RATE-TABLE values change quarterly."],
+    warnings: ["Reads external config - RATE-TABLE values change quarterly."],
     status: "Confirmed",
     ownership_category: "Product",
     ownership_evidence: "Owned by the Lending Product team.",
@@ -86,7 +86,7 @@ const RULES: BusinessRule[] = [
     source_lines: [210, 288],
     confidence: "High",
     hardcoded_values: [],
-    warnings: ["14 callers — highest fan-in in the codebase. Migrate last."],
+    warnings: ["14 callers - highest fan-in in the codebase. Migrate last."],
     status: "Pending",
     ownership_category: "Risk",
     ownership_evidence: "Core ledger owned by the Risk & Controls team.",
@@ -173,7 +173,7 @@ const TARGET_PROFILE: TargetProfile = {
   type_system: "Full type hints · mypy --strict",
   async_model: "Synchronous (nightly batch jobs)",
   test_framework: "pytest",
-  notes: "All monetary math uses decimal.Decimal — never float.",
+  notes: "All monetary math uses decimal.Decimal - never float.",
 };
 
 // ── Chunks ───────────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ const INTEREST_SOURCE = `       INTEREST-CALC SECTION.
            EXIT.`;
 
 const INTEREST_TARGET = `def interest_calc(principal: Decimal, apr: Decimal, days: int) -> Decimal:
-    """Daily interest accrual — see business rule rule-interest."""
+    """Daily interest accrual - see business rule rule-interest."""
     daily_rate = apr / Decimal(365)
     interest = (principal * daily_rate * days).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
@@ -303,7 +303,7 @@ const CHUNKS: MigrationChunk[] = [
 const CURRENT = CHUNKS.find((c) => c.status === "Review") ?? null;
 
 // Reconstruct a "full file" view per source file from its chunks' original
-// source, in line order — just enough for the file-context panel to show
+// source, in line order - just enough for the file-context panel to show
 // something coherent; not meant to be authentic re-parsed COBOL/Java.
 function buildDemoFiles(chunks: MigrationChunk[], language: string): ProjectFile[] {
   const byFile = new Map<string, MigrationChunk[]>();
@@ -605,10 +605,10 @@ export function getDemoConfig(projectId: string): ProjectConfig {
   return {
     context: {
       global:
-        "Acme Bank loan engine. COMP-3 money fields are GBP pence. The £25.00 late-fee cap is a 2019 FCA regulatory limit — never change it. RATE-TABLE is sourced from our quarterly regulatory feed; treat its values as external config, not constants to inline.",
+        "Acme Bank loan engine. COMP-3 money fields are GBP pence. The £25.00 late-fee cap is a 2019 FCA regulatory limit - never change it. RATE-TABLE is sourced from our quarterly regulatory feed; treat its values as external config, not constants to inline.",
       perFile: {
         "ledger.cbl":
-          "The general ledger posts to the DB2 GLEDGER table via a copybook we cannot change. Keep the debit-before-credit ordering and the audit write. This module is consumed by our Java services — migrate it to Java.",
+          "The general ledger posts to the DB2 GLEDGER table via a copybook we cannot change. Keep the debit-before-credit ordering and the audit write. This module is consumed by our Java services - migrate it to Java.",
       },
     },
     targets: { default: "python-3x", perFile: { "ledger.cbl": "java-21" } },

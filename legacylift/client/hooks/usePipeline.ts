@@ -1,8 +1,8 @@
 "use client";
-// hooks/usePipeline.ts — Full pipeline state manager.
+// hooks/usePipeline.ts - Full pipeline state manager.
 // Subscribes to all WebSocket events for a project and keeps a single
 // PipelineState object up to date. Components read from this state via
-// context or props — they do NOT connect to WS directly.
+// context or props - they do NOT connect to WS directly.
 //
 // TODO: Persist state to sessionStorage so a page refresh doesn't lose progress.
 // TODO: Add optimistic UI updates for chunk approve/reject actions.
@@ -85,7 +85,7 @@ interface UsePipelineReturn {
   finalizedFiles: Record<string, true>;
   /** Mark a file as finalized; persisted for local projects. */
   markFileFinalized: (filename: string) => void;
-  /** Clear a file's finalized flag — used when a chunk inside it is reopened. */
+  /** Clear a file's finalized flag - used when a chunk inside it is reopened. */
   unmarkFileFinalized: (filename: string) => void;
   /** Accumulated feedback (rejections + review findings) fed into future prompts. */
   lessons: Lesson[];
@@ -107,7 +107,7 @@ function stateFromAnalysis(
   projectId: string,
   a: AnalyzeResult,
 ): PipelineState {
-  // File order, then position within the file — mirrors reading the source
+  // File order, then position within the file - mirrors reading the source
   // top to bottom instead of jumping around by severity.
   const chunks = [...a.chunks].sort(
     (x, y) =>
@@ -143,7 +143,7 @@ function hydrateState(
     const saved = progress[c.id];
     if (!saved) return c;
     // Entries saved before static_analysis/ai_review/test_results were added
-    // to the progress shape won't have those keys — fall back to the
+    // to the progress shape won't have those keys - fall back to the
     // freshly-computed chunk's defaults instead of overwriting with undefined.
     return {
       ...c,
@@ -341,7 +341,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
   // === true) while hydrating + saving over the network.
   const isCloud = !!projectId && projectId.startsWith("cloud-");
   const offline = demo || isLocal || isCloud;
-  // Demo, locally-analysed, and cloud projects don't open a real socket — the
+  // Demo, locally-analysed, and cloud projects don't open a real socket - the
   // browser owns the pipeline; there are no server-pushed events to stream.
   const { status: wsStatus, subscribe } = useWebSocket(
     offline ? null : projectId,
@@ -443,7 +443,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
   }, [offline, projectId]);
 
   // Backend-tracked (non-offline) projects don't have file content client-side
-  // yet — fetch it best-effort so the file context panel/manifest can use it.
+  // yet - fetch it best-effort so the file context panel/manifest can use it.
   useEffect(() => {
     if (offline || !projectId) return;
     let cancelled = false;
@@ -453,7 +453,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
         setState((prev) => ({ ...prev, files }));
       })
       .catch(() => {
-        // Files not ready yet (pipeline still running) — leave as [].
+        // Files not ready yet (pipeline still running) - leave as [].
       });
     return () => {
       cancelled = true;
@@ -479,7 +479,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
 
     unsubs.push(
       subscribe("archaeology_complete", () => {
-        // Layer 0 complete — stay on layer 0 until rules are reviewed
+        // Layer 0 complete - stay on layer 0 until rules are reviewed
       }),
     );
 
@@ -838,7 +838,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
         finalizedFiles,
         config,
       ).catch(() => {
-        // Best-effort — the in-memory state is authoritative until the next
+        // Best-effort - the in-memory state is authoritative until the next
         // successful save; a later edit re-attempts persistence.
       });
     }, 800);

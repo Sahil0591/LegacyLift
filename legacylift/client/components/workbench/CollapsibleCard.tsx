@@ -1,5 +1,5 @@
 "use client";
-// CollapsibleCard — the shared card chrome for the Overview's sections. A
+// CollapsibleCard - the shared card chrome for the Overview's sections. A
 // titled, bordered panel whose body collapses/expands from a chevron on the
 // header. `actions` render on the right of the header (counts, controls) and
 // are NOT part of the toggle, so a target selector or "Finalize all" button in
@@ -16,7 +16,7 @@ export function CollapsibleCard({
   children,
 }: {
   title: string;
-  /** Controls/counts rendered on the right of the header — not part of the toggle. */
+  /** Controls/counts rendered on the right of the header - not part of the toggle. */
   actions?: ReactNode;
   defaultOpen?: boolean;
   /** `data-tour` attribute for the guided walkthrough. */

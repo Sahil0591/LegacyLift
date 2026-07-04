@@ -1,5 +1,5 @@
 "use client";
-// Shared workbench primitives — risk + status helpers and small badges.
+// Shared workbench primitives - risk + status helpers and small badges.
 // Everything uses the app's theme tokens so the workbench stays cohesive.
 
 import { Check, Circle, Loader2, X, Eye } from "lucide-react";

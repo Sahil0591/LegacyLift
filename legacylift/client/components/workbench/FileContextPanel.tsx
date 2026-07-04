@@ -1,5 +1,5 @@
 "use client";
-// FileContextPanel — the review workbench's 3rd (right-hand) panel: the full
+// FileContextPanel - the review workbench's 3rd (right-hand) panel: the full
 // original source file, with the chunk currently under review highlighted.
 // Collapsible so it doesn't compete for space when not needed.
 

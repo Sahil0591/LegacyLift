@@ -1,11 +1,11 @@
-// lib/projectConfig.ts — Human-authored, per-project workbench configuration.
+// lib/projectConfig.ts - Human-authored, per-project workbench configuration.
 //
 // Holds the two things a reviewer configures on the Overview that steer every
 // migration:
-//   1. context — institutional instructions the AI can't infer from source
+//   1. context - institutional instructions the AI can't infer from source
 //      (systems, copybooks, regulatory caps, naming conventions, target
 //      architecture), project-wide and per file.
-//   2. targets — which language each file migrates INTO (a project default plus
+//   2. targets - which language each file migrates INTO (a project default plus
 //      per-file overrides).
 //
 // One blob, one persistence key / DB field. Mirrors the localStorage/DB/demo

@@ -1,4 +1,4 @@
-// lib/github.ts — fetch legacy source files from a public GitHub repo
+// lib/github.ts - fetch legacy source files from a public GitHub repo
 // (server-side, used by /api/analyze). Best-effort and capped so a giant repo
 // can't stall the request. Optionally uses GITHUB_TOKEN for a higher rate limit.
 
@@ -52,7 +52,7 @@ export async function fetchRepoFiles(
     { headers },
   );
   if (repoRes.status === 404) {
-    throw new GithubError("Repo not found — is it public?", 404);
+    throw new GithubError("Repo not found - is it public?", 404);
   }
   if (repoRes.status === 403) {
     throw new GithubError(

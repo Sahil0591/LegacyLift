@@ -1,5 +1,5 @@
 "use client";
-// MigrationComplete — Full-screen celebration panel shown when migration_complete
+// MigrationComplete - Full-screen celebration panel shown when migration_complete
 // WebSocket event arrives. Shows final statistics and download/export options.
 //
 // TODO: Wire "Download migrated code" to a ZIP export endpoint on the backend.

@@ -1,5 +1,5 @@
 "use client";
-// DependencyGraph — Interactive dependency graph with layered auto-layout,
+// DependencyGraph - Interactive dependency graph with layered auto-layout,
 // click-to-highlight connected paths, and an inline detail panel.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -53,7 +53,7 @@ function computePositions(
     children.set(e.source, ch);
   }
 
-  // BFS — each node is visited exactly once, so cycles are safe.
+  // BFS - each node is visited exactly once, so cycles are safe.
   // Nodes with no incoming edges start at layer 0; others get first-discovered layer.
   const layerOf = new Map<string, number>();
   const queue: string[] = [];
@@ -287,7 +287,7 @@ export function DependencyGraph({ graph }: DependencyGraphProps) {
     ? active.edges.filter((e) => e.target === selectedId)
     : [];
 
-  // Fullscreen always overrides collapse — you can't be minimized and
+  // Fullscreen always overrides collapse - you can't be minimized and
   // fullscreen at once.
   const showBody = isFullscreen || !collapsed;
 
@@ -415,7 +415,7 @@ export function DependencyGraph({ graph }: DependencyGraphProps) {
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide text-sub">File</div>
-              <div className="mt-0.5 font-mono text-ink/80">{selectedNode.file || "—"}</div>
+              <div className="mt-0.5 font-mono text-ink/80">{selectedNode.file || "-"}</div>
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide text-sub">Calls</div>

@@ -1,5 +1,5 @@
 "use client";
-// ArchaeologyReport — Summary card shown at the top of the Layer 0 view.
+// ArchaeologyReport - Summary card shown at the top of the Layer 0 view.
 // Displays total rules found, files parsed, and risk distribution at a glance.
 // Populated by the archaeology_complete WebSocket event.
 //

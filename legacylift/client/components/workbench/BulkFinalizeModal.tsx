@@ -1,5 +1,5 @@
 "use client";
-// BulkFinalizeModal — combined review screen for finalizing several
+// BulkFinalizeModal - combined review screen for finalizing several
 // cluster-ready files in one pass. Each file gets its own on-demand
 // consistency check (same mechanism as FileFinalizeModal, just looped);
 // one "Finalize all" action commits the whole batch once reviewed.
@@ -103,7 +103,7 @@ export function BulkFinalizeModal({
           error:
             err instanceof Error
               ? err.message
-              : "File too large for a single consistency pass — per-chunk reviews already ran.",
+              : "File too large for a single consistency pass - per-chunk reviews already ran.",
         },
       }));
     }

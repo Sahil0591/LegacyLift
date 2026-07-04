@@ -1,5 +1,5 @@
 "use client";
-// ChunkQueue — the list of functions being migrated, grouped VSCode-explorer
+// ChunkQueue - the list of functions being migrated, grouped VSCode-explorer
 // style: one collapsible "folder" per source file, chunks nested underneath.
 // A search box + risk/complexity filters narrow it down across every folder.
 

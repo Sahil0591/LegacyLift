@@ -1,5 +1,5 @@
 "use client";
-// GotchaRegistry — List of known migration pitfalls for the source language.
+// GotchaRegistry - List of known migration pitfalls for the source language.
 // Severity-coded: Critical (red), High (orange), Medium (yellow), Low (green).
 // Populated by the target_profile_ready WebSocket event from Layer 0.5.
 

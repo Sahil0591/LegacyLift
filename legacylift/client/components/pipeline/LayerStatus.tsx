@@ -1,5 +1,5 @@
 "use client";
-// LayerStatus — Compact status strip above the main content area showing
+// LayerStatus - Compact status strip above the main content area showing
 // which layer is currently running and a one-line description of what it's doing.
 // Updates in real time as WebSocket events arrive.
 //
@@ -31,7 +31,7 @@ export function LayerStatus({ currentLayer, chunkName }: LayerStatusProps) {
       <div className="flex flex-col">
         <span className="text-xs font-semibold text-[#2563EB]">
           Layer {currentLayer}
-          {chunkName && ` — ${chunkName}`}
+          {chunkName && ` - ${chunkName}`}
         </span>
         <span className="text-sm text-[#888888]">{description}</span>
       </div>

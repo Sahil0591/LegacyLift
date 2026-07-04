@@ -1,5 +1,5 @@
 "use client";
-// ToastStack — bottom-right notification stack for background job feedback
+// ToastStack - bottom-right notification stack for background job feedback
 // (chunk generation/checks finishing while the user is on Overview or another
 // chunk). Styled to match the workbench's existing badge language in
 // components/workbench/shared.tsx (rounded pills, `${color}1f` backgrounds).

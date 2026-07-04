@@ -1,4 +1,4 @@
-// types/legacylift.ts — Canonical TypeScript interfaces for all LegacyLift domain objects.
+// types/legacylift.ts - Canonical TypeScript interfaces for all LegacyLift domain objects.
 // These mirror the Pydantic models in legacylift/models/ exactly.
 // When the backend models change, update this file first so TypeScript catches mismatches.
 
@@ -72,7 +72,7 @@ export interface OwnershipAuditEntry {
 }
 
 // ---------------------------------------------------------------------------
-// BusinessRule — mirrors models/business_rule.py BusinessRule
+// BusinessRule - mirrors models/business_rule.py BusinessRule
 // ---------------------------------------------------------------------------
 
 export interface BusinessRule {
@@ -99,7 +99,7 @@ export interface BusinessRule {
 }
 
 // ---------------------------------------------------------------------------
-// TestResult — mirrors models/chunk.py TestResult
+// TestResult - mirrors models/chunk.py TestResult
 // ---------------------------------------------------------------------------
 
 export interface TestResult {
@@ -110,7 +110,7 @@ export interface TestResult {
 }
 
 // ---------------------------------------------------------------------------
-// StaticAnalysisResult — mirrors models/chunk.py StaticAnalysisResult
+// StaticAnalysisResult - mirrors models/chunk.py StaticAnalysisResult
 // ---------------------------------------------------------------------------
 
 export interface StaticAnalysisResult {
@@ -121,7 +121,7 @@ export interface StaticAnalysisResult {
 }
 
 // ---------------------------------------------------------------------------
-// AIReviewResult — mirrors models/chunk.py AIReviewResult
+// AIReviewResult - mirrors models/chunk.py AIReviewResult
 // ---------------------------------------------------------------------------
 
 export interface AIReviewResult {
@@ -134,7 +134,7 @@ export interface AIReviewResult {
 }
 
 // ---------------------------------------------------------------------------
-// MigrationChunk — mirrors models/chunk.py MigrationChunk
+// MigrationChunk - mirrors models/chunk.py MigrationChunk
 // ---------------------------------------------------------------------------
 
 export interface MigrationChunk {
@@ -155,7 +155,7 @@ export interface MigrationChunk {
 }
 
 // ---------------------------------------------------------------------------
-// Project — mirrors models/project.py
+// Project - mirrors models/project.py
 // ---------------------------------------------------------------------------
 
 export type ProjectStatus =
@@ -179,7 +179,7 @@ export interface Project {
 }
 
 // ---------------------------------------------------------------------------
-// ProjectFile — full raw content of an uploaded source file
+// ProjectFile - full raw content of an uploaded source file
 // ---------------------------------------------------------------------------
 
 export interface ProjectFile {
@@ -189,7 +189,7 @@ export interface ProjectFile {
 }
 
 // ---------------------------------------------------------------------------
-// Dependency graph — emitted via dependency_graph_ready WebSocket event
+// Dependency graph - emitted via dependency_graph_ready WebSocket event
 // ---------------------------------------------------------------------------
 
 export interface DependencyNode {
@@ -211,7 +211,7 @@ export interface DependencyGraph {
 }
 
 // ---------------------------------------------------------------------------
-// Layer 0.5 — Target profile and migration intelligence
+// Layer 0.5 - Target profile and migration intelligence
 // ---------------------------------------------------------------------------
 
 export interface RecommendedLibrary {

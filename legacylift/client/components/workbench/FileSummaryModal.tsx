@@ -1,5 +1,5 @@
 "use client";
-// FileSummaryModal — an AI explanation of what a WHOLE file does (not a chunk),
+// FileSummaryModal - an AI explanation of what a WHOLE file does (not a chunk),
 // in two registers: a technical summary for engineers and a plain-language one
 // for non-technical stakeholders. Grounded in the file's extracted business
 // rules and the human-authored institutional context.
@@ -156,14 +156,14 @@ export function FileSummaryModal({
               <Section
                 Icon={Code2}
                 title="For developers"
-                subtitle="Technical summary — responsibilities, flow, side effects, risks"
+                subtitle="Technical summary - responsibilities, flow, side effects, risks"
                 accent="#3B82F6"
                 body={summary.technical}
               />
               <Section
                 Icon={MessageSquareText}
                 title="In plain English"
-                subtitle="For product, compliance & ops — what it does and why it matters"
+                subtitle="For product, compliance & ops - what it does and why it matters"
                 accent="#10B981"
                 body={summary.layman}
               />

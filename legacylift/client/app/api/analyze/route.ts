@@ -1,17 +1,21 @@
-// app/api/analyze/route.ts — POST: ingest uploaded files or a public GitHub
+// app/api/analyze/route.ts - POST: ingest uploaded files or a public GitHub
 // repo, identify legacy code units, and score risk with deterministic rules.
 // Body: { files?: { filename, content }[] } OR { repoUrl }.
 
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { analyzeFiles, type InputFile } from "@/lib/analyze";
+import { clerkEnabled, hasConfiguredValue } from "@/lib/authMode";
 import { fetchRepoFiles, GithubError } from "@/lib/github";
 import { rateLimit } from "@/lib/rateLimit";
+
+const serverAuthEnabled =
+  clerkEnabled && hasConfiguredValue(process.env.CLERK_SECRET_KEY);
 
 export async function POST(req: Request) {
   // Defense-in-depth: middleware already gates /api/analyze, but enforce here
   // too so the handler can't run unauthenticated if the matcher ever drifts.
-  const { userId } = await auth();
+  const userId = serverAuthEnabled ? (await auth()).userId : "local-demo";
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -20,7 +24,7 @@ export async function POST(req: Request) {
   const rl = rateLimit(`analyze:${userId}`, 12, 60_000);
   if (!rl.ok) {
     return NextResponse.json(
-      { error: `Too many analyses — try again in ${rl.retryAfter}s.` },
+      { error: `Too many analyses - try again in ${rl.retryAfter}s.` },
       { status: 429 },
     );
   }

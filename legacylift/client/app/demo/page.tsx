@@ -1,5 +1,5 @@
 "use client";
-// app/demo/page.tsx — Start a migration. Two ways in: a public GitHub repo, or
+// app/demo/page.tsx - Start a migration. Two ways in: a public GitHub repo, or
 // uploaded source files. Both POST to /api/analyze (rule-based identification +
 // risk), stash the result, and open the workbench.
 
@@ -97,7 +97,7 @@ function DemoPageContent() {
             </h1>
             <p className="mt-2 text-sm text-sub">
               Point LegacyLift at a legacy codebase. It identifies every unit,
-              scores the risk from explicit rules, and migrates chunk by chunk —
+              scores the risk from explicit rules, and migrates chunk by chunk -
               with you approving each step.
             </p>
           </motion.div>
@@ -163,7 +163,7 @@ function DemoPageContent() {
                     </div>
                     <p className="mt-2 flex items-center gap-1.5 text-xs text-sub">
                       <Lock className="h-3 w-3" />
-                      Read-only — we pull up to 25 COBOL files
+                      Read-only - we pull up to 25 COBOL files
                       (.cbl/.cob/.cpy/.jcl) and never write back.
                     </p>
                   </div>
@@ -203,7 +203,7 @@ function DemoPageContent() {
                         onChange={setRepoTarget}
                         className="w-48"
                         ariaLabel="Target language"
-                        title="Default target language — override per file later on the Overview"
+                        title="Default target language - override per file later on the Overview"
                       />
                     </div>
                   </div>
@@ -218,7 +218,7 @@ function DemoPageContent() {
                   </button>
 
                   <p className="text-center text-xs text-sub/70">
-                    Prefilled with a real public COBOL repo — hit Analyze to map it
+                    Prefilled with a real public COBOL repo - hit Analyze to map it
                     live.
                   </p>
                 </motion.form>

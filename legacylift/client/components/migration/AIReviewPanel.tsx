@@ -1,5 +1,5 @@
 "use client";
-// AIReviewPanel — Displays the Layer 2 AI review findings: critical issues (blocking),
+// AIReviewPanel - Displays the Layer 2 AI review findings: critical issues (blocking),
 // warnings (non-blocking), and optional improvement suggestions.
 // Populated by the ai_review_complete WebSocket event.
 //
@@ -16,7 +16,7 @@ const PLACEHOLDER: AIReviewResult = {
   ],
   warnings: [
     "Magic number 100 should be extracted to a named constant PERCENTAGE_DIVISOR.",
-    "Function lacks a docstring — add one for auditability.",
+    "Function lacks a docstring - add one for auditability.",
   ],
   suggestions: [
     "Consider adding a type alias: Money = Decimal for readability.",
@@ -59,7 +59,7 @@ export function AIReviewPanel({ review }: AIReviewPanelProps) {
           {r.critical_issues.length > 0 && (
             <div>
               <p className="mb-2 text-xs font-semibold text-[#EF4444]">
-                Critical ({r.critical_issues.length}) — must fix before approving
+                Critical ({r.critical_issues.length}) - must fix before approving
               </p>
               <div className="flex flex-col gap-2">
                 {r.critical_issues.map((issue, i) => (

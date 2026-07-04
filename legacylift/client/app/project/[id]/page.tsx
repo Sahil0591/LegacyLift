@@ -1,5 +1,5 @@
 "use client";
-// app/project/[id]/page.tsx — Migration review workbench.
+// app/project/[id]/page.tsx - Migration review workbench.
 // Two views: Overview (the codebase map) and Review (step through each chunk,
 // see the before/after, and approve or request changes). State comes from
 // usePipeline; demo projects are fully seeded.
@@ -126,7 +126,7 @@ function CompleteState({
           <div className="flex items-center gap-3">
             <p className="flex-1 text-sm text-sub">
               Every file is finalized. Run the whole-project AI review before
-              downloading — it checks for cross-file issues a per-file review
+              downloading - it checks for cross-file issues a per-file review
               can't see.
             </p>
             <button
@@ -174,7 +174,7 @@ function CompleteState({
                 className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#10B981] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#059669]"
               >
                 <CheckCircle2 className="h-4 w-4" />
-                I've reviewed this — unlock download
+                I've reviewed this - unlock download
               </button>
             )}
           </div>
@@ -210,7 +210,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const projectId = params.id;
   const demo = isDemoProject(projectId);
   const local = projectId.startsWith("local");
-  // Cloud projects ("cloud-" prefix) are DB-backed but still client-driven —
+  // Cloud projects ("cloud-" prefix) are DB-backed but still client-driven -
   // the browser owns generation/approval via the /llm/* endpoints, exactly
   // like local/demo. They must NOT hit the backend-pipeline routes
   // (confirm-rule/select-chunk/approve), which only know pipeline projects and
@@ -261,14 +261,14 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
 
   // Auto-launch the guided walkthrough the first time someone lands on a
-  // project — non-technical users get oriented without hunting for help. The
+  // project - non-technical users get oriented without hunting for help. The
   // lightbulb in the header replays it any time after that.
   useEffect(() => {
     let seen = false;
     try {
       seen = localStorage.getItem("legacylift.tourSeen.v1") === "1";
     } catch {
-      /* private mode / storage blocked — just show the tour */
+      /* private mode / storage blocked - just show the tour */
     }
     if (seen) return;
     const timer = setTimeout(() => {
@@ -282,7 +282,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     return () => clearTimeout(timer);
   }, []);
 
-  // Jump straight to a chunk's Review view — used by the header job pill and
+  // Jump straight to a chunk's Review view - used by the header job pill and
   // by toast "View chunk" actions so background work is never a dead end.
   const jumpToChunk = (id: string) => {
     setView("review");
@@ -298,7 +298,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   };
 
   // Every LLM call (migrate/review/tests/project-review) burns the same daily
-  // budget, and the auto-fix loop can chew through several per click — refresh
+  // budget, and the auto-fix loop can chew through several per click - refresh
   // on mount and periodically (in addition to right after the actions that
   // spend it) so running out is never a silent surprise.
   useEffect(() => {
@@ -314,7 +314,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     state.files.find((f) => f.language)?.language ||
     fileGroups.find((f) => f.language)?.language ||
     "Source";
-  // The legacy language of a specific chunk's file — so the review's before/after
+  // The legacy language of a specific chunk's file - so the review's before/after
   // panel labels the real source language per file, not a project-wide guess.
   const sourceLabelFor = (chunk: MigrationChunk | null | undefined) =>
     (chunk?.source_file &&
@@ -350,7 +350,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       }
     } catch (err) {
       setProjectReviewError(
-        err instanceof Error ? err.message : "Project review failed — please try again.",
+        err instanceof Error ? err.message : "Project review failed - please try again.",
       );
     } finally {
       setReviewingProject(false);
@@ -376,7 +376,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       markChunkApproved(id);
     } catch (err) {
       setActionError(
-        err instanceof Error ? err.message : "Approve failed — please try again.",
+        err instanceof Error ? err.message : "Approve failed - please try again.",
       );
     }
   };
@@ -408,12 +408,12 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       recordRejectionLesson();
     } catch (err) {
       setActionError(
-        err instanceof Error ? err.message : "Reject failed — please try again.",
+        err instanceof Error ? err.message : "Reject failed - please try again.",
       );
     }
   };
 
-  // Hand-fix the migrated code directly — the escape hatch for chunks the
+  // Hand-fix the migrated code directly - the escape hatch for chunks the
   // auto-fix loop can't converge on (subtle rounding/PIC-clause semantics an
   // LLM keeps guessing at). Bypasses generation entirely, and invalidates the
   // stale checks so the human has to explicitly re-validate before merging.
@@ -428,7 +428,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
   // Re-run the AI review + generated tests against whatever code is currently
   // on the chunk (LLM-authored or hand-edited) without calling generateMigration
-  // again — so validating a manual fix never risks overwriting it.
+  // again - so validating a manual fix never risks overwriting it.
   const handleRunChecks = async (chunk: MigrationChunk) => {
     if (!chunk.migrated_code.trim()) return;
     setBusyId(chunk.id);
@@ -481,7 +481,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         });
       }
       if (review.status === "rejected" && tests.status === "rejected") {
-        setRegenError("Checks failed to run — please try again.");
+        setRegenError("Checks failed to run - please try again.");
         pushToast({
           variant: "error",
           title: `Checks failed for ${chunk.name}`,
@@ -559,7 +559,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       setSummaryError(
         err instanceof Error
           ? err.message
-          : "Couldn't summarize this file — please try again.",
+          : "Couldn't summarize this file - please try again.",
       );
     } finally {
       setSummarizingFile(null);
@@ -579,8 +579,8 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
   // Generate (and then review) this chunk's migration with Venice. When there's
   // specific guidance (a reject reason, or Fix with AI on a finding), this
-  // keeps auto-regenerating on its own — using each round's fresh critical
-  // issues as the next round's guidance — until the AI review comes back
+  // keeps auto-regenerating on its own - using each round's fresh critical
+  // issues as the next round's guidance - until the AI review comes back
   // clean or the attempt budget runs out. The human never has to re-click
   // "fix" for the same chunk; they only get pulled back in if it can't
   // resolve everything itself.
@@ -632,7 +632,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       hardcoded_values: r.hardcoded_values,
     }));
     // Per-file target language + its rich guidance, and the human-authored
-    // institutional context for this file — the levers that make migration
+    // institutional context for this file - the levers that make migration
     // land in the right language with the org's constraints respected.
     const target = resolveTarget(config, chunk.source_file);
     const targetLang = target.language;
@@ -642,7 +642,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       (f) => f.filename === chunk.source_file,
     )?.content;
 
-    // Loop-local state — the source of truth for control flow. Component
+    // Loop-local state - the source of truth for control flow. Component
     // state (regenCounts) is only synced for the UI badge; reading it back
     // mid-loop would be stale since React batches updates across awaits.
     let attempts = regenCounts[chunk.id] ?? 0;
@@ -669,7 +669,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           selectRelevantLessons(lessons, chunk.source_file),
         );
         // Hand the model its own last attempt so it edits toward the fix
-        // instead of rewriting blind — this is what makes a fix actually
+        // instead of rewriting blind - this is what makes a fix actually
         // stick instead of drifting on every round.
         const previousAttempt =
           currentInstructions && currentCode.trim() ? currentCode : undefined;
@@ -688,7 +688,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           institutionalContext: institutionalContext || undefined,
         });
         currentCode = migrated_code;
-        // Clear the previous round's review/tests immediately — otherwise the
+        // Clear the previous round's review/tests immediately - otherwise the
         // Checks panel keeps showing last round's "passed"/"N notes" results
         // as if final while this round is still running underneath it, which
         // reads as done-but-also-loading and is exactly the confusing state
@@ -731,7 +731,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         }
         if (review.status === "rejected" && tests.status === "rejected") {
           setRegenError(
-            "Code generated, but the review/tests step failed — try again.",
+            "Code generated, but the review/tests step failed - try again.",
           );
           pushToast({
             variant: "error",
@@ -742,11 +742,11 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           break;
         }
         if (review.status !== "fulfilled") {
-          // Tests came back but review didn't — nothing to auto-fix against,
+          // Tests came back but review didn't - nothing to auto-fix against,
           // so stop here rather than looping blind.
           pushToast({
             variant: "info",
-            title: `${chunk.name} generated — review step didn't return`,
+            title: `${chunk.name} generated - review step didn't return`,
             description: "Check it manually.",
             action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
           });
@@ -770,7 +770,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
         const criticalCount = review.value.critical_issues.length;
         if (criticalCount === 0) {
-          // clean — hand back to the human to approve
+          // clean - hand back to the human to approve
           pushToast({
             variant: "success",
             title: `${chunk.name} passed review`,
@@ -781,7 +781,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         }
 
         setRegenStatus(
-          `Found ${criticalCount} critical issue${criticalCount === 1 ? "" : "s"} — auto-fixing…`,
+          `Found ${criticalCount} critical issue${criticalCount === 1 ? "" : "s"} - auto-fixing…`,
         );
         currentInstructions = [
           ...review.value.critical_issues,
@@ -793,7 +793,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
       if (exhausted) {
         setRegenError(
-          `Auto-fix tried ${MAX_REGENS} times on ${chunk.name} and couldn't clear every critical issue — please review the remaining findings manually.`,
+          `Auto-fix tried ${MAX_REGENS} times on ${chunk.name} and couldn't clear every critical issue - please review the remaining findings manually.`,
         );
         pushToast({
           variant: "error",
@@ -825,7 +825,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const finalizeGroup = fileGroups.find((f) => f.filename === finalizeTarget) ?? null;
 
   // Only surface the header's background-job pill when the busy chunk isn't
-  // the one already on screen — ChunkReview shows regenStatus inline there,
+  // the one already on screen - ChunkReview shows regenStatus inline there,
   // so the pill would just be a redundant echo.
   const busyChunk = busyId ? state.chunks.find((c) => c.id === busyId) ?? null : null;
   const isViewingBusyChunk = view === "review" && reviewChunk?.id === busyId;

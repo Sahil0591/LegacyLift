@@ -23,12 +23,12 @@ and updates the diff + checks. Prompts and the Venice client live in the backend
 
 ## Setup
 
-No Venice variables go in `client/.env.local`. Configure the backend instead —
+No Venice variables go in `client/.env.local`. Configure the backend instead -
 see [`server/.env.example`](../server/.env.example):
 
 ```bash
 VENICE_API_KEY=your-venice-api-key     # server-only; never reaches the browser
-VENICE_MODEL=openai-gpt-52-codex       # optional — any valid Venice model id
+VENICE_MODEL=openai-gpt-52-codex       # optional - any valid Venice model id
 # VENICE_BASE_URL=https://api.venice.ai/api/v1   # optional override
 ```
 
@@ -36,7 +36,7 @@ The frontend only needs `NEXT_PUBLIC_API_URL` (or `NEXT_PUBLIC_API_HOST`) so it
 knows where the backend lives.
 
 Without `VENICE_API_KEY` on the server the endpoints return a clear `501`, and
-the workbench surfaces the sanitized message — everything else still works on the
+the workbench surfaces the sanitized message - everything else still works on the
 seeded demo data. Upstream Venice errors and rate limits are handled server-side
 and returned as standardized, sanitized responses (no raw Venice status codes or
 stack traces leak to the client).

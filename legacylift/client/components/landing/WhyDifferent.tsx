@@ -27,7 +27,7 @@ function ArchaeologyVisual() {
         </span>
       </div>
       <div className="mt-2 border-t border-dashed border-ink/10 pt-2 text-[10px] text-sub">
-        decided in <span className="text-[#7C3AED]">PR #142</span> — "regulatory
+        decided in <span className="text-[#7C3AED]">PR #142</span> - "regulatory
         cap, 2019"
       </div>
     </div>
@@ -87,19 +87,19 @@ const CARDS = [
   {
     Icon: GitCommitHorizontal,
     title: "It reads the history, not just the code.",
-    body: "Every function is traced to the commit, PR, and team that shaped it — so you migrate the intent, not just the syntax.",
+    body: "Every function is traced to the commit, PR, and team that shaped it - so you migrate the intent, not just the syntax.",
     Visual: ArchaeologyVisual,
   },
   {
     Icon: ShieldCheck,
     title: "Risk you can audit, not a vibe.",
-    body: "Tiers come from explicit rules — money keywords, call fan-in, extraction confidence. No black-box score you have to trust blindly.",
+    body: "Tiers come from explicit rules - money keywords, call fan-in, extraction confidence. No black-box score you have to trust blindly.",
     Visual: RiskVisual,
   },
   {
     Icon: UserCheck,
     title: "Nothing merges without you.",
-    body: "The pipeline hard-stops at every chunk. Approve, edit, or reject — a human is the final gate on all 12 migrations, every time.",
+    body: "The pipeline hard-stops at every chunk. Approve, edit, or reject - a human is the final gate on all 12 migrations, every time.",
     Visual: ApprovalVisual,
   },
 ];
@@ -115,7 +115,7 @@ export function WhyDifferent() {
           </h2>
           <p className="mt-3 text-sub">
             Not a code translator. A system of record for why your legacy code
-            does what it does — with a human in the loop the whole way.
+            does what it does - with a human in the loop the whole way.
           </p>
         </motion.div>
 

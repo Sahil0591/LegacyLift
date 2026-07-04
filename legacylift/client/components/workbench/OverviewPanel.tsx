@@ -1,5 +1,5 @@
 "use client";
-// OverviewPanel — the "we mapped your codebase" dashboard: headline numbers,
+// OverviewPanel - the "we mapped your codebase" dashboard: headline numbers,
 // risk distribution, the dependency graph, and the extracted business rules.
 
 import {
@@ -210,7 +210,7 @@ export function OverviewPanel({
         />
       </div>
 
-      {/* Migration context & instructions — the "README for the AI agent" */}
+      {/* Migration context & instructions - the "README for the AI agent" */}
       <div data-tour="migration-context">
         <ContextPanel
           config={config}
@@ -271,7 +271,7 @@ export function OverviewPanel({
         </div>
       </CollapsibleCard>
 
-      {/* Lessons learned — the feedback loop's memory, made visible */}
+      {/* Lessons learned - the feedback loop's memory, made visible */}
       {lessons.length > 0 && (
         <CollapsibleCard
           title="Lessons learned"

@@ -1,4 +1,4 @@
-// StatusBadge — Coloured pill badge for rule status, chunk status, risk level,
+// StatusBadge - Coloured pill badge for rule status, chunk status, risk level,
 // and ownership category. Maps enum values to the LegacyLift design system colours.
 //
 // TODO: Add tooltip with description of what each status means for new users.

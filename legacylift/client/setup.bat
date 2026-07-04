@@ -1,5 +1,5 @@
 @echo off
-:: LegacyLift client setup — Windows only, runs inside client/ directory.
+:: LegacyLift client setup - Windows only, runs inside client/ directory.
 :: Does NOT touch the parent legacylift/ Python environment.
 
 echo.
@@ -28,7 +28,7 @@ if not exist .env.local (
     copy .env.local.example .env.local
     echo       .env.local created.
 ) else (
-    echo       .env.local already exists — skipping.
+    echo       .env.local already exists - skipping.
 )
 
 echo.

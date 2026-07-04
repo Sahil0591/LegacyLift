@@ -1,5 +1,5 @@
 "use client";
-// ApprovalControls — Right panel action buttons for approving, editing, or rejecting
+// ApprovalControls - Right panel action buttons for approving, editing, or rejecting
 // the current chunk or business rule. Reject requires a mandatory reason text field.
 // Override mode forces approval with a reason for audit trail.
 //
@@ -56,7 +56,7 @@ export function ApprovalControls({
         <p className="text-xs text-[#888888]">{chunkId}</p>
       </div>
 
-      {/* Action buttons — only enabled when status is Review */}
+      {/* Action buttons - only enabled when status is Review */}
       <div className="flex flex-col gap-2">
         <button
           onClick={() => handle(() => onApprove(chunkId))}

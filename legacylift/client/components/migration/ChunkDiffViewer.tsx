@@ -1,5 +1,5 @@
 "use client";
-// ChunkDiffViewer — Side-by-side diff of legacy source (left) vs migrated Python (right).
+// ChunkDiffViewer - Side-by-side diff of legacy source (left) vs migrated Python (right).
 // Uses react-diff-viewer-continued with a dark theme matching the design system.
 // Populated by chunk_ready_for_approval WebSocket event.
 //

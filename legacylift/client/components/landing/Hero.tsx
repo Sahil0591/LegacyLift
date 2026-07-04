@@ -12,7 +12,7 @@ export function Hero() {
   const router = useRouter();
   const [repoUrl, setRepoUrl] = useState(SAMPLE_REPO);
 
-  // Hand the typed repo off to the migration page with the URL prefilled — the
+  // Hand the typed repo off to the migration page with the URL prefilled - the
   // user picks source/target language there and kicks off the analysis, so the
   // landing page stays a fast, no-network entry point.
   const handleSubmit = (e: React.FormEvent) => {
@@ -55,11 +55,11 @@ export function Hero() {
           className="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-sub"
         >
           Paste a repository. LegacyLift maps every business rule and
-          dependency, scores the risk, and migrates it chunk by chunk — with a
+          dependency, scores the risk, and migrates it chunk by chunk - with a
           human approving every single step.
         </motion.p>
 
-        {/* Repo input — the live entry point into the migration flow */}
+        {/* Repo input - the live entry point into the migration flow */}
         <motion.form
           onSubmit={handleSubmit}
           initial={{ opacity: 0, y: 20 }}

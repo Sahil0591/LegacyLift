@@ -1,9 +1,9 @@
-// lib/targetLanguages.ts — The catalog of languages LegacyLift can migrate INTO.
+// lib/targetLanguages.ts - The catalog of languages LegacyLift can migrate INTO.
 //
 // Legacy migrations don't fan into a single language: core banking tends to go
 // to Java, stored procedures stay in SQL/PL-SQL, analytics goes to Python, and
 // so on. This catalog carries the per-language guidance the AI needs to produce
-// *idiomatic* target code (not "Python with a different name") — numeric/money
+// *idiomatic* target code (not "Python with a different name") - numeric/money
 // policy, date handling, typing, style, concurrency, and the test framework.
 //
 // Mirrors the backend MVP target catalog. Python is the active baseline; the
@@ -70,7 +70,7 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     typeSystem:
       "Full type hints on public interfaces; dataclasses or Pydantic for structured records.",
     numericPolicy:
-      "Use decimal.Decimal for money and regulated calculations — never float. Reproduce COBOL COMPUTE … ROUNDED with ROUND_HALF_UP.",
+      "Use decimal.Decimal for money and regulated calculations - never float. Reproduce COBOL COMPUTE … ROUNDED with ROUND_HALF_UP.",
     datePolicy:
       "Use datetime.date / datetime.datetime with explicit time zones when timestamps cross system boundaries.",
     asyncModel:
@@ -95,11 +95,11 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     codegenSupported: true,
     testFramework: "JUnit 5",
     styleGuide:
-      "Modern Java service style — clear packages, records where appropriate, explicit domain types.",
+      "Modern Java service style - clear packages, records where appropriate, explicit domain types.",
     typeSystem:
       "Strong domain types, records for immutable values, sealed types for constrained variants, Optional at API edges.",
     numericPolicy:
-      "Use BigDecimal for money and deterministic decimal arithmetic — never double for ledgers, fees, limits, or settlement. Set scale and RoundingMode explicitly.",
+      "Use BigDecimal for money and deterministic decimal arithmetic - never double for ledgers, fees, limits, or settlement. Set scale and RoundingMode explicitly.",
     datePolicy:
       "Use java.time types; keep time zones explicit at integration boundaries; avoid legacy Date/Calendar.",
     asyncModel:
@@ -128,7 +128,7 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     typeSystem:
       "Nullable reference types, records for immutable values, explicit domain types for identifiers and money.",
     numericPolicy:
-      "Use decimal for financial values with an explicit MidpointRounding — never double for balances or reconciliation.",
+      "Use decimal for financial values with an explicit MidpointRounding - never double for balances or reconciliation.",
     datePolicy:
       "Use DateOnly, TimeOnly, or DateTimeOffset where boundary precision matters.",
     asyncModel:
@@ -153,11 +153,11 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     status: "active_experimental",
     codegenSupported: true,
     testFramework: "GoogleTest",
-    styleGuide: "C++ Core Guidelines — RAII, narrow interfaces, explicit ownership.",
+    styleGuide: "C++ Core Guidelines - RAII, narrow interfaces, explicit ownership.",
     typeSystem:
       "Value types, spans/views for non-owning access, smart pointers for ownership, templates only where they reduce duplication safely.",
     numericPolicy:
-      "Use fixed-point, decimal, or a vetted quant library for money — avoid binary floating-point drift in settlement-sensitive logic.",
+      "Use fixed-point, decimal, or a vetted quant library for money - avoid binary floating-point drift in settlement-sensitive logic.",
     datePolicy:
       "Use <chrono> with explicit calendars and time-zone assumptions; document exchange calendars and cut-offs.",
     asyncModel:
@@ -245,7 +245,7 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     typeSystem:
       "Small interfaces, explicit structs, typed errors; avoid interface{}/any for domain data.",
     numericPolicy:
-      "Use shopspring/decimal (or integer minor units) for money — never float64 for financial values.",
+      "Use shopspring/decimal (or integer minor units) for money - never float64 for financial values.",
     datePolicy:
       "Use time.Time with explicit locations; avoid implicit local-time assumptions.",
     asyncModel:
@@ -273,7 +273,7 @@ export const TARGET_LANGUAGES: TargetLanguage[] = [
     typeSystem:
       "strict tsconfig; discriminated unions for states, branded types for identifiers and money, no any.",
     numericPolicy:
-      "Use decimal.js (or bigint minor units) for money — never the JS number type for financial values.",
+      "Use decimal.js (or bigint minor units) for money - never the JS number type for financial values.",
     datePolicy:
       "Use a typed date library (Temporal or date-fns) with explicit time zones; avoid ambiguous Date parsing.",
     asyncModel: "async/await with typed Promises; never leave promises floating.",

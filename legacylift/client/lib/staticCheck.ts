@@ -1,4 +1,4 @@
-// lib/staticCheck.ts — deterministic static analysis of generated Python.
+// lib/staticCheck.ts - deterministic static analysis of generated Python.
 // Runs in the browser (no Python runtime needed): bracket/quote balance, a
 // definition sanity check, placeholder detection, and a cyclomatic-ish score.
 

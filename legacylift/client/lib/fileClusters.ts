@@ -1,4 +1,4 @@
-// lib/fileClusters.ts — Groups files into connected components via the
+// lib/fileClusters.ts - Groups files into connected components via the
 // dependency graph, so finalizing a file can be gated on every file it's
 // transitively linked to also being ready (not just direct neighbors).
 
