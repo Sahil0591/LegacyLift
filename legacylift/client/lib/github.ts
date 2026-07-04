@@ -4,7 +4,7 @@
 
 import type { InputFile } from "@/lib/analyze";
 
-const CODE_EXT = /\.(cbl|cob|cobol|cpy|jcl)$/i;
+const CODE_EXT = /\.(cbl|cob|cobol|cpy|jcl|java|bas|cls|frm|ctl)$/i;
 const MAX_FILES = 25;
 const MAX_BYTES = 200_000;
 
@@ -89,7 +89,7 @@ export async function fetchRepoFiles(
 
   if (blobs.length === 0) {
     throw new GithubError(
-      "No COBOL files (.cbl/.cob/.cpy/.jcl) found in that repo.",
+      "No COBOL, Java or VB6 files (.cbl/.cob/.cpy/.jcl/.java/.bas/.cls/.frm) found in that repo.",
       422,
     );
   }

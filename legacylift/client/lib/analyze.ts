@@ -55,15 +55,20 @@ interface CodeUnit {
   id: string;
   name: string;
   file: string;
-  language: "cobol" | "generic";
+  language: "cobol" | "java" | "vb6" | "generic";
   source: string;
   startLine: number;
   endLine: number;
   calls: string[];
+  /** VB6 only: owning module/class/form (VB_Name) — used for intra-module call resolution. */
+  module?: string;
 }
 
-function detectLanguage(filename: string): "cobol" | "generic" {
-  return /\.(cbl|cob|cobol|cpy)$/i.test(filename) ? "cobol" : "generic";
+function detectLanguage(filename: string): "cobol" | "java" | "vb6" | "generic" {
+  if (/\.(cbl|cob|cobol|cpy)$/i.test(filename)) return "cobol";
+  if (/\.java$/i.test(filename)) return "java";
+  if (/\.(bas|cls|frm|ctl)$/i.test(filename)) return "vb6";
+  return "generic";
 }
 
 function slug(file: string, name: string): string {
@@ -82,17 +87,27 @@ function cobolLine(raw: string): { indicator: string; content: string } {
   return { indicator: raw[lead] === "*" ? "*" : " ", content: raw };
 }
 
-const COBOL_PARA = /^([A-Z0-9][A-Z0-9-]*)\s*\.\s*$/;
-const COBOL_SECTION = /^([A-Z0-9][A-Z0-9-]*)\s+SECTION\s*\.\s*$/i;
+// Case-insensitive char classes so lowercase / free-format COBOL (very common
+// in GnuCOBOL repos) is recognised, not only upper-case fixed-format source.
+const COBOL_PARA = /^([A-Za-z0-9][A-Za-z0-9-]*)\s*\.\s*$/;
+const COBOL_SECTION = /^([A-Za-z0-9][A-Za-z0-9-]*)\s+SECTION\s*\.\s*$/i;
+
+// Division/section keywords and lone statement verbs that match the bare
+// "WORD." shape of a paragraph header but are not paragraphs. Names are
+// upper-cased before lookup; scope terminators (END-IF. etc.) are excluded
+// separately via an "END-" prefix test.
 const NON_PARA = new Set([
-  "IDENTIFICATION",
-  "ENVIRONMENT",
-  "DATA",
-  "PROCEDURE",
-  "WORKING-STORAGE",
-  "LINKAGE",
-  "FILE",
-  "END",
+  "IDENTIFICATION", "ENVIRONMENT", "DATA", "PROCEDURE",
+  "WORKING-STORAGE", "LOCAL-STORAGE", "LINKAGE", "FILE",
+  "REPORT", "SCREEN", "CONFIGURATION", "INPUT-OUTPUT", "COMMUNICATION",
+  "END", "GOBACK", "EXIT", "CONTINUE", "STOP",
+]);
+
+// SECTION names that belong to the DATA / ENVIRONMENT divisions — never the
+// PROCEDURE division, so they must never become graph nodes.
+const NON_PROC_SECTION = new Set([
+  "WORKING-STORAGE", "LOCAL-STORAGE", "LINKAGE", "FILE",
+  "REPORT", "SCREEN", "CONFIGURATION", "INPUT-OUTPUT", "COMMUNICATION",
 ]);
 
 function splitCobol(file: string, content: string): CodeUnit[] {
@@ -106,23 +121,43 @@ function splitCobol(file: string, content: string): CodeUnit[] {
     const trimmed = content.trim();
     if (!trimmed) continue;
 
+    // A new program header, or END PROGRAM, leaves the procedure division.
+    // Without this reset inProcedure latches on at the first PROCEDURE DIVISION
+    // and every later (nested / batched) program's DATA DIVISION sections leak
+    // in as bogus "WORKING-STORAGE SECTION" nodes.
+    if (
+      /^(IDENTIFICATION|ENVIRONMENT|DATA)\s+DIVISION/i.test(trimmed) ||
+      /^END\s+PROGRAM\b/i.test(trimmed)
+    ) {
+      inProcedure = false;
+      continue;
+    }
     if (/PROCEDURE\s+DIVISION/i.test(trimmed)) {
       inProcedure = true;
       continue;
     }
     if (!inProcedure) continue;
-    // Headers start in Area A — the first content column (col 8) is non-space.
-    if (content[0] === " " || content[0] === "\t") continue;
+
+    // Header must sit in/near Area A. Fixed-format cols 8-11 map to 0-3 leading
+    // spaces here; the small tolerance also admits free-format paragraphs
+    // indented a space or two, while excluding Area-B statements that share the
+    // bare "WORD." shape (END-IF., GOBACK.).
+    if (content.length - content.trimStart().length > 3) continue;
 
     const sec = trimmed.match(COBOL_SECTION);
     if (sec) {
-      headers.push({ name: `${sec[1].toUpperCase()} SECTION`, line: i + 1 });
+      const base = sec[1].toUpperCase();
+      if (!NON_PROC_SECTION.has(base)) {
+        headers.push({ name: `${base} SECTION`, line: i + 1 });
+      }
       continue;
     }
     const para = trimmed.match(COBOL_PARA);
     if (para) {
       const name = para[1].toUpperCase();
-      if (!NON_PARA.has(name)) headers.push({ name, line: i + 1 });
+      if (!NON_PARA.has(name) && !name.startsWith("END-")) {
+        headers.push({ name, line: i + 1 });
+      }
     }
   }
 
@@ -168,14 +203,22 @@ function splitFiles(files: InputFile[]): { units: CodeUnit[]; skipped: string[] 
   const units: CodeUnit[] = [];
   const skipped: string[] = [];
   for (const f of files) {
+    const lang = detectLanguage(f.filename);
     const fileUnits =
-      detectLanguage(f.filename) === "cobol"
+      lang === "cobol"
         ? (() => {
             const cobolUnits = splitCobol(f.filename, f.content);
             // If splitting found nothing usable, fall back to whole-file unit.
             return cobolUnits.length > 0 ? cobolUnits : [wholeFileUnit(f)];
           })()
-        : [wholeFileUnit(f)];
+        : lang === "java"
+          ? splitJava(f.filename, f.content) // always returns >= 1 unit
+          : lang === "vb6"
+            ? (() => {
+                const vbUnits = splitVB6(f.filename, f.content);
+                return vbUnits.length > 0 ? vbUnits : [wholeFileUnit(f)];
+              })()
+            : [wholeFileUnit(f)];
 
     // Never split a single file's units across the cap boundary — slicing
     // mid-file silently drops paragraphs from whichever file happens to
@@ -203,6 +246,232 @@ function wholeFileUnit(f: InputFile): CodeUnit {
     endLine: f.content.split("\n").length,
     calls: extractCalls(f.content),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Java splitting — one unit per top-level type; edges via type references.
+// Java's real dependency structure is class-to-class (not COBOL's flat PERFORM
+// call graph), so we model it at class granularity: each class node links to
+// every OTHER project class it names by type (field/param/return/new/extends…).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Replace comment and string/char-literal *contents* with spaces (preserving
+// newlines) so braces, parens and keywords inside them can't confuse detection.
+function maskJava(content: string): string {
+  const out = content.split("");
+  const n = content.length;
+  const blank = (a: number, b: number) => {
+    for (let k = a; k < b; k++) if (out[k] !== "\n") out[k] = " ";
+  };
+  let i = 0;
+  while (i < n) {
+    const c = content[i];
+    const d = content[i + 1];
+    if (c === "/" && d === "/") {
+      let j = i + 2;
+      while (j < n && content[j] !== "\n") j++;
+      blank(i, j);
+      i = j;
+    } else if (c === "/" && d === "*") {
+      let j = i + 2;
+      while (j < n && !(content[j] === "*" && content[j + 1] === "/")) j++;
+      j = Math.min(n, j + 2);
+      blank(i, j);
+      i = j;
+    } else if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < n && content[j] !== c) {
+        if (content[j] === "\\") j++;
+        j++;
+      }
+      j = Math.min(n, j + 1);
+      blank(i + 1, j - 1);
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return out.join("");
+}
+
+// Capitalised identifiers referenced in a class body = its candidate type deps.
+// Edges only ever form to a KNOWN project class, so JDK/framework types (String,
+// List, @Override, …) are self-filtered out — no allow-list needed.
+function javaTypeRefs(maskedBody: string, exclude: Set<string>): string[] {
+  const refs = new Set<string>();
+  const re = /\b([A-Z][\w$]*)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(maskedBody))) {
+    if (!exclude.has(m[1])) refs.add(m[1]);
+  }
+  return [...refs];
+}
+
+function splitJava(file: string, content: string): CodeUnit[] {
+  const masked = maskJava(content);
+  const lineAt = (index: number) => masked.slice(0, Math.max(0, index)).split("\n").length;
+
+  // All type declarations, flagged as top-level (opened at brace depth 0).
+  const decls: { name: string; index: number; top: boolean }[] = [];
+  const re = /\b(?:class|interface|enum|record)\s+([A-Za-z_$][\w$]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(masked))) {
+    let depth = 0;
+    for (let k = 0; k < m.index; k++) {
+      const ch = masked[k];
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+    }
+    decls.push({ name: m[1], index: m.index, top: depth === 0 });
+  }
+
+  const tops = decls.filter((d) => d.top);
+  if (tops.length === 0) {
+    // No type declaration (e.g. package-info.java) — keep as a single unit.
+    const name = file.replace(/\.[^.]+$/, "");
+    return [{
+      id: slug(file, name),
+      name,
+      file,
+      language: "java",
+      source: content,
+      startLine: 1,
+      endLine: content.split("\n").length,
+      calls: javaTypeRefs(masked, new Set([name])),
+    }];
+  }
+
+  // Exclude every type declared in THIS file (self + siblings + nested) so a
+  // class links only to classes defined elsewhere in the project.
+  const localTypeNames = new Set(decls.map((d) => d.name));
+  const units: CodeUnit[] = [];
+  for (let t = 0; t < tops.length; t++) {
+    const start = tops[t].index;
+    const end = t + 1 < tops.length ? tops[t + 1].index : content.length;
+    units.push({
+      id: slug(file, tops[t].name),
+      name: tops[t].name,
+      file,
+      language: "java",
+      source: content.slice(start, end),
+      startLine: lineAt(start),
+      endLine: lineAt(end - 1),
+      calls: javaTypeRefs(masked.slice(start, end), localTypeNames),
+    });
+  }
+  return units;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VB6 splitting — one unit per procedure (Sub / Function / Property), edges via
+// resolved call targets. VB6 legacy apps are procedural (like COBOL): modules
+// full of Subs/Functions that Call each other across .bas/.cls/.frm files, so
+// we model it as a procedure call graph, not a class-reference graph.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Statement/declaration keywords that can start a line — excluded when guessing
+// a bare (parenless) Sub call from the first token of a statement.
+const VB_KEYWORDS = new Set([
+  "IF", "THEN", "ELSE", "ELSEIF", "END", "ENDIF", "FOR", "NEXT", "DO", "LOOP",
+  "WHILE", "WEND", "SELECT", "CASE", "WITH", "SET", "LET", "DIM", "REDIM",
+  "CONST", "STATIC", "PUBLIC", "PRIVATE", "FRIEND", "GLOBAL", "SUB", "FUNCTION",
+  "PROPERTY", "EXIT", "ON", "ERROR", "RESUME", "GOTO", "GOSUB", "RETURN", "CALL",
+  "OPEN", "CLOSE", "PRINT", "GET", "PUT", "WRITE", "INPUT", "LINE", "ERASE",
+  "RANDOMIZE", "OPTION", "DECLARE", "TYPE", "ENUM", "REM", "STOP", "DOEVENTS",
+  "ME", "NOTHING", "TRUE", "FALSE", "AND", "OR", "NOT", "XOR", "IS", "NEW",
+  "BYVAL", "BYREF", "AS", "TO", "STEP", "EACH", "IN", "BEGIN", "ATTRIBUTE",
+  "VERSION", "MSGBOX", "DEBUG", "APP", "ERR", "SCREEN", "OPTIONAL", "PARAMARRAY",
+  "EMPTY", "NULL", "MOD", "LIKE", "WITHEVENTS", "EVENT", "RAISEEVENT", "IMPLEMENTS",
+]);
+
+// Blank VB6 comments ( ' … EOL, and whole-line Rem ) and string-literal contents
+// so keywords/identifiers inside them can't be mistaken for procedures or calls.
+// VB6 escapes a quote inside a string by doubling it ("").
+function maskVB6(content: string): string {
+  return content.split("\n").map((raw) => {
+    if (/^\s*Rem\b/i.test(raw)) return raw.replace(/\S/g, " ");
+    let out = "";
+    let inStr = false;
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i];
+      if (inStr) {
+        if (c === '"') {
+          if (raw[i + 1] === '"') { out += "  "; i++; } // escaped quote
+          else { out += '"'; inStr = false; }
+        } else out += " ";
+      } else if (c === '"') { inStr = true; out += '"'; }
+      else if (c === "'") { out += " ".repeat(raw.length - i); break; }
+      else out += c;
+    }
+    return out;
+  }).join("\n");
+}
+
+const VB_PROC_HDR =
+  /^\s*(?:(?:Public|Private|Friend|Global)\s+)?(?:Static\s+)?(?:Sub|Function|Property\s+(?:Get|Let|Set))\s+([A-Za-z_][A-Za-z0-9_]*)/i;
+const VB_PROC_END = /^\s*End\s+(?:Sub|Function|Property)\b/i;
+
+// Candidate call targets in a (masked) procedure body: Call X / Call M.X,
+// F(...) function calls, qualified M.P / obj.Method, and bare statement calls.
+function extractVBCalls(body: string): string[] {
+  const calls = new Set<string>();
+  let m: RegExpExecArray | null;
+  const callKw = /\bCall\s+([A-Za-z_]\w*)(?:\.([A-Za-z_]\w*))?/gi;
+  while ((m = callKw.exec(body))) {
+    if (m[2]) { calls.add(m[2]); calls.add(`${m[1]}.${m[2]}`); }
+    else calls.add(m[1]);
+  }
+  const paren = /\b([A-Za-z_]\w*)\s*\(/g;
+  while ((m = paren.exec(body))) calls.add(m[1]);
+  const qualified = /\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)/g;
+  while ((m = qualified.exec(body))) { calls.add(m[2]); calls.add(`${m[1]}.${m[2]}`); }
+  for (const line of body.split("\n")) {
+    // Bare statement call: "Foo args" or a lone "Foo", but not an assignment
+    // (Foo =), label (Foo:), member ref (Foo.) or the start of an expression.
+    const b = line.match(/^\s*([A-Za-z_]\w*)(?:\s+(?![=.(:&<>+\-*/\\^])|\s*$)/);
+    if (b && !VB_KEYWORDS.has(b[1].toUpperCase())) calls.add(b[1]);
+  }
+  return [...calls];
+}
+
+function splitVB6(file: string, content: string): CodeUnit[] {
+  const masked = maskVB6(content);
+  const mLines = masked.split("\n");
+  const rawLines = content.split("\n");
+  const module =
+    content.match(/Attribute\s+VB_Name\s*=\s*"([^"]+)"/i)?.[1] ??
+    file.replace(/\.[^.]+$/, "");
+
+  const units: CodeUnit[] = [];
+  let cur: { proc: string; start: number } | null = null;
+  const close = (endLine: number) => {
+    if (!cur) return;
+    const name = `${module}.${cur.proc}`;
+    units.push({
+      id: slug(file, name),
+      name,
+      file,
+      language: "vb6",
+      module,
+      source: rawLines.slice(cur.start - 1, endLine).join("\n"),
+      startLine: cur.start,
+      endLine,
+      calls: extractVBCalls(mLines.slice(cur.start - 1, endLine).join("\n")),
+    });
+    cur = null;
+  };
+
+  for (let i = 0; i < mLines.length; i++) {
+    const hdr = mLines[i].match(VB_PROC_HDR);
+    if (hdr) {
+      if (cur) close(i); // defensive: previous proc had no End marker
+      cur = { proc: hdr[1], start: i + 1 };
+      continue;
+    }
+    if (cur && VB_PROC_END.test(mLines[i])) close(i + 1);
+  }
+  if (cur) close(mLines.length);
+  return units;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -274,21 +543,66 @@ function scoreUnit(unit: CodeUnit, fanIn: number): RiskResult {
     if (values.length >= 4)
       reasons.push(`${values.length} hardcoded values`);
   }
-  // Rule 6 — commented-out / dead code.
+  // Rule 6 — commented-out / dead code. The comment leader differs by language;
+  // Java javadoc lines also start with "*", so skip Java to avoid misfires.
   const lines = src.split("\n");
-  const dead = lines.filter((l) => l.trim().startsWith("*")).length;
-  const deadRatio = lines.length ? dead / lines.length : 0;
-  if (deadRatio > 0.12) {
-    score += Math.min(deadRatio * 0.3, 0.1);
-    reasons.push("Commented-out code present");
+  if (unit.language !== "java") {
+    const isDead =
+      unit.language === "vb6"
+        ? (l: string) => l.trimStart().startsWith("'") || /^\s*Rem\b/i.test(l)
+        : (l: string) => l.trim().startsWith("*");
+    const dead = lines.filter(isDead).length;
+    const deadRatio = lines.length ? dead / lines.length : 0;
+    if (deadRatio > 0.12) {
+      score += Math.min(deadRatio * 0.3, 0.1);
+      reasons.push("Commented-out code present");
+    }
   }
-  // Rule 7 — external I/O / DB.
-  if (/\b(EXEC\s+SQL|CALL|WRITE|READ|REWRITE|DELETE)\b/i.test(src)) {
+  // Rule 7 — external I/O / DB. Skipped for VB6, where CALL is a plain procedure
+  // invocation (not I/O) and would fire on nearly every unit; VB6 gets its own
+  // DB-access signal below.
+  if (unit.language !== "vb6" && /\b(EXEC\s+SQL|CALL|WRITE|READ|REWRITE|DELETE)\b/i.test(src)) {
     score += 0.08;
     reasons.push("External I/O");
   }
   // Rule 8 — size.
   score += Math.min(lines.length / 400, 0.1);
+
+  // Java-specific signals.
+  if (unit.language === "java") {
+    if (/\b(?:float|double)\b/.test(src) && MONEY_WORDS.test(src)) {
+      score += 0.2;
+      reasons.push("float/double on monetary value");
+    }
+    if (/\b(?:executeQuery|executeUpdate|PreparedStatement|createStatement|Statement|EntityManager|createQuery|getConnection)\b/.test(src)) {
+      score += 0.1;
+      reasons.push("Database access");
+    }
+  }
+
+  // VB6-specific signals.
+  if (unit.language === "vb6") {
+    if (/\b(?:Single|Double)\b/i.test(src) && MONEY_WORDS.test(src)) {
+      score += 0.2;
+      reasons.push("Single/Double on monetary value");
+    }
+    if (/\bVariant\b/i.test(src)) {
+      score += 0.06;
+      reasons.push("Loosely-typed Variant");
+    }
+    if (/On\s+Error\s+Resume\s+Next/i.test(src)) {
+      score += 0.1;
+      reasons.push("Errors silently swallowed (On Error Resume Next)");
+    }
+    if (/\b(?:ADODB|Recordset|Connection)\b|\.Execute\b|\b(?:SELECT|INSERT|UPDATE)\b/i.test(src)) {
+      score += 0.1;
+      reasons.push("Database access");
+    }
+    if (/\bGo(?:To|Sub)\b/i.test(src)) {
+      score += 0.05;
+      reasons.push("GoTo/GoSub control flow");
+    }
+  }
 
   const final = clamp01(Number(score.toFixed(3)));
   return { score: final, level: levelFromScore(final), reasons, values };
@@ -322,8 +636,116 @@ function confidenceFor(risk: RiskResult): RuleConfidence {
 }
 
 function nodeType(unit: CodeUnit): DependencyNode["type"] {
+  if (unit.language === "java") return "section"; // one node per class
+  if (unit.language === "vb6") return "paragraph"; // one node per procedure
   if (unit.language !== "cobol") return "external";
   return unit.name.endsWith("SECTION") ? "section" : "paragraph";
+}
+
+// Resolve a PERFORM / CALL / GO TO target name to the unit it actually refers
+// to. A plain name-equality check misses the two most common real-world COBOL
+// shapes, which is why repos rendered as nodes with no connecting edges:
+//   • SECTION units are stored as "NAME SECTION" but performed as just "NAME".
+//   • Cross-program CALL 'PROG' targets a PROGRAM-ID / file, not a paragraph.
+// Paragraph and section names are registered first so an exact paragraph match
+// always wins over a program-level (PROGRAM-ID / filename) fallback.
+function buildCallResolver(
+  units: CodeUnit[],
+  files: InputFile[],
+): Map<string, CodeUnit> {
+  const resolve = new Map<string, CodeUnit>();
+  const reg = (key: string, u: CodeUnit) => {
+    const k = key.toUpperCase();
+    if (k && !resolve.has(k)) resolve.set(k, u);
+  };
+
+  for (const u of units) {
+    reg(u.name, u);
+    const bare = u.name.replace(/\s+SECTION$/i, "");
+    if (bare !== u.name) reg(bare, u);
+  }
+
+  // Program-level entry points: PROGRAM-ID and file stem → that file's first
+  // unit, so a cross-program CALL lands on the callee's entry paragraph.
+  const entryByFile = new Map<string, CodeUnit>();
+  for (const u of units) if (!entryByFile.has(u.file)) entryByFile.set(u.file, u);
+  for (const f of files) {
+    const entry = entryByFile.get(f.filename);
+    if (!entry) continue;
+    const pid = f.content.match(/\bPROGRAM-ID\.\s*([A-Z0-9][A-Z0-9-]*)/i)?.[1];
+    if (pid) reg(pid, entry);
+    reg(f.filename.replace(/\.[^.]+$/, ""), entry);
+  }
+
+  return resolve;
+}
+
+// Build all dependency edges + fan-in counts across languages. COBOL/generic
+// units resolve PERFORM/CALL targets through buildCallResolver; Java is modelled
+// at class granularity — each class links to every other project class it names.
+function buildGraphEdges(
+  units: CodeUnit[],
+  files: InputFile[],
+): { edges: { source: string; target: string }[]; fanIn: Map<string, number> } {
+  const edges: { source: string; target: string }[] = [];
+  const fanIn = new Map<string, number>();
+  const seen = new Set<string>();
+  const add = (source: string, targetName: string) => {
+    if (!targetName || targetName === source) return;
+    const key = `${source}\u0000${targetName}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push({ source, target: targetName });
+    fanIn.set(targetName, (fanIn.get(targetName) ?? 0) + 1);
+  };
+
+  // COBOL (and generic fallback) — PERFORM/CALL/GO TO resolution.
+  const cobolResolve = buildCallResolver(
+    units.filter((u) => u.language === "cobol" || u.language === "generic"),
+    files,
+  );
+  for (const u of units) {
+    if (u.language !== "cobol" && u.language !== "generic") continue;
+    for (const c of u.calls) {
+      const target = cobolResolve.get(c);
+      if (target) add(u.name, target.name);
+    }
+  }
+
+  // Java — connect a class to every other project class it references by type.
+  const javaByName = new Map<string, CodeUnit>();
+  for (const u of units) if (u.language === "java") javaByName.set(u.name, u);
+  for (const u of units) {
+    if (u.language !== "java") continue;
+    for (const c of u.calls) {
+      const target = javaByName.get(c);
+      if (target) add(u.name, target.name);
+    }
+  }
+
+  // VB6 — procedure call graph. Resolve a qualified Module.Proc precisely; a
+  // bare Proc resolves to the caller's own module first, then to any module.
+  const vbByQualified = new Map<string, CodeUnit>();
+  const vbByProc = new Map<string, CodeUnit>();
+  for (const u of units) {
+    if (u.language !== "vb6") continue;
+    vbByQualified.set(u.name.toUpperCase(), u);
+    const proc = (u.module ? u.name.slice(u.module.length + 1) : u.name).toUpperCase();
+    if (!vbByProc.has(proc)) vbByProc.set(proc, u);
+  }
+  for (const u of units) {
+    if (u.language !== "vb6") continue;
+    const mod = (u.module ?? "").toUpperCase();
+    for (const c of u.calls) {
+      const cu = c.toUpperCase();
+      const target = cu.includes(".")
+        ? vbByQualified.get(cu)
+        : vbByQualified.get(`${mod}.${cu}`) ?? vbByProc.get(cu);
+      if (target) add(u.name, target.name);
+    }
+  }
+
+  return { edges, fanIn };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -355,15 +777,10 @@ export function analyzeFiles(
     );
   }
 
-  // Fan-in: how many units call each unit name.
-  const byName = new Map<string, CodeUnit>();
-  for (const u of units) byName.set(u.name, u);
-  const fanIn = new Map<string, number>();
-  for (const u of units) {
-    for (const c of u.calls) {
-      if (byName.has(c)) fanIn.set(c, (fanIn.get(c) ?? 0) + 1);
-    }
-  }
+  // Dependency edges + fan-in across languages (COBOL PERFORM/CALL graph, Java
+  // class-reference graph). Computed once, up front, so risk scoring below can
+  // use fan-in.
+  const { edges, fanIn } = buildGraphEdges(units, usable);
 
   const riskScores: Record<string, number> = {};
   const chunks: MigrationChunk[] = [];
@@ -421,21 +838,14 @@ export function analyzeFiles(
     void i;
   });
 
-  // Dependency graph from calls between known units.
+  // Nodes: one per unit (COBOL paragraph/section, Java class). Edges were
+  // computed above in buildGraphEdges.
   const nodes: DependencyNode[] = units.map((u) => ({
     id: u.name,
     label: u.name,
     file: u.file,
     type: nodeType(u),
   }));
-  const edges = [];
-  for (const u of units) {
-    for (const c of u.calls) {
-      if (byName.has(c) && c !== u.name) {
-        edges.push({ source: u.name, target: c });
-      }
-    }
-  }
 
   const scoreValues = Object.values(riskScores);
   const avgRisk = scoreValues.length

@@ -6,7 +6,11 @@ services:
     dockerfilePath: legacylift/server/Dockerfile
     dockerContext: legacylift/server
     healthCheckPath: /health
-    autoDeployTrigger: commit
+    # Deploy only after required GitHub checks pass (the "CI gate" in
+    # .github/workflows/deploy.yml) rather than on every commit, so a red build
+    # never reaches production. Requires branch protection on `main` — see that
+    # workflow's header for the one-time setup.
+    autoDeployTrigger: checksPass
     envVars:
       - key: DEMO_MODE
         value: "false"
@@ -45,7 +49,10 @@ services:
     rootDir: legacylift/client
     buildCommand: npm ci && npm run build
     startCommand: npm run start -- -p $PORT
-    autoDeployTrigger: commit
+    # Legacy: the production frontend is served by Vercel; this Render client
+    # service is retained only for its cross-service hostname reference. Gate it
+    # on checks too so it can't race a red build.
+    autoDeployTrigger: checksPass
     envVars:
       - key: NODE_VERSION
         value: "20"

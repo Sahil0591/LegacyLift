@@ -487,7 +487,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
                 recoverable=True,
             )
             await _transition(project, "ready")
-            asyncio.ensure_future(storage.persist())
+            storage.schedule_persist()
             return
 
         await ws_manager.emit(
@@ -642,7 +642,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             layer3_result.passed,
             layer3_result.total,
         )
-        asyncio.ensure_future(storage.persist())
+        storage.schedule_persist()
 
     except Exception as exc:
         logger.error(
@@ -661,7 +661,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         current = project.status if isinstance(project.status, str) else project.status.value
         if current == "migrating":
             await _transition(project, "ready")
-        asyncio.ensure_future(storage.persist())
+        storage.schedule_persist()
 
 
 # ---------------------------------------------------------------------------

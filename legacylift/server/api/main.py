@@ -58,7 +58,13 @@ from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition, _add_lesson
 from core.storage import storage
 from db.session import get_database_url, get_session, init_db, validate_database_url
-from integrations.github_app import GitHubAppSettings, verify_webhook_signature
+from integrations.github_app import (
+    GitHubAppAuthError,
+    GitHubAppInstallationAuth,
+    GitHubAppSettings,
+    verify_webhook_signature,
+)
+from integrations.github_client import GitHubClientProtocol
 from integrations.github_ingestion import process_github_webhook
 from models.project import Project, SourceLanguage, UploadedFile
 from ownership.review_workflow import (
@@ -114,6 +120,25 @@ def _get_project_lock(project_id: str) -> asyncio.Lock:
     return _project_locks[project_id]
 
 
+def _spawn_tracked(coro, *, key: str, registry: dict[str, asyncio.Task]) -> asyncio.Task:
+    """Launch a background task that keeps a strong reference (so it isn't
+    garbage-collected mid-flight), logs any exception instead of letting it die
+    silently, and evicts itself from `registry` on completion so the map can't
+    leak. asyncio tasks are process-local — work stranded by a restart is
+    recovered separately by _reconcile_interrupted_projects() at startup."""
+    task = asyncio.create_task(coro)
+    registry[key] = task
+
+    def _on_done(finished: asyncio.Task) -> None:
+        if registry.get(key) is finished:
+            registry.pop(key, None)
+        if not finished.cancelled() and finished.exception() is not None:
+            logger.error("Background task %r failed", key, exc_info=finished.exception())
+
+    task.add_done_callback(_on_done)
+    return task
+
+
 # Env vars a DEMO_MODE=false deployment cannot function without. Checked at
 # startup so a misconfigured production deploy fails loudly instead of
 # silently serving demo/stub behaviour or rejecting every request with 401s.
@@ -142,6 +167,40 @@ def _validate_production_env() -> None:
     validate_database_url(os.getenv("DATABASE_URL", ""))
 
 
+# States a project can be stranded in if the process dies mid-work, mapped to
+# the nearest stable state the user can safely resume from via normal endpoints
+# (uploading → POST /start re-runs Layer 0; ready → POST /select-chunk re-runs
+# migration). Both target transitions are idempotent to repeat.
+_INTERRUPTED_RESUME_STATE = {
+    "analysing": "uploading",
+    "migrating": "ready",
+}
+
+
+async def _reconcile_interrupted_projects() -> None:
+    """Recover work stranded by a restart.
+
+    Background pipeline tasks live only in the previous process, so any project
+    still parked in a transient state after boot would hang forever. Reset each
+    one to the nearest resumable state instead of stranding it, then flush once.
+    """
+    recovered = 0
+    for project in storage.all_projects():
+        resume_state = _INTERRUPTED_RESUME_STATE.get(_status_str(project))
+        if resume_state is None:
+            continue
+        logger.warning(
+            "Project %s was interrupted mid-'%s' by a restart — resetting to '%s'",
+            project.id, _status_str(project), resume_state,
+        )
+        project.status = resume_state
+        recovered += 1
+
+    if recovered:
+        await storage.persist()
+        logger.info("Reconciled %d interrupted project(s) after restart", recovered)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -162,6 +221,7 @@ async def lifespan(app: FastAPI):
     _validate_production_env()
     await storage.load()
     await init_db()
+    await _reconcile_interrupted_projects()
     yield
     await storage.persist()
     await storage.close()
@@ -284,14 +344,15 @@ async def health_check():
     try:
         async with get_session() as session:
             await session.execute(text("SELECT 1"))
-    except Exception as exc:
+    except Exception:
+        # Log full detail server-side; never leak driver/host internals to callers.
         logger.exception("health_check database=unavailable")
         return JSONResponse(
             status_code=503,
             content={
                 "status": "error",
                 "version": "0.1.0",
-                "database": {"status": "unavailable", "error": str(exc)},
+                "database": {"status": "unavailable"},
             },
         )
 
@@ -301,6 +362,36 @@ async def health_check():
 # ---------------------------------------------------------------------------
 # POST /github/webhook
 # ---------------------------------------------------------------------------
+
+# Caches installation tokens across webhooks (see GitHubAppInstallationAuth).
+_github_app_auth = GitHubAppInstallationAuth()
+
+
+async def _resolve_github_client(
+    event: str, payload: dict
+) -> GitHubClientProtocol | None:
+    """Build an authenticated GitHub App client for events that must call the
+    GitHub API (pull_request). Returns None — never a stub — when the app isn't
+    configured or the payload lacks an installation id; the ingestion layer then
+    records the event as unsynced instead of silently processing zero files."""
+    if event != "pull_request":
+        return None
+    if not _github_app_auth.is_configured():
+        logger.warning(
+            "pull_request webhook received but GitHub App is not configured "
+            "(GITHUB_APP_ID/GITHUB_PRIVATE_KEY) — PR files will not be synced"
+        )
+        return None
+    installation_id = str((payload.get("installation") or {}).get("id") or "")
+    if not installation_id:
+        logger.warning("pull_request webhook has no installation id — cannot authenticate")
+        return None
+    try:
+        return await _github_app_auth.client_for(installation_id)
+    except GitHubAppAuthError:
+        logger.exception("Failed to obtain GitHub installation token for %s", installation_id)
+        return None
+
 
 @app.post("/github/webhook", status_code=202)
 async def github_webhook(
@@ -331,6 +422,7 @@ async def github_webhook(
         )
         raise HTTPException(status_code=400, detail="Invalid GitHub webhook JSON") from exc
 
+    github_client = await _resolve_github_client(x_github_event, payload)
     async with get_session() as session:
         result = await process_github_webhook(
             session,
@@ -338,6 +430,7 @@ async def github_webhook(
             delivery_id=x_github_delivery,
             payload=payload,
             raw_body=body,
+            github_client=github_client,
         )
 
     repository = _github_payload_repository(payload)
@@ -424,10 +517,10 @@ async def readiness_check():
             async with get_session() as session:
                 await session.execute(text("SELECT 1"))
             database_status = "ok"
-        except Exception as exc:
+        except Exception:
+            # Log full detail server-side; response exposes only a coarse status.
             logger.exception("readiness_check database=unavailable")
             database_status = "unavailable"
-            database_error = str(exc)
 
     ready = demo_mode or (llm_configured and not missing_env and database_status == "ok")
 
@@ -465,7 +558,7 @@ async def create_project(body: CreateProjectRequest, user_id: str = Depends(get_
             )
         storage.put(project)
         storage.increment_projects_used(user_id)
-        asyncio.ensure_future(storage.persist())
+        storage.schedule_persist()
         return {
             "project_id": project.id,
             "name": project.name,
@@ -557,7 +650,7 @@ async def upload_files(
     if _status_str(project) == "created":
         project.status = "uploading"
 
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "files_uploaded": filenames,
@@ -581,8 +674,7 @@ async def start_pipeline(project_id: str, user_id: str = Depends(get_current_use
             detail=f"Pipeline already started (status: {current})",
         )
 
-    task = asyncio.create_task(run_pipeline(project))
-    active_pipelines[project_id] = task
+    _spawn_tracked(run_pipeline(project), key=project_id, registry=active_pipelines)
 
     return JSONResponse(
         status_code=202,
@@ -657,7 +749,7 @@ async def approve_chunk(
             await _transition(project, "ready")
         await ws_manager.emit(project.id, "ready_for_next_chunk")
 
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
@@ -702,7 +794,7 @@ async def reject_chunk(
         feedback=feedback,
     )
 
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
@@ -887,7 +979,7 @@ async def confirm_rule(
 
     project.chunk_rule_statuses[chunk_id] = review_state_label(transition.review_state)
 
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "chunk_id": chunk_id,
@@ -966,7 +1058,11 @@ async def select_chunk(project_id: str, chunk_id: str, user_id: str = Depends(ge
 
         project.selected_chunk_id = chunk_id
         await _transition(project, "migrating")
-        asyncio.create_task(run_migration_generation(project, chunk_id))
+        _spawn_tracked(
+            run_migration_generation(project, chunk_id),
+            key=project_id,
+            registry=active_pipelines,
+        )
 
     await ws_manager.emit(project.id, "chunk_selected", chunk_id=chunk_id)
 
@@ -1048,7 +1144,7 @@ async def add_lesson(project_id: str, body: AddLessonRequest, user_id: str = Dep
         source_file=body.source_file or "",
         chunk_name=body.chunk_name or "",
     )
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id":   project_id,
         "lesson":       project.lessons[-1],
@@ -1064,7 +1160,7 @@ async def delete_lesson(project_id: str, lesson_id: str, user_id: str = Depends(
     project.lessons = [l for l in project.lessons if l.get("id") != lesson_id]
     if len(project.lessons) == before:
         raise HTTPException(status_code=404, detail=f"Lesson '{lesson_id}' not found")
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id":   project_id,
         "lesson_id":    lesson_id,
@@ -1232,7 +1328,7 @@ async def import_project(body: ImportProjectRequest, user_id: str = Depends(get_
     )
     storage.put(project)
     storage.increment_projects_used(user_id)
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project.id,
         "name": project.name,
@@ -1310,7 +1406,7 @@ async def save_progress(
     per-chunk status, finalized files) for a cloud project."""
     project = _get_project(project_id, user_id)
     _apply_progress(project, body)
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {
         "project_id": project_id,
         "status": _status_str(project),
@@ -1341,7 +1437,7 @@ async def delete_project(project_id: str, user_id: str = Depends(get_current_use
     storage.delete(project_id)
     lim = storage.get_limits(user_id)
     lim.projects_used = max(0, lim.projects_used - 1)
-    asyncio.ensure_future(storage.persist())
+    storage.schedule_persist()
     return {"deleted": project_id}
 
 

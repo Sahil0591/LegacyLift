@@ -1,0 +1,170 @@
+# =============================================================================
+# LegacyLift — CI gate that coordinates the Vercel + Render + Neon deployments.
+#
+# Topology: frontend on Vercel, API on Render (Docker), Postgres on Neon.
+#
+# How coordination works (no deploy secrets required):
+#   1. This workflow runs the full server + client CI on every PR and on pushes
+#      to `main`, and rolls it up into a single required check: "CI gate".
+#   2. Branch protection on `main` requires "CI gate" to pass, so NO commit can
+#      land on `main` until it is green. That single rule gates BOTH platforms:
+#        - Render: render.yaml uses `autoDeployTrigger: checksPass`, so it only
+#          deploys a commit whose checks passed (belt-and-suspenders).
+#        - Vercel: deploys `main` on push, but since `main` is protected, the
+#          commit already passed this gate — frontend and backend promote as a
+#          versioned pair off the same green commit.
+#
+# One-time setup (see repo settings):
+#   - Settings → Branches → add a rule for `main`:
+#       ✔ Require status checks to pass  → select "CI gate"
+#       ✔ Require branches to be up to date before merging
+#   - Render: connect this repo (Blueprint). `checksPass` is already set.
+#   - Vercel: connect this repo; Production Branch = `main`.
+#
+# Rollback on a bad deploy (manual, per the chosen strategy):
+#   - Render:  Dashboard → legacylift-api → "Manual Deploy" → pick the last
+#              good commit, or "Rollback" to the previous live deploy.
+#   - Vercel:  Dashboard → Deployments → previous production deploy →
+#              "Instant Rollback" (⋯ → Promote to Production).
+#   - Run the "smoke-test" job below (workflow_dispatch) to confirm health
+#     after any deploy or rollback.
+# =============================================================================
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_smoke_test:
+        description: "Run the post-deploy smoke test against production"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  server-tests:
+    name: Server tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Run test suite
+        run: uv run pytest -q
+
+  client-build:
+    name: Client type-check & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: legacylift/client
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: legacylift/client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run type-check
+
+      # No `next lint` step: this project has no ESLint config/deps, so
+      # `next lint` would trigger interactive first-time setup and hang in CI.
+      # `next build` also skips linting when ESLint isn't configured, so nothing
+      # is lost. Add eslint-config-next + an .eslintrc and reinstate if desired.
+
+      # `next build` succeeds without Clerk keys (routes using auth() are
+      # dynamic); no build-time secrets needed.
+      - name: Build
+        run: npm run build
+
+  # Single required check to wire into branch protection. Green only when BOTH
+  # the server tests and the client build succeed, so a failure in either half
+  # blocks the merge — and therefore blocks both Render and Vercel deploys.
+  ci-gate:
+    name: CI gate
+    runs-on: ubuntu-latest
+    needs: [server-tests, client-build]
+    if: ${{ always() }}
+    steps:
+      - name: Verify all required jobs passed
+        if: ${{ needs.server-tests.result != 'success' || needs.client-build.result != 'success' }}
+        run: |
+          echo "CI gate FAILED — deploy is blocked:"
+          echo "  server-tests: ${{ needs.server-tests.result }}"
+          echo "  client-build: ${{ needs.client-build.result }}"
+          exit 1
+
+      - name: CI gate passed
+        run: echo "All checks green — this commit is safe for Render checksPass and Vercel to deploy."
+
+  # Post-deploy health verification. Run manually after a deploy/rollback:
+  #   Actions → deploy → Run workflow → run_smoke_test = true
+  # Set repo variables PRODUCTION_API_URL (Render) and PRODUCTION_APP_URL
+  # (Vercel) under Settings → Secrets and variables → Actions → Variables.
+  smoke-test:
+    name: Post-deploy smoke test
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_smoke_test }}
+    steps:
+      - name: Check API health (Render)
+        env:
+          API_URL: ${{ vars.PRODUCTION_API_URL }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "::error::PRODUCTION_API_URL repo variable is not set."
+            exit 1
+          fi
+          echo "GET $API_URL/health"
+          code=$(curl -sS -o /tmp/health.json -w "%{http_code}" "$API_URL/health")
+          cat /tmp/health.json; echo
+          echo "GET $API_URL/health/ready"
+          ready=$(curl -sS -o /tmp/ready.json -w "%{http_code}" "$API_URL/health/ready")
+          cat /tmp/ready.json; echo
+          if [ "$code" != "200" ] || [ "$ready" != "200" ]; then
+            echo "::error::API unhealthy (health=$code ready=$ready) — consider rolling back."
+            exit 1
+          fi
+          echo "API healthy."
+
+      - name: Check frontend reachable (Vercel)
+        env:
+          APP_URL: ${{ vars.PRODUCTION_APP_URL }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "PRODUCTION_APP_URL not set — skipping frontend check."
+            exit 0
+          fi
+          code=$(curl -sS -o /dev/null -w "%{http_code}" "$APP_URL")
+          echo "GET $APP_URL -> $code"
+          if [ "$code" -ge 500 ]; then
+            echo "::error::Frontend returned $code — consider rolling back."
+            exit 1
+          fi
+          echo "Frontend reachable."

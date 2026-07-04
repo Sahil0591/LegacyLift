@@ -3,12 +3,21 @@
 // Body: { files?: { filename, content }[] } OR { repoUrl }.
 
 import { NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { analyzeFiles, type InputFile } from "@/lib/analyze";
 import { fetchRepoFiles, GithubError } from "@/lib/github";
-import { rateLimit, clientKey } from "@/lib/rateLimit";
+import { rateLimit } from "@/lib/rateLimit";
 
 export async function POST(req: Request) {
-  const rl = rateLimit(`analyze:${clientKey(req)}`, 12, 60_000);
+  // Defense-in-depth: middleware already gates /api/analyze, but enforce here
+  // too so the handler can't run unauthenticated if the matcher ever drifts.
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Key the limiter by the authenticated user rather than a spoofable IP.
+  const rl = rateLimit(`analyze:${userId}`, 12, 60_000);
   if (!rl.ok) {
     return NextResponse.json(
       { error: `Too many analyses — try again in ${rl.retryAfter}s.` },
