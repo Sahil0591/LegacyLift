@@ -7,14 +7,19 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { Github, ArrowRight, FolderUp, Lock } from "lucide-react";
+import { Github, ArrowRight, FolderUp, Lock, ChevronDown } from "lucide-react";
 import { Navbar } from "@/components/shared/Navbar";
 import { Footer } from "@/components/shared/Footer";
 import { AmbientBackground } from "@/components/landing/AmbientBackground";
 import { FileUpload } from "@/components/pipeline/FileUpload";
 import { TargetLanguageSelect } from "@/components/workbench/TargetLanguageSelect";
 import { createProject, startPipeline, uploadFiles } from "@/lib/api";
-import { SAMPLE_REPO, startMigration } from "@/lib/startMigration";
+import {
+  REPO_PREFIX,
+  SAMPLE_REPO,
+  startMigration,
+  stripRepoPrefix,
+} from "@/lib/startMigration";
 import { DEFAULT_TARGET_ID, getTargetLanguage } from "@/lib/targetLanguages";
 import { DEMO_HERITAGE_PROJECT_ID, DEMO_PROJECT_ID } from "@/lib/demoData";
 import type { ProjectLanguage } from "@/types/legacylift";
@@ -27,8 +32,11 @@ function DemoPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [tab, setTab] = useState<Tab>("repo");
-  // Prefill from ?repo= when the landing-page hero hands off a repo URL.
-  const [repoUrl, setRepoUrl] = useState(searchParams.get("repo") ?? SAMPLE_REPO);
+  // Prefill from ?repo= when the landing-page hero hands off a repo URL. The
+  // input only holds the editable "org/repo" path; github.com/ is a fixed prefix.
+  const [repoPath, setRepoPath] = useState(
+    stripRepoPrefix(searchParams.get("repo") ?? SAMPLE_REPO),
+  );
   const [repoLang, setRepoLang] = useState<ProjectLanguage>("COBOL");
   const [repoTarget, setRepoTarget] = useState<string>(DEFAULT_TARGET_ID);
   const [loading, setLoading] = useState(false);
@@ -42,7 +50,7 @@ function DemoPageContent() {
       // /demo is behind Clerk middleware, so the user is always signed in here;
       // startMigration persists to the DB and falls back to localStorage.
       const id = await startMigration({
-        repoUrl,
+        repoUrl: `${REPO_PREFIX}${stripRepoPrefix(repoPath.trim())}`,
         sourceLanguage: repoLang,
         targetId: repoTarget,
       });
@@ -152,14 +160,21 @@ function DemoPageContent() {
                     </label>
                     <div className="flex items-center gap-2.5 rounded-xl border border-ink/10 bg-surface/70 px-3.5 py-3 backdrop-blur transition-colors focus-within:border-[#7C3AED]">
                       <Github className="h-4 w-4 shrink-0 text-sub" />
-                      <input
-                        id="repo-url"
-                        value={repoUrl}
-                        onChange={(e) => setRepoUrl(e.target.value)}
-                        spellCheck={false}
-                        placeholder="github.com/org/repo"
-                        className="w-full bg-transparent font-mono text-sm text-ink outline-none placeholder:text-sub/60"
-                      />
+                      <div className="flex flex-1 items-center font-mono text-sm">
+                        <span className="shrink-0 select-none text-sub">
+                          {REPO_PREFIX}
+                        </span>
+                        <input
+                          id="repo-url"
+                          value={repoPath}
+                          onChange={(e) =>
+                            setRepoPath(stripRepoPrefix(e.target.value))
+                          }
+                          spellCheck={false}
+                          placeholder="org/repo"
+                          className="w-full bg-transparent text-ink outline-none placeholder:text-sub/60"
+                        />
+                      </div>
                     </div>
                     <p className="mt-2 flex items-center gap-1.5 text-xs text-sub">
                       <Lock className="h-3 w-3" />
@@ -183,7 +198,7 @@ function DemoPageContent() {
                           onChange={(e) =>
                             setRepoLang(e.target.value as ProjectLanguage)
                           }
-                          className="w-full appearance-none rounded-xl border border-ink/10 bg-surface/70 px-3 py-2 text-sm text-ink outline-none backdrop-blur transition-colors focus:border-[#7C3AED]"
+                          className="w-full appearance-none rounded-xl border border-ink/10 bg-surface/70 py-2 pl-3 pr-8 text-sm text-ink outline-none backdrop-blur transition-colors focus:border-[#7C3AED]"
                         >
                           {LANGUAGES.map((l) => (
                             <option key={l} value={l}>
@@ -191,6 +206,7 @@ function DemoPageContent() {
                             </option>
                           ))}
                         </select>
+                        <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sub" />
                       </div>
                     </div>
 
@@ -210,7 +226,7 @@ function DemoPageContent() {
 
                   <button
                     type="submit"
-                    disabled={loading || repoUrl.trim().length === 0}
+                    disabled={loading || repoPath.trim().length === 0}
                     className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#7C3AED] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-[#6D28D9] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {loading ? "Analyzing…" : "Analyze repository"}
