@@ -1,8 +1,10 @@
 "use client";
-// ToastStack — bottom-right notification stack for background job feedback
+// ToastStack — bottom-left notification stack for background job feedback
 // (chunk generation/checks finishing while the user is on Overview or another
-// chunk). Styled to match the workbench's existing badge language in
-// components/workbench/shared.tsx (rounded pills, `${color}1f` backgrounds).
+// chunk). Kept on the left so a "tests passed/failed" toast never covers the
+// bottom-right Approve & merge controls in the chunk review. Styled to match the
+// workbench's existing badge language in components/workbench/shared.tsx
+// (rounded pills, `${color}1f` backgrounds).
 
 import { CheckCircle2, AlertOctagon, Info, X } from "lucide-react";
 import type { Toast, ToastVariant } from "@/hooks/useToasts";
@@ -22,7 +24,7 @@ export function ToastStack({ toasts, onDismiss }: ToastStackProps) {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2">
+    <div className="pointer-events-none fixed bottom-4 left-4 z-50 flex w-80 flex-col gap-2">
       {toasts.map((toast) => {
         const { color, Icon } = VARIANT_META[toast.variant];
         return (
