@@ -55,16 +55,19 @@ interface CodeUnit {
   id: string;
   name: string;
   file: string;
-  language: "cobol" | "java" | "generic";
+  language: "cobol" | "java" | "vb6" | "generic";
   source: string;
   startLine: number;
   endLine: number;
   calls: string[];
+  /** VB6 only: owning module/class/form (VB_Name) — used for intra-module call resolution. */
+  module?: string;
 }
 
-function detectLanguage(filename: string): "cobol" | "java" | "generic" {
+function detectLanguage(filename: string): "cobol" | "java" | "vb6" | "generic" {
   if (/\.(cbl|cob|cobol|cpy)$/i.test(filename)) return "cobol";
   if (/\.java$/i.test(filename)) return "java";
+  if (/\.(bas|cls|frm|ctl)$/i.test(filename)) return "vb6";
   return "generic";
 }
 
@@ -210,7 +213,12 @@ function splitFiles(files: InputFile[]): { units: CodeUnit[]; skipped: string[] 
           })()
         : lang === "java"
           ? splitJava(f.filename, f.content) // always returns >= 1 unit
-          : [wholeFileUnit(f)];
+          : lang === "vb6"
+            ? (() => {
+                const vbUnits = splitVB6(f.filename, f.content);
+                return vbUnits.length > 0 ? vbUnits : [wholeFileUnit(f)];
+              })()
+            : [wholeFileUnit(f)];
 
     // Never split a single file's units across the cap boundary — slicing
     // mid-file silently drops paragraphs from whichever file happens to
@@ -355,6 +363,118 @@ function splitJava(file: string, content: string): CodeUnit[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VB6 splitting — one unit per procedure (Sub / Function / Property), edges via
+// resolved call targets. VB6 legacy apps are procedural (like COBOL): modules
+// full of Subs/Functions that Call each other across .bas/.cls/.frm files, so
+// we model it as a procedure call graph, not a class-reference graph.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Statement/declaration keywords that can start a line — excluded when guessing
+// a bare (parenless) Sub call from the first token of a statement.
+const VB_KEYWORDS = new Set([
+  "IF", "THEN", "ELSE", "ELSEIF", "END", "ENDIF", "FOR", "NEXT", "DO", "LOOP",
+  "WHILE", "WEND", "SELECT", "CASE", "WITH", "SET", "LET", "DIM", "REDIM",
+  "CONST", "STATIC", "PUBLIC", "PRIVATE", "FRIEND", "GLOBAL", "SUB", "FUNCTION",
+  "PROPERTY", "EXIT", "ON", "ERROR", "RESUME", "GOTO", "GOSUB", "RETURN", "CALL",
+  "OPEN", "CLOSE", "PRINT", "GET", "PUT", "WRITE", "INPUT", "LINE", "ERASE",
+  "RANDOMIZE", "OPTION", "DECLARE", "TYPE", "ENUM", "REM", "STOP", "DOEVENTS",
+  "ME", "NOTHING", "TRUE", "FALSE", "AND", "OR", "NOT", "XOR", "IS", "NEW",
+  "BYVAL", "BYREF", "AS", "TO", "STEP", "EACH", "IN", "BEGIN", "ATTRIBUTE",
+  "VERSION", "MSGBOX", "DEBUG", "APP", "ERR", "SCREEN", "OPTIONAL", "PARAMARRAY",
+  "EMPTY", "NULL", "MOD", "LIKE", "WITHEVENTS", "EVENT", "RAISEEVENT", "IMPLEMENTS",
+]);
+
+// Blank VB6 comments ( ' … EOL, and whole-line Rem ) and string-literal contents
+// so keywords/identifiers inside them can't be mistaken for procedures or calls.
+// VB6 escapes a quote inside a string by doubling it ("").
+function maskVB6(content: string): string {
+  return content.split("\n").map((raw) => {
+    if (/^\s*Rem\b/i.test(raw)) return raw.replace(/\S/g, " ");
+    let out = "";
+    let inStr = false;
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i];
+      if (inStr) {
+        if (c === '"') {
+          if (raw[i + 1] === '"') { out += "  "; i++; } // escaped quote
+          else { out += '"'; inStr = false; }
+        } else out += " ";
+      } else if (c === '"') { inStr = true; out += '"'; }
+      else if (c === "'") { out += " ".repeat(raw.length - i); break; }
+      else out += c;
+    }
+    return out;
+  }).join("\n");
+}
+
+const VB_PROC_HDR =
+  /^\s*(?:(?:Public|Private|Friend|Global)\s+)?(?:Static\s+)?(?:Sub|Function|Property\s+(?:Get|Let|Set))\s+([A-Za-z_][A-Za-z0-9_]*)/i;
+const VB_PROC_END = /^\s*End\s+(?:Sub|Function|Property)\b/i;
+
+// Candidate call targets in a (masked) procedure body: Call X / Call M.X,
+// F(...) function calls, qualified M.P / obj.Method, and bare statement calls.
+function extractVBCalls(body: string): string[] {
+  const calls = new Set<string>();
+  let m: RegExpExecArray | null;
+  const callKw = /\bCall\s+([A-Za-z_]\w*)(?:\.([A-Za-z_]\w*))?/gi;
+  while ((m = callKw.exec(body))) {
+    if (m[2]) { calls.add(m[2]); calls.add(`${m[1]}.${m[2]}`); }
+    else calls.add(m[1]);
+  }
+  const paren = /\b([A-Za-z_]\w*)\s*\(/g;
+  while ((m = paren.exec(body))) calls.add(m[1]);
+  const qualified = /\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)/g;
+  while ((m = qualified.exec(body))) { calls.add(m[2]); calls.add(`${m[1]}.${m[2]}`); }
+  for (const line of body.split("\n")) {
+    // Bare statement call: "Foo args" or a lone "Foo", but not an assignment
+    // (Foo =), label (Foo:), member ref (Foo.) or the start of an expression.
+    const b = line.match(/^\s*([A-Za-z_]\w*)(?:\s+(?![=.(:&<>+\-*/\\^])|\s*$)/);
+    if (b && !VB_KEYWORDS.has(b[1].toUpperCase())) calls.add(b[1]);
+  }
+  return [...calls];
+}
+
+function splitVB6(file: string, content: string): CodeUnit[] {
+  const masked = maskVB6(content);
+  const mLines = masked.split("\n");
+  const rawLines = content.split("\n");
+  const module =
+    content.match(/Attribute\s+VB_Name\s*=\s*"([^"]+)"/i)?.[1] ??
+    file.replace(/\.[^.]+$/, "");
+
+  const units: CodeUnit[] = [];
+  let cur: { proc: string; start: number } | null = null;
+  const close = (endLine: number) => {
+    if (!cur) return;
+    const name = `${module}.${cur.proc}`;
+    units.push({
+      id: slug(file, name),
+      name,
+      file,
+      language: "vb6",
+      module,
+      source: rawLines.slice(cur.start - 1, endLine).join("\n"),
+      startLine: cur.start,
+      endLine,
+      calls: extractVBCalls(mLines.slice(cur.start - 1, endLine).join("\n")),
+    });
+    cur = null;
+  };
+
+  for (let i = 0; i < mLines.length; i++) {
+    const hdr = mLines[i].match(VB_PROC_HDR);
+    if (hdr) {
+      if (cur) close(i); // defensive: previous proc had no End marker
+      cur = { proc: hdr[1], start: i + 1 };
+      continue;
+    }
+    if (cur && VB_PROC_END.test(mLines[i])) close(i + 1);
+  }
+  if (cur) close(mLines.length);
+  return units;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Risk RULES — every tier is derived, nothing hardcoded
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -423,19 +543,25 @@ function scoreUnit(unit: CodeUnit, fanIn: number): RiskResult {
     if (values.length >= 4)
       reasons.push(`${values.length} hardcoded values`);
   }
-  // Rule 6 — commented-out / dead code (COBOL/generic only; Java javadoc lines
-  // also start with "*", which would misfire on well-documented Java).
+  // Rule 6 — commented-out / dead code. The comment leader differs by language;
+  // Java javadoc lines also start with "*", so skip Java to avoid misfires.
   const lines = src.split("\n");
   if (unit.language !== "java") {
-    const dead = lines.filter((l) => l.trim().startsWith("*")).length;
+    const isDead =
+      unit.language === "vb6"
+        ? (l: string) => l.trimStart().startsWith("'") || /^\s*Rem\b/i.test(l)
+        : (l: string) => l.trim().startsWith("*");
+    const dead = lines.filter(isDead).length;
     const deadRatio = lines.length ? dead / lines.length : 0;
     if (deadRatio > 0.12) {
       score += Math.min(deadRatio * 0.3, 0.1);
       reasons.push("Commented-out code present");
     }
   }
-  // Rule 7 — external I/O / DB.
-  if (/\b(EXEC\s+SQL|CALL|WRITE|READ|REWRITE|DELETE)\b/i.test(src)) {
+  // Rule 7 — external I/O / DB. Skipped for VB6, where CALL is a plain procedure
+  // invocation (not I/O) and would fire on nearly every unit; VB6 gets its own
+  // DB-access signal below.
+  if (unit.language !== "vb6" && /\b(EXEC\s+SQL|CALL|WRITE|READ|REWRITE|DELETE)\b/i.test(src)) {
     score += 0.08;
     reasons.push("External I/O");
   }
@@ -451,6 +577,30 @@ function scoreUnit(unit: CodeUnit, fanIn: number): RiskResult {
     if (/\b(?:executeQuery|executeUpdate|PreparedStatement|createStatement|Statement|EntityManager|createQuery|getConnection)\b/.test(src)) {
       score += 0.1;
       reasons.push("Database access");
+    }
+  }
+
+  // VB6-specific signals.
+  if (unit.language === "vb6") {
+    if (/\b(?:Single|Double)\b/i.test(src) && MONEY_WORDS.test(src)) {
+      score += 0.2;
+      reasons.push("Single/Double on monetary value");
+    }
+    if (/\bVariant\b/i.test(src)) {
+      score += 0.06;
+      reasons.push("Loosely-typed Variant");
+    }
+    if (/On\s+Error\s+Resume\s+Next/i.test(src)) {
+      score += 0.1;
+      reasons.push("Errors silently swallowed (On Error Resume Next)");
+    }
+    if (/\b(?:ADODB|Recordset|Connection)\b|\.Execute\b|\b(?:SELECT|INSERT|UPDATE)\b/i.test(src)) {
+      score += 0.1;
+      reasons.push("Database access");
+    }
+    if (/\bGo(?:To|Sub)\b/i.test(src)) {
+      score += 0.05;
+      reasons.push("GoTo/GoSub control flow");
     }
   }
 
@@ -487,6 +637,7 @@ function confidenceFor(risk: RiskResult): RuleConfidence {
 
 function nodeType(unit: CodeUnit): DependencyNode["type"] {
   if (unit.language === "java") return "section"; // one node per class
+  if (unit.language === "vb6") return "paragraph"; // one node per procedure
   if (unit.language !== "cobol") return "external";
   return unit.name.endsWith("SECTION") ? "section" : "paragraph";
 }
@@ -550,11 +701,11 @@ function buildGraphEdges(
 
   // COBOL (and generic fallback) — PERFORM/CALL/GO TO resolution.
   const cobolResolve = buildCallResolver(
-    units.filter((u) => u.language !== "java"),
+    units.filter((u) => u.language === "cobol" || u.language === "generic"),
     files,
   );
   for (const u of units) {
-    if (u.language === "java") continue;
+    if (u.language !== "cobol" && u.language !== "generic") continue;
     for (const c of u.calls) {
       const target = cobolResolve.get(c);
       if (target) add(u.name, target.name);
@@ -568,6 +719,28 @@ function buildGraphEdges(
     if (u.language !== "java") continue;
     for (const c of u.calls) {
       const target = javaByName.get(c);
+      if (target) add(u.name, target.name);
+    }
+  }
+
+  // VB6 — procedure call graph. Resolve a qualified Module.Proc precisely; a
+  // bare Proc resolves to the caller's own module first, then to any module.
+  const vbByQualified = new Map<string, CodeUnit>();
+  const vbByProc = new Map<string, CodeUnit>();
+  for (const u of units) {
+    if (u.language !== "vb6") continue;
+    vbByQualified.set(u.name.toUpperCase(), u);
+    const proc = (u.module ? u.name.slice(u.module.length + 1) : u.name).toUpperCase();
+    if (!vbByProc.has(proc)) vbByProc.set(proc, u);
+  }
+  for (const u of units) {
+    if (u.language !== "vb6") continue;
+    const mod = (u.module ?? "").toUpperCase();
+    for (const c of u.calls) {
+      const cu = c.toUpperCase();
+      const target = cu.includes(".")
+        ? vbByQualified.get(cu)
+        : vbByQualified.get(`${mod}.${cu}`) ?? vbByProc.get(cu);
       if (target) add(u.name, target.name);
     }
   }
