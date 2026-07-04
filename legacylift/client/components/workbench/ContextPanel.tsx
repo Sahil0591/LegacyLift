@@ -48,6 +48,7 @@ export function ContextPanel({
   onGlobalChange,
   onFileChange,
 }: ContextPanelProps) {
+  const [open, setOpen] = useState(true);
   const [openFiles, setOpenFiles] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
 
@@ -69,18 +70,31 @@ export function ContextPanel({
 
   return (
     <div className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
-      <div className="flex items-start gap-3 border-b border-ink/10 px-5 py-3.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={`flex w-full items-start gap-3 px-5 py-3.5 text-left transition-colors hover:bg-ink/[0.02] ${
+          open ? "border-b border-ink/10" : ""
+        }`}
+      >
         <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#7C3AED]/12 text-[#7C3AED]">
           <BookMarked className="h-4 w-4" />
         </span>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-ink">Migration context &amp; instructions</h3>
           <p className="mt-0.5 text-xs text-sub">
             Sent with every migration — like a README the AI reads before touching your code.
           </p>
         </div>
-      </div>
+        {open ? (
+          <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-sub" />
+        ) : (
+          <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-sub" />
+        )}
+      </button>
 
+      {open && (
       <div className="space-y-5 p-5">
         {/* Project-wide */}
         <div>
@@ -176,6 +190,7 @@ export function ContextPanel({
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

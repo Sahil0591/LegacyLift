@@ -22,6 +22,8 @@ import { RiskBadge, STATUS_META } from "@/components/workbench/shared";
 
 interface ChunkReviewProps {
   chunk: MigrationChunk;
+  /** Legacy source language for this chunk's file, e.g. "COBOL", "Java". */
+  sourceLabel?: string;
   /** Target language this chunk migrates into, e.g. "Java 21". */
   targetLabel?: string;
   onApprove: (id: string) => void;
@@ -287,6 +289,7 @@ function Checks({
 
 export function ChunkReview({
   chunk,
+  sourceLabel,
   targetLabel,
   onApprove,
   onReject,
@@ -406,6 +409,8 @@ export function ChunkReview({
         <CodeCompare
           source={chunk.source_code}
           migrated={chunk.migrated_code}
+          sourceLabel={sourceLabel}
+          targetLabel={targetLabel}
           onSaveEdit={onManualEdit}
         />
         <Checks key={chunk.id} chunk={chunk} regenerating={regenerating} onFixIssue={onFixWithAI} />

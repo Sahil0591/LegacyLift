@@ -3,7 +3,7 @@
 // click-to-highlight connected paths, and an inline detail panel.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
 import ReactFlow, {
   Background,
   Controls,
@@ -173,6 +173,7 @@ export function DependencyGraph({ graph }: DependencyGraphProps) {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node[]>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -286,6 +287,10 @@ export function DependencyGraph({ graph }: DependencyGraphProps) {
     ? active.edges.filter((e) => e.target === selectedId)
     : [];
 
+  // Fullscreen always overrides collapse — you can't be minimized and
+  // fullscreen at once.
+  const showBody = isFullscreen || !collapsed;
+
   return (
     <div
       ref={containerRef}
@@ -296,43 +301,66 @@ export function DependencyGraph({ graph }: DependencyGraphProps) {
       }
     >
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink/10 px-4 py-3">
+      <div
+        className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 ${
+          showBody ? "border-b border-ink/10" : ""
+        }`}
+      >
         <div className="flex items-center gap-2">
+          {!isFullscreen && (
+            <button
+              type="button"
+              onClick={() => setCollapsed((c) => !c)}
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? "Expand dependency graph" : "Collapse dependency graph"}
+              className="group -ml-1 flex h-6 w-6 items-center justify-center rounded-md text-sub transition-colors hover:text-ink"
+            >
+              {collapsed ? (
+                <ChevronRight className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </button>
+          )}
           <h3 className="text-sm font-semibold text-ink">Dependency graph</h3>
           {isPlaceholder && (
             <span className="rounded-full border border-ink/15 bg-ink/[0.06] px-2 py-0.5 text-[10px] font-medium text-sub">
               preview
             </span>
           )}
-          {selectedId && (
+          {selectedId && showBody && (
             <span className="rounded-full bg-[#7C3AED]/15 px-2 py-0.5 text-[10px] font-medium text-[#7C3AED]">
               {selectedId} · click again or canvas to clear
             </span>
           )}
         </div>
-        <div className="flex items-center gap-4">
-          <div className="flex flex-wrap gap-3">
-            {Object.entries(NODE_COLOURS).map(([type, colour]) => (
-              <div key={type} className="flex items-center gap-1 text-[11px] text-sub">
-                <span className="h-2 w-2 rounded-full" style={{ background: colour }} />
-                {type}
-              </div>
-            ))}
+        {showBody && (
+          <div className="flex items-center gap-4">
+            <div className="flex flex-wrap gap-3">
+              {Object.entries(NODE_COLOURS).map(([type, colour]) => (
+                <div key={type} className="flex items-center gap-1 text-[11px] text-sub">
+                  <span className="h-2 w-2 rounded-full" style={{ background: colour }} />
+                  {type}
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              className="flex h-7 w-7 items-center justify-center rounded-lg border border-ink/15 bg-surface/60 text-sub transition-colors hover:border-[#7C3AED]/40 hover:text-[#7C3AED]"
+            >
+              {isFullscreen ? (
+                <Minimize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
+            </button>
           </div>
-          <button
-            onClick={toggleFullscreen}
-            title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-ink/15 bg-surface/60 text-sub transition-colors hover:border-[#7C3AED]/40 hover:text-[#7C3AED]"
-          >
-            {isFullscreen ? (
-              <Minimize2 className="h-3.5 w-3.5" />
-            ) : (
-              <Maximize2 className="h-3.5 w-3.5" />
-            )}
-          </button>
-        </div>
+        )}
       </div>
 
+      {showBody && (
+      <>
       {/* Graph canvas */}
       <div className={isFullscreen ? "flex-1" : "h-[380px] w-full"}>
         <ReactFlow
@@ -407,6 +435,8 @@ export function DependencyGraph({ graph }: DependencyGraphProps) {
             </div>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

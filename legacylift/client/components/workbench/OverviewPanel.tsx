@@ -2,7 +2,6 @@
 // OverviewPanel — the "we mapped your codebase" dashboard: headline numbers,
 // risk distribution, the dependency graph, and the extracted business rules.
 
-import { useState, type ReactNode } from "react";
 import {
   FileCode2,
   BookOpen,
@@ -11,8 +10,6 @@ import {
   Download,
   CheckCircle2,
   Layers,
-  ChevronDown,
-  ChevronRight,
   Sparkles,
 } from "lucide-react";
 import type { PipelineState } from "@/types/legacylift";
@@ -23,6 +20,7 @@ import type { Lesson } from "@/lib/lessons";
 import { downloadSingleFile } from "@/lib/download";
 import type { ProjectConfig } from "@/lib/projectConfig";
 import { getTargetLanguage } from "@/lib/targetLanguages";
+import { CollapsibleCard } from "@/components/workbench/CollapsibleCard";
 import { ContextPanel } from "@/components/workbench/ContextPanel";
 import { TargetLanguageSelect } from "@/components/workbench/TargetLanguageSelect";
 
@@ -162,7 +160,6 @@ export function OverviewPanel({
   lessons?: Lesson[];
 }) {
   const { businessRules, riskScores, dependencyGraph, chunks } = state;
-  const [lessonsOpen, setLessonsOpen] = useState(false);
 
   // Distinct target languages across the project (for the summary box).
   const targetCounts = new Map<string, number>();
@@ -214,7 +211,7 @@ export function OverviewPanel({
       </div>
 
       {/* Migration context & instructions — the "README for the AI agent" */}
-      <div data-tour="context">
+      <div data-tour="migration-context">
         <ContextPanel
           config={config}
           filenames={fileGroups.map((f) => f.filename)}
@@ -224,11 +221,12 @@ export function OverviewPanel({
       </div>
 
       {/* Files */}
-      <div data-tour="files" className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink/10 px-5 py-3">
-          <h3 className="text-sm font-semibold text-ink">Files</h3>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-1.5">
+      <CollapsibleCard
+        tourId="files"
+        title="Files"
+        actions={
+          <>
+            <div data-tour="targets" className="flex items-center gap-1.5">
               <span className="text-[11px] font-medium text-sub">Target</span>
               <TargetLanguageSelect
                 value={config.targets.default}
@@ -252,8 +250,9 @@ export function OverviewPanel({
               {fileGroups.filter((f) => f.status === "finalized").length}/
               {fileGroups.length} finalized
             </span>
-          </div>
-        </div>
+          </>
+        }
+      >
         <div className="divide-y divide-ink/[0.06]">
           {fileGroups.length === 0 ? (
             <div className="px-5 py-4 text-xs text-sub">No files yet.</div>
@@ -270,109 +269,100 @@ export function OverviewPanel({
             ))
           )}
         </div>
-      </div>
+      </CollapsibleCard>
 
       {/* Lessons learned — the feedback loop's memory, made visible */}
       {lessons.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
-          <button
-            onClick={() => setLessonsOpen((v) => !v)}
-            className="flex w-full items-center justify-between px-5 py-3"
-          >
-            <span className="text-sm font-semibold text-ink">Lessons learned</span>
-            <span className="flex items-center gap-2">
-              <span className="font-mono text-xs text-sub">{lessons.length} captured</span>
-              {lessonsOpen ? (
-                <ChevronDown className="h-3.5 w-3.5 text-sub" />
-              ) : (
-                <ChevronRight className="h-3.5 w-3.5 text-sub" />
-              )}
-            </span>
-          </button>
-          {lessonsOpen && (
-            <div className="divide-y divide-ink/[0.06] border-t border-ink/10">
-              {[...lessons].reverse().map((l) => (
-                <div key={l.id} className="flex items-start gap-2 px-5 py-2.5 text-xs">
-                  <span className="rounded-full bg-ink/[0.06] px-2 py-0.5 text-[10px] text-sub">
-                    {l.source}
-                  </span>
-                  <span className="flex-1 text-ink/70">
-                    {l.sourceFile && (
-                      <span className="font-mono text-sub">{l.sourceFile}: </span>
-                    )}
-                    {l.text}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Risk distribution */}
-        <div data-tour="risk" className="rounded-xl border border-ink/10 bg-surface/40 p-5">
-          <h3 className="text-sm font-semibold text-ink">Risk distribution</h3>
-          <div className="mt-4 flex h-2.5 overflow-hidden rounded-full bg-ink/10">
-            {order.map((level) =>
-              counts[level] > 0 ? (
-                <div
-                  key={level}
-                  style={{
-                    width: `${(counts[level] / total) * 100}%`,
-                    background: RISK_META[level].color,
-                  }}
-                />
-              ) : null,
-            )}
-          </div>
-          <div className="mt-4 space-y-2">
-            {order.map((level) => (
-              <div
-                key={level}
-                className="flex items-center gap-2 text-xs"
-              >
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ background: RISK_META[level].color }}
-                />
-                <span className="text-sub">{level}</span>
-                <span className="ml-auto font-mono text-ink/80">
-                  {counts[level]}
+        <CollapsibleCard
+          title="Lessons learned"
+          defaultOpen={false}
+          actions={
+            <span className="font-mono text-xs text-sub">{lessons.length} captured</span>
+          }
+        >
+          <div className="divide-y divide-ink/[0.06]">
+            {[...lessons].reverse().map((l) => (
+              <div key={l.id} className="flex items-start gap-2 px-5 py-2.5 text-xs">
+                <span className="rounded-full bg-ink/[0.06] px-2 py-0.5 text-[10px] text-sub">
+                  {l.source}
+                </span>
+                <span className="flex-1 text-ink/70">
+                  {l.sourceFile && (
+                    <span className="font-mono text-sub">{l.sourceFile}: </span>
+                  )}
+                  {l.text}
                 </span>
               </div>
             ))}
           </div>
+        </CollapsibleCard>
+      )}
 
-          <div className="mt-5 border-t border-ink/10 pt-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-sub">
-              Targets
-            </h4>
-            <div className="mt-2 space-y-1.5 text-xs text-ink/80">
-              <div className="flex justify-between gap-2">
-                <span className="text-sub">Default</span>
-                <span className="font-mono">
-                  {defaultTarget.label} {defaultTarget.version}
-                </span>
-              </div>
-              {targetCounts.size > 1 &&
-                [...targetCounts.entries()].map(([id, n]) => (
-                  <div key={id} className="flex justify-between gap-2">
-                    <span className="text-sub">{getTargetLanguage(id).label}</span>
-                    <span className="font-mono text-ink/80">
-                      {n} file{n === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                ))}
-              {targetCounts.size <= 1 && (
-                <div className="flex justify-between gap-2">
-                  <span className="text-sub">Tests</span>
-                  <span className="font-mono">{defaultTarget.testFramework}</span>
-                </div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* Risk distribution */}
+        <CollapsibleCard tourId="risk" title="Risk distribution">
+          <div className="p-5">
+            <div className="flex h-2.5 overflow-hidden rounded-full bg-ink/10">
+              {order.map((level) =>
+                counts[level] > 0 ? (
+                  <div
+                    key={level}
+                    style={{
+                      width: `${(counts[level] / total) * 100}%`,
+                      background: RISK_META[level].color,
+                    }}
+                  />
+                ) : null,
               )}
             </div>
+            <div className="mt-4 space-y-2">
+              {order.map((level) => (
+                <div
+                  key={level}
+                  className="flex items-center gap-2 text-xs"
+                >
+                  <span
+                    className="h-2 w-2 rounded-full"
+                    style={{ background: RISK_META[level].color }}
+                  />
+                  <span className="text-sub">{level}</span>
+                  <span className="ml-auto font-mono text-ink/80">
+                    {counts[level]}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-5 border-t border-ink/10 pt-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-sub">
+                Targets
+              </h4>
+              <div className="mt-2 space-y-1.5 text-xs text-ink/80">
+                <div className="flex justify-between gap-2">
+                  <span className="text-sub">Default</span>
+                  <span className="font-mono">
+                    {defaultTarget.label} {defaultTarget.version}
+                  </span>
+                </div>
+                {targetCounts.size > 1 &&
+                  [...targetCounts.entries()].map(([id, n]) => (
+                    <div key={id} className="flex justify-between gap-2">
+                      <span className="text-sub">{getTargetLanguage(id).label}</span>
+                      <span className="font-mono text-ink/80">
+                        {n} file{n === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  ))}
+                {targetCounts.size <= 1 && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-sub">Tests</span>
+                    <span className="font-mono">{defaultTarget.testFramework}</span>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
+        </CollapsibleCard>
 
         {/* Dependency graph */}
         <div data-tour="graph" className="lg:col-span-2">
@@ -381,13 +371,15 @@ export function OverviewPanel({
       </div>
 
       {/* Business rules */}
-      <div data-tour="rules" className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
-        <div className="flex items-center justify-between border-b border-ink/10 px-5 py-3">
-          <h3 className="text-sm font-semibold text-ink">Business rules</h3>
+      <CollapsibleCard
+        tourId="rules"
+        title="Business rules"
+        actions={
           <span className="font-mono text-xs text-sub">
             {businessRules.length} extracted
           </span>
-        </div>
+        }
+      >
         <div className="divide-y divide-ink/[0.06]">
           {businessRules.map((rule) => (
             <div
@@ -425,7 +417,7 @@ export function OverviewPanel({
             </div>
           ))}
         </div>
-      </div>
+      </CollapsibleCard>
     </div>
   );
 }

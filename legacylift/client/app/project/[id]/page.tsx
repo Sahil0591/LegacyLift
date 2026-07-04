@@ -314,6 +314,12 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     state.files.find((f) => f.language)?.language ||
     fileGroups.find((f) => f.language)?.language ||
     "Source";
+  // The legacy language of a specific chunk's file — so the review's before/after
+  // panel labels the real source language per file, not a project-wide guess.
+  const sourceLabelFor = (chunk: MigrationChunk | null | undefined) =>
+    (chunk?.source_file &&
+      state.files.find((f) => f.filename === chunk.source_file)?.language) ||
+    sourceLang;
   const targetLabels = summarizeTargets(
     config,
     fileGroups.map((f) => f.filename),
@@ -889,6 +895,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
               {explicit ? (
                 <ChunkReview
                   chunk={explicit}
+                  sourceLabel={sourceLabelFor(explicit)}
                   targetLabel={resolveTarget(config, explicit.source_file).label}
                   onApprove={handleApprove}
                   onReject={handleReject}
@@ -922,6 +929,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
               ) : reviewChunk ? (
                 <ChunkReview
                   chunk={reviewChunk}
+                  sourceLabel={sourceLabelFor(reviewChunk)}
                   targetLabel={resolveTarget(config, reviewChunk.source_file).label}
                   onApprove={handleApprove}
                   onReject={handleReject}

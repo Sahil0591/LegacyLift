@@ -3,8 +3,8 @@
 // uploaded source files. Both POST to /api/analyze (rule-based identification +
 // risk), stash the result, and open the workbench.
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { Github, ArrowRight, FolderUp, Lock } from "lucide-react";
@@ -13,74 +13,44 @@ import { Footer } from "@/components/shared/Footer";
 import { AmbientBackground } from "@/components/landing/AmbientBackground";
 import { FileUpload } from "@/components/pipeline/FileUpload";
 import { TargetLanguageSelect } from "@/components/workbench/TargetLanguageSelect";
-import { saveConfig, storeAnalysis } from "@/lib/projectStore";
-import {
-  createProject,
-  importAnalysis,
-  startPipeline,
-  uploadFiles,
-} from "@/lib/api";
-import { emptyConfig } from "@/lib/projectConfig";
+import { createProject, startPipeline, uploadFiles } from "@/lib/api";
+import { SAMPLE_REPO, startMigration } from "@/lib/startMigration";
 import { DEFAULT_TARGET_ID, getTargetLanguage } from "@/lib/targetLanguages";
 import { DEMO_HERITAGE_PROJECT_ID, DEMO_PROJECT_ID } from "@/lib/demoData";
-import type { AnalyzeResult } from "@/lib/analyze";
 import type { ProjectLanguage } from "@/types/legacylift";
 
 const LANGUAGES: ProjectLanguage[] = ["COBOL", "Java", "VB6"];
-const SAMPLE_REPO = "github.com/aws-samples/aws-mainframe-modernization-carddemo";
 
 type Tab = "repo" | "files";
 
-export default function DemoPage() {
+function DemoPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [tab, setTab] = useState<Tab>("repo");
-  const [repoUrl, setRepoUrl] = useState(SAMPLE_REPO);
+  // Prefill from ?repo= when the landing-page hero hands off a repo URL.
+  const [repoUrl, setRepoUrl] = useState(searchParams.get("repo") ?? SAMPLE_REPO);
   const [repoLang, setRepoLang] = useState<ProjectLanguage>("COBOL");
   const [repoTarget, setRepoTarget] = useState<string>(DEFAULT_TARGET_ID);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const analyzeAndGo = async (payload: {
-    files?: { filename: string; content: string }[];
-    repoUrl?: string;
-  }) => {
+  const handleRepoSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+      // /demo is behind Clerk middleware, so the user is always signed in here;
+      // startMigration persists to the DB and falls back to localStorage.
+      const id = await startMigration({
+        repoUrl,
+        sourceLanguage: repoLang,
+        targetId: repoTarget,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? "Analysis failed");
-      const analysis = data as AnalyzeResult;
-
-      // Seed the workbench config with the chosen target as the project
-      // default (per-file overrides come later on the Overview).
-      const cfg = emptyConfig(repoTarget);
-
-      // Persist to the DB (owner-scoped). /demo is behind Clerk middleware, so
-      // the user is always signed in here; localStorage is only a fallback for
-      // a backend/DB outage so the workbench still opens.
-      let id: string;
-      try {
-        const created = await importAnalysis(analysis, repoLang, cfg);
-        id = created.project_id;
-      } catch {
-        id = storeAnalysis(analysis);
-        saveConfig(id, cfg);
-      }
       router.push(`/project/${id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analysis failed");
       setLoading(false);
     }
-  };
-
-  const handleRepoSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    analyzeAndGo({ repoUrl });
   };
 
   const handleFileSubmit = async (
@@ -287,5 +257,15 @@ export default function DemoPage() {
         <Footer />
       </div>
     </div>
+  );
+}
+
+export default function DemoPage() {
+  // useSearchParams (read in DemoPageContent) must sit under a Suspense
+  // boundary for the production build.
+  return (
+    <Suspense>
+      <DemoPageContent />
+    </Suspense>
   );
 }
