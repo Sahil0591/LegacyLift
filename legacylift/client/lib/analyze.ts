@@ -55,15 +55,17 @@ interface CodeUnit {
   id: string;
   name: string;
   file: string;
-  language: "cobol" | "generic";
+  language: "cobol" | "java" | "generic";
   source: string;
   startLine: number;
   endLine: number;
   calls: string[];
 }
 
-function detectLanguage(filename: string): "cobol" | "generic" {
-  return /\.(cbl|cob|cobol|cpy)$/i.test(filename) ? "cobol" : "generic";
+function detectLanguage(filename: string): "cobol" | "java" | "generic" {
+  if (/\.(cbl|cob|cobol|cpy)$/i.test(filename)) return "cobol";
+  if (/\.java$/i.test(filename)) return "java";
+  return "generic";
 }
 
 function slug(file: string, name: string): string {
@@ -198,14 +200,17 @@ function splitFiles(files: InputFile[]): { units: CodeUnit[]; skipped: string[] 
   const units: CodeUnit[] = [];
   const skipped: string[] = [];
   for (const f of files) {
+    const lang = detectLanguage(f.filename);
     const fileUnits =
-      detectLanguage(f.filename) === "cobol"
+      lang === "cobol"
         ? (() => {
             const cobolUnits = splitCobol(f.filename, f.content);
             // If splitting found nothing usable, fall back to whole-file unit.
             return cobolUnits.length > 0 ? cobolUnits : [wholeFileUnit(f)];
           })()
-        : [wholeFileUnit(f)];
+        : lang === "java"
+          ? splitJava(f.filename, f.content) // always returns >= 1 unit
+          : [wholeFileUnit(f)];
 
     // Never split a single file's units across the cap boundary — slicing
     // mid-file silently drops paragraphs from whichever file happens to
@@ -233,6 +238,120 @@ function wholeFileUnit(f: InputFile): CodeUnit {
     endLine: f.content.split("\n").length,
     calls: extractCalls(f.content),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Java splitting — one unit per top-level type; edges via type references.
+// Java's real dependency structure is class-to-class (not COBOL's flat PERFORM
+// call graph), so we model it at class granularity: each class node links to
+// every OTHER project class it names by type (field/param/return/new/extends…).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Replace comment and string/char-literal *contents* with spaces (preserving
+// newlines) so braces, parens and keywords inside them can't confuse detection.
+function maskJava(content: string): string {
+  const out = content.split("");
+  const n = content.length;
+  const blank = (a: number, b: number) => {
+    for (let k = a; k < b; k++) if (out[k] !== "\n") out[k] = " ";
+  };
+  let i = 0;
+  while (i < n) {
+    const c = content[i];
+    const d = content[i + 1];
+    if (c === "/" && d === "/") {
+      let j = i + 2;
+      while (j < n && content[j] !== "\n") j++;
+      blank(i, j);
+      i = j;
+    } else if (c === "/" && d === "*") {
+      let j = i + 2;
+      while (j < n && !(content[j] === "*" && content[j + 1] === "/")) j++;
+      j = Math.min(n, j + 2);
+      blank(i, j);
+      i = j;
+    } else if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < n && content[j] !== c) {
+        if (content[j] === "\\") j++;
+        j++;
+      }
+      j = Math.min(n, j + 1);
+      blank(i + 1, j - 1);
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return out.join("");
+}
+
+// Capitalised identifiers referenced in a class body = its candidate type deps.
+// Edges only ever form to a KNOWN project class, so JDK/framework types (String,
+// List, @Override, …) are self-filtered out — no allow-list needed.
+function javaTypeRefs(maskedBody: string, exclude: Set<string>): string[] {
+  const refs = new Set<string>();
+  const re = /\b([A-Z][\w$]*)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(maskedBody))) {
+    if (!exclude.has(m[1])) refs.add(m[1]);
+  }
+  return [...refs];
+}
+
+function splitJava(file: string, content: string): CodeUnit[] {
+  const masked = maskJava(content);
+  const lineAt = (index: number) => masked.slice(0, Math.max(0, index)).split("\n").length;
+
+  // All type declarations, flagged as top-level (opened at brace depth 0).
+  const decls: { name: string; index: number; top: boolean }[] = [];
+  const re = /\b(?:class|interface|enum|record)\s+([A-Za-z_$][\w$]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(masked))) {
+    let depth = 0;
+    for (let k = 0; k < m.index; k++) {
+      const ch = masked[k];
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+    }
+    decls.push({ name: m[1], index: m.index, top: depth === 0 });
+  }
+
+  const tops = decls.filter((d) => d.top);
+  if (tops.length === 0) {
+    // No type declaration (e.g. package-info.java) — keep as a single unit.
+    const name = file.replace(/\.[^.]+$/, "");
+    return [{
+      id: slug(file, name),
+      name,
+      file,
+      language: "java",
+      source: content,
+      startLine: 1,
+      endLine: content.split("\n").length,
+      calls: javaTypeRefs(masked, new Set([name])),
+    }];
+  }
+
+  // Exclude every type declared in THIS file (self + siblings + nested) so a
+  // class links only to classes defined elsewhere in the project.
+  const localTypeNames = new Set(decls.map((d) => d.name));
+  const units: CodeUnit[] = [];
+  for (let t = 0; t < tops.length; t++) {
+    const start = tops[t].index;
+    const end = t + 1 < tops.length ? tops[t + 1].index : content.length;
+    units.push({
+      id: slug(file, tops[t].name),
+      name: tops[t].name,
+      file,
+      language: "java",
+      source: content.slice(start, end),
+      startLine: lineAt(start),
+      endLine: lineAt(end - 1),
+      calls: javaTypeRefs(masked.slice(start, end), localTypeNames),
+    });
+  }
+  return units;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -304,13 +423,16 @@ function scoreUnit(unit: CodeUnit, fanIn: number): RiskResult {
     if (values.length >= 4)
       reasons.push(`${values.length} hardcoded values`);
   }
-  // Rule 6 — commented-out / dead code.
+  // Rule 6 — commented-out / dead code (COBOL/generic only; Java javadoc lines
+  // also start with "*", which would misfire on well-documented Java).
   const lines = src.split("\n");
-  const dead = lines.filter((l) => l.trim().startsWith("*")).length;
-  const deadRatio = lines.length ? dead / lines.length : 0;
-  if (deadRatio > 0.12) {
-    score += Math.min(deadRatio * 0.3, 0.1);
-    reasons.push("Commented-out code present");
+  if (unit.language !== "java") {
+    const dead = lines.filter((l) => l.trim().startsWith("*")).length;
+    const deadRatio = lines.length ? dead / lines.length : 0;
+    if (deadRatio > 0.12) {
+      score += Math.min(deadRatio * 0.3, 0.1);
+      reasons.push("Commented-out code present");
+    }
   }
   // Rule 7 — external I/O / DB.
   if (/\b(EXEC\s+SQL|CALL|WRITE|READ|REWRITE|DELETE)\b/i.test(src)) {
@@ -319,6 +441,18 @@ function scoreUnit(unit: CodeUnit, fanIn: number): RiskResult {
   }
   // Rule 8 — size.
   score += Math.min(lines.length / 400, 0.1);
+
+  // Java-specific signals.
+  if (unit.language === "java") {
+    if (/\b(?:float|double)\b/.test(src) && MONEY_WORDS.test(src)) {
+      score += 0.2;
+      reasons.push("float/double on monetary value");
+    }
+    if (/\b(?:executeQuery|executeUpdate|PreparedStatement|createStatement|Statement|EntityManager|createQuery|getConnection)\b/.test(src)) {
+      score += 0.1;
+      reasons.push("Database access");
+    }
+  }
 
   const final = clamp01(Number(score.toFixed(3)));
   return { score: final, level: levelFromScore(final), reasons, values };
@@ -352,6 +486,7 @@ function confidenceFor(risk: RiskResult): RuleConfidence {
 }
 
 function nodeType(unit: CodeUnit): DependencyNode["type"] {
+  if (unit.language === "java") return "section"; // one node per class
   if (unit.language !== "cobol") return "external";
   return unit.name.endsWith("SECTION") ? "section" : "paragraph";
 }
@@ -394,6 +529,52 @@ function buildCallResolver(
   return resolve;
 }
 
+// Build all dependency edges + fan-in counts across languages. COBOL/generic
+// units resolve PERFORM/CALL targets through buildCallResolver; Java is modelled
+// at class granularity — each class links to every other project class it names.
+function buildGraphEdges(
+  units: CodeUnit[],
+  files: InputFile[],
+): { edges: { source: string; target: string }[]; fanIn: Map<string, number> } {
+  const edges: { source: string; target: string }[] = [];
+  const fanIn = new Map<string, number>();
+  const seen = new Set<string>();
+  const add = (source: string, targetName: string) => {
+    if (!targetName || targetName === source) return;
+    const key = `${source}\u0000${targetName}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push({ source, target: targetName });
+    fanIn.set(targetName, (fanIn.get(targetName) ?? 0) + 1);
+  };
+
+  // COBOL (and generic fallback) — PERFORM/CALL/GO TO resolution.
+  const cobolResolve = buildCallResolver(
+    units.filter((u) => u.language !== "java"),
+    files,
+  );
+  for (const u of units) {
+    if (u.language === "java") continue;
+    for (const c of u.calls) {
+      const target = cobolResolve.get(c);
+      if (target) add(u.name, target.name);
+    }
+  }
+
+  // Java — connect a class to every other project class it references by type.
+  const javaByName = new Map<string, CodeUnit>();
+  for (const u of units) if (u.language === "java") javaByName.set(u.name, u);
+  for (const u of units) {
+    if (u.language !== "java") continue;
+    for (const c of u.calls) {
+      const target = javaByName.get(c);
+      if (target) add(u.name, target.name);
+    }
+  }
+
+  return { edges, fanIn };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public entry point
 // ─────────────────────────────────────────────────────────────────────────────
@@ -423,18 +604,10 @@ export function analyzeFiles(
     );
   }
 
-  // Fan-in: how many units call each unit. Resolve targets through the same
-  // resolver used for edges so section / cross-program calls are counted too.
-  const resolveCall = buildCallResolver(units, usable);
-  const fanIn = new Map<string, number>();
-  for (const u of units) {
-    for (const c of u.calls) {
-      const target = resolveCall.get(c);
-      if (target && target.name !== u.name) {
-        fanIn.set(target.name, (fanIn.get(target.name) ?? 0) + 1);
-      }
-    }
-  }
+  // Dependency edges + fan-in across languages (COBOL PERFORM/CALL graph, Java
+  // class-reference graph). Computed once, up front, so risk scoring below can
+  // use fan-in.
+  const { edges, fanIn } = buildGraphEdges(units, usable);
 
   const riskScores: Record<string, number> = {};
   const chunks: MigrationChunk[] = [];
@@ -492,25 +665,14 @@ export function analyzeFiles(
     void i;
   });
 
-  // Dependency graph from calls between known units.
+  // Nodes: one per unit (COBOL paragraph/section, Java class). Edges were
+  // computed above in buildGraphEdges.
   const nodes: DependencyNode[] = units.map((u) => ({
     id: u.name,
     label: u.name,
     file: u.file,
     type: nodeType(u),
   }));
-  const edges: { source: string; target: string }[] = [];
-  const seenEdges = new Set<string>();
-  for (const u of units) {
-    for (const c of u.calls) {
-      const target = resolveCall.get(c);
-      if (!target || target.name === u.name) continue;
-      const key = `${u.name} ${target.name}`;
-      if (seenEdges.has(key)) continue;
-      seenEdges.add(key);
-      edges.push({ source: u.name, target: target.name });
-    }
-  }
 
   const scoreValues = Object.values(riskScores);
   const avgRisk = scoreValues.length
