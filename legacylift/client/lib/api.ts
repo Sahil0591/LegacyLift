@@ -34,10 +34,33 @@ function formatApiError(body: ApiErrorBody, fallback: string): string {
   return body.message ?? fallback;
 }
 
+/**
+ * Wait for the Clerk singleton to finish loading before we read a token.
+ *
+ * On a cold page load / refresh, @clerk/nextjs injects `window.Clerk`
+ * asynchronously and only restores the session once `Clerk.loaded` flips true.
+ * A component's mount-time fetch fires *before* that, so reading the token too
+ * early yields `undefined` -> no Authorization header -> the backend treats the
+ * request as anonymous and returns an empty (owner-scoped) list. Client-side
+ * navigation didn't hit this because Clerk was already loaded by the prior page.
+ */
+async function waitForClerk(timeoutMs = 5000): Promise<any | null> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const clerk = (window as any).Clerk;
+    if (clerk?.loaded) return clerk;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return (window as any).Clerk ?? null;
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   try {
-    // window.Clerk is set by @clerk/nextjs automatically on the client side
-    const token = await (window as any).Clerk?.session?.getToken();
+    // window.Clerk is set by @clerk/nextjs automatically on the client side,
+    // but may not be loaded yet on a direct load/refresh - wait for it so the
+    // token is actually available.
+    const clerk = await waitForClerk();
+    const token = await clerk?.session?.getToken();
     return token ? { Authorization: `Bearer ${token}` } : {};
   } catch {
     return {};
