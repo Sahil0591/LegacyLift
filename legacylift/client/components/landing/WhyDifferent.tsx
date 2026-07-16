@@ -45,7 +45,7 @@ function RiskVisual() {
   return (
     <div className="rounded-xl border border-ink/8 bg-ink/[0.02] p-3">
       <div className="mb-2.5 font-mono text-[10px] text-sub">
-        score = money·3 + fan_in·2 + low_conf
+        score = f(impact, coupling, confidence)
       </div>
       <div className="space-y-1.5">
         {tiers.map((t, i) => (

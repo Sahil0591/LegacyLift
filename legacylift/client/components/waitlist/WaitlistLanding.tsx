@@ -109,7 +109,7 @@ export function WaitlistLanding() {
             <ThemeToggle />
             <a
               href="#waitlist"
-              className="rounded-full bg-ink px-4 py-1.5 text-sm font-semibold text-base transition-opacity hover:opacity-90"
+              className="hidden rounded-full bg-ink px-4 py-1.5 text-sm font-semibold text-base transition-opacity hover:opacity-90 sm:inline-flex"
             >
               Request access
             </a>
@@ -147,11 +147,11 @@ export function WaitlistLanding() {
             transition={{ duration: 0.6, delay: 0.12, ease: EASE }}
             className="mt-6 max-w-lg text-base leading-relaxed text-sub"
           >
-            The only bench you need to convert COBOL, VB6 and legacy Java —
-            end to end. LegacyLift maps the business rules buried inside, scores
-            the risk, migrates unit by unit, writes the tests, and gates every
-            merge behind an engineer. No black-box rewrites, nothing merged
-            unseen.
+            A complete bench for converting COBOL, VB6, and legacy Java from end
+            to end. LegacyLift extracts the business rules buried in your source,
+            scores the risk, migrates unit by unit, generates the tests, and puts
+            an engineer in front of every merge. No black-box rewrites, and
+            nothing ships without review.
           </motion.p>
 
           <motion.div
@@ -160,7 +160,7 @@ export function WaitlistLanding() {
             transition={{ duration: 0.6, delay: 0.28 }}
             className="mt-7 flex flex-wrap gap-x-4 gap-y-1.5 font-mono text-[11px] text-sub"
           >
-            {["tree-sitter parsing", "GPT-5.2 Codex reasoning", "pytest verification"].map(
+            {["Semantic code analysis", "Multi-model verification", "Test-backed migration"].map(
               (item, i, arr) => (
                 <span key={item} className="flex items-center gap-4">
                   {item}
@@ -169,6 +169,16 @@ export function WaitlistLanding() {
               ),
             )}
           </motion.div>
+
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.6, delay: 0.36 }}
+            className="mt-6 text-sm leading-relaxed text-sub/80"
+          >
+            Started at the Imperial College London hackathon, now expanding into
+            a production tool for engineering teams.
+          </motion.p>
         </div>
 
         {/* Right: waitlist form (anchor target) */}
@@ -189,7 +199,7 @@ export function WaitlistLanding() {
                   You&rsquo;re on the list
                 </h2>
                 <p className="mt-2 max-w-xs text-sm leading-relaxed text-sub">
-                  Thanks{name.trim() ? `, ${name.trim().split(" ")[0]}` : ""} — we
+                  Thanks{name.trim() ? `, ${name.trim().split(" ")[0]}` : ""}, we
                   saved your spot. We&rsquo;ll email{" "}
                   <span className="text-ink">{email.trim()}</span> the moment
                   early access opens.
@@ -289,7 +299,7 @@ export function WaitlistLanding() {
                 </button>
 
                 <p className="text-[11px] text-sub/70">
-                  No spam — early-access updates only.
+                  No spam. Early-access updates only.
                 </p>
               </form>
             </>
@@ -320,8 +330,8 @@ export function WaitlistLanding() {
             <span className="text-[#7C3AED]">two weeks.</span>
           </h2>
           <p className="mx-auto mt-4 max-w-lg text-sm leading-relaxed text-sub">
-            LegacyLift does the reading — you do the deciding. Get early access
-            before your next migration.
+            LegacyLift does the reading. You do the deciding. Request early
+            access before your next migration.
           </p>
           <a
             href="#waitlist"
@@ -334,16 +344,9 @@ export function WaitlistLanding() {
       </section>
 
       <footer className="border-t border-ink/10">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5 font-mono text-[11px] text-sub">
-          <span>LegacyLift — legacy code, finally understood.</span>
-          <a
-            href="https://github.com/Sahil0591/LegacyLift"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="transition-colors hover:text-ink"
-          >
-            GitHub
-          </a>
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-2 px-6 py-5 text-center font-mono text-[11px] text-sub sm:flex-row sm:justify-between sm:text-left">
+          <span>&copy; 2026 LegacyLift</span>
+          <span>Imperial College London</span>
         </div>
       </footer>
     </div>

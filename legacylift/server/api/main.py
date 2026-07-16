@@ -53,6 +53,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 
 from api.auth import get_current_user_id, verify_ws_token
 from db.models import WaitlistSignup
@@ -394,11 +395,17 @@ async def join_waitlist(body: WaitlistRequest):
         trimmed = value.strip()[:limit]
         return trimmed or None
 
-    async with get_session() as session:
-        existing = await session.execute(
-            select(WaitlistSignup).where(WaitlistSignup.email == email)
-        )
-        if existing.scalar_one_or_none() is None:
+    try:
+        async with get_session() as session:
+            # Spam / duplicate guard: if this email is already on the list, it's an
+            # idempotent no-op (a repeat submit can't create a second row or flood
+            # the table). Same response either way, so the endpoint never reveals
+            # whether an email is already registered.
+            existing = await session.execute(
+                select(WaitlistSignup.id).where(WaitlistSignup.email == email)
+            )
+            if existing.scalar_one_or_none() is not None:
+                return {"ok": True}
             session.add(
                 WaitlistSignup(
                     email=email,
@@ -407,6 +414,10 @@ async def join_waitlist(body: WaitlistRequest):
                     use_case=_clip(body.use_case, 2000),
                 )
             )
+    except IntegrityError:
+        # Race: a concurrent request inserted the same email between our check and
+        # commit; the unique constraint held. Treat as an idempotent success.
+        pass
     return {"ok": True}
 
 
