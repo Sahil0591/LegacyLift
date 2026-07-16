@@ -1,16 +1,21 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
+import { clerkMiddleware } from "@clerk/nextjs/server";
 
-const isProtectedRoute = createRouteMatcher([
-  "/demo(.*)",
-  "/project(.*)",
-  "/projects(.*)",
-  "/user(.*)",
-  "/api/analyze(.*)",
-]);
+// ── WAITLIST MODE ────────────────────────────────────────────────────────────
+// The whole product is temporarily gated behind the waitlist landing at "/".
+// Every other route (demo, projects, sign-in, api, ...) redirects there so
+// nothing half-finished is reachable while the launch post is live.
+//
+// To restore the full app, revert this file to the route-protection version in
+// git history (the `createRouteMatcher` + `auth.protect()` block).
+// Only the waitlist landing ("/") and its Neon fallback API ("/api/waitlist")
+// are reachable; everything else redirects to the landing.
+const ALLOWED = new Set(["/", "/api/waitlist"]);
 
 export default clerkMiddleware(async (auth, req) => {
-  if (isProtectedRoute(req)) {
-    await auth.protect();
+  const { pathname } = req.nextUrl;
+  if (!ALLOWED.has(pathname)) {
+    return NextResponse.redirect(new URL("/", req.url));
   }
 });
 

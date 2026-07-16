@@ -1,24 +1,16 @@
-import { Navbar } from "@/components/shared/Navbar";
-import { Footer } from "@/components/shared/Footer";
+// WAITLIST MODE: the homepage is temporarily the waitlist landing, and
+// middleware.ts redirects every other route here. To restore the full product
+// landing, revert this file (and middleware.ts) - the original landing sections
+// (Hero, ProductDemo, WhyDifferent, CTASection) are untouched on disk.
 import { AmbientBackground } from "@/components/landing/AmbientBackground";
-import { Hero } from "@/components/landing/Hero";
-import { ProductDemo } from "@/components/landing/ProductDemo";
-import { WhyDifferent } from "@/components/landing/WhyDifferent";
-import { CTASection } from "@/components/landing/CTASection";
+import { WaitlistLanding } from "@/components/waitlist/WaitlistLanding";
 
 export default function HomePage() {
   return (
     <div className="relative min-h-screen bg-base text-ink">
       <AmbientBackground />
       <div className="relative z-10">
-        <Navbar />
-        <main>
-          <Hero />
-          <ProductDemo />
-          <WhyDifferent />
-          <CTASection />
-        </main>
-        <Footer />
+        <WaitlistLanding />
       </div>
     </div>
   );
