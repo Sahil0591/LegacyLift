@@ -554,3 +554,22 @@ class WorkbenchUserLimit(Base, TimestampMixin):
     migrations_today: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Kept as an ISO date string to match UserLimit.migrations_reset_date's type.
     migrations_reset_date: Mapped[str] = mapped_column(String(10), default="", nullable=False)
+
+
+class WaitlistSignup(Base):
+    """Public product-waitlist signup. Not tied to a user or repo - anyone can
+    join from the marketing landing. Email is unique so a repeat signup is a
+    no-op rather than a duplicate row."""
+
+    __tablename__ = "waitlist_signups"
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_waitlist_signups_email"),
+        Index("ix_waitlist_signups_created", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    company: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    use_case: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)

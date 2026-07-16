@@ -52,9 +52,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from api.auth import get_current_user_id, verify_ws_token
+from db.models import WaitlistSignup
 from api.github_overlay import router as github_overlay_router
 from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition, _add_lesson
@@ -369,6 +370,44 @@ async def health_check():
         )
 
     return {"status": "ok", "version": "0.1.0", "database": {"status": "ok"}}
+
+
+class WaitlistRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+    company: Optional[str] = None
+    use_case: Optional[str] = None
+
+
+@app.post("/waitlist", status_code=201)
+async def join_waitlist(body: WaitlistRequest):
+    """Public product-waitlist signup - no auth. Persists to the same database
+    the rest of the app uses, so the marketing landing needs no separate DB
+    config. Repeat emails are a no-op rather than a duplicate row."""
+    email = (body.email or "").strip().lower()
+    if "@" not in email or "." not in email or len(email) > 320:
+        raise HTTPException(status_code=422, detail="A valid email is required.")
+
+    def _clip(value: Optional[str], limit: int) -> Optional[str]:
+        if not value:
+            return None
+        trimmed = value.strip()[:limit]
+        return trimmed or None
+
+    async with get_session() as session:
+        existing = await session.execute(
+            select(WaitlistSignup).where(WaitlistSignup.email == email)
+        )
+        if existing.scalar_one_or_none() is None:
+            session.add(
+                WaitlistSignup(
+                    email=email,
+                    name=_clip(body.name, 200),
+                    company=_clip(body.company, 200),
+                    use_case=_clip(body.use_case, 2000),
+                )
+            )
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

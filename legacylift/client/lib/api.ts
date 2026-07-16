@@ -345,6 +345,30 @@ export async function getUserLimits(): Promise<UserLimits | null> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Public waitlist signup - no auth. Writes to the same backend DB the rest of
+// the app uses (so it needs no separate DB config). Plain fetch, deliberately
+// skipping the Clerk-token path since waitlist visitors are anonymous.
+// ---------------------------------------------------------------------------
+
+export interface WaitlistRecord {
+  name: string;
+  email: string;
+  company: string;
+  use_case: string;
+}
+
+export async function submitWaitlist(record: WaitlistRecord): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/waitlist`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(record),
+  });
+  if (!res.ok) {
+    throw new Error(res.status === 422 ? "invalid_email" : "waitlist_failed");
+  }
+}
+
 export interface ServerProjectFile {
   filename: string;
   content: string;

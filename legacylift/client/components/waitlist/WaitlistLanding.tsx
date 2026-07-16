@@ -13,6 +13,7 @@ import { Cpu, ArrowRight, Loader2, Check } from "lucide-react";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
 import { ProductDemo } from "@/components/landing/ProductDemo";
 import { WhyDifferent } from "@/components/landing/WhyDifferent";
+import { submitWaitlist } from "@/lib/api";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -21,17 +22,6 @@ const EASE = [0.22, 1, 0.36, 1] as const;
 const ENDPOINT = process.env.NEXT_PUBLIC_FORMSPREE_ENDPOINT;
 
 type Status = "idle" | "submitting" | "success" | "error";
-
-function friendlyError(data: { error?: string } | null): string {
-  switch (data?.error) {
-    case "invalid_email":
-      return "That email doesn't look right - please check it.";
-    case "not_configured":
-      return "The waitlist isn't connected yet. Try again shortly.";
-    default:
-      return "Something went wrong. Please try again.";
-  }
-}
 
 export function WaitlistLanding() {
   const [name, setName] = useState("");
@@ -89,24 +79,19 @@ export function WaitlistLanding() {
       }
     }
 
-    // 2) Neon fallback via our own API route.
+    // 2) Fall back to our backend, which writes to the same DB the rest of the
+    //    app uses - no separate DB config needed in any environment.
     try {
-      const res = await fetch("/api/waitlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(record),
-      });
-      if (res.ok) {
-        setStatus("success");
-        return;
-      }
-      const data = (await res.json().catch(() => null)) as {
-        error?: string;
-      } | null;
-      setError(friendlyError(data));
-      setStatus("error");
-    } catch {
-      setError("Network error - please check your connection and try again.");
+      await submitWaitlist(record);
+      setStatus("success");
+      return;
+    } catch (err) {
+      const code = err instanceof Error ? err.message : "";
+      setError(
+        code === "invalid_email"
+          ? "That email doesn't look right - please check it."
+          : "Couldn't reach the server - please try again in a moment.",
+      );
       setStatus("error");
     }
   }
