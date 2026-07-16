@@ -204,6 +204,98 @@ export async function summarizeFile(input: {
   });
 }
 
+export interface FinalizeFileInput {
+  filename: string;
+  /** Deterministically-assembled file (imports hoisted) to reconcile. */
+  assembledCode: string;
+  /** Original legacy source (concatenated) for equivalence reference. */
+  sourceCode?: string;
+  targetLang?: string;
+  targetProfile?: TargetProfilePayload | null;
+  institutionalContext?: string;
+  /** The file's extracted business rules - must survive reconciliation intact. */
+  businessRules?: GenerateInput["businessRules"];
+  /** Lightweight cross-file manifest so reconciled names stay project-consistent. */
+  projectManifest?: string;
+}
+
+/**
+ * The semantic half of finalize: hand the whole assembled file to the model so
+ * it can reconcile naming drift, cross-unit references, and duplicate helpers
+ * across independently-migrated chunks into one coherent module — WITHOUT
+ * changing any unit's behaviour. Deterministic import/package hoisting has
+ * already run on `assembledCode`. Returns the finalized module text.
+ */
+export async function finalizeFile(
+  input: FinalizeFileInput,
+): Promise<{ code: string; model: string }> {
+  const assembledCode = input.assembledCode.trim();
+  if (!assembledCode) {
+    throw new Error("Cannot finalize: this file has no assembled code.");
+  }
+  if (assembledCode.length > 200_000) {
+    throw new Error(
+      "Cannot reconcile: this assembled file is too large for a single AI request.",
+    );
+  }
+
+  return apiPost("/llm/finalize-file", {
+    filename: truncate(input.filename, 260),
+    assembled_code: assembledCode,
+    source_code: input.sourceCode
+      ? truncate(input.sourceCode, MAX_SOURCE_CODE_LENGTH)
+      : null,
+    target_lang: input.targetLang ?? "Python",
+    business_rules: normalizeBusinessRules(input.businessRules),
+    project_manifest: input.projectManifest
+      ? truncate(input.projectManifest, MAX_MANIFEST_LENGTH)
+      : null,
+    target_profile: normalizeTargetProfile(input.targetProfile),
+    institutional_context: input.institutionalContext
+      ? truncate(input.institutionalContext, MAX_INSTITUTIONAL_CONTEXT_LENGTH)
+      : null,
+  });
+}
+
+export interface ValidationResult {
+  /** 'passed' = compiles/parses, 'failed' = syntax/build errors, 'unavailable'
+   *  = the toolchain for this target isn't installed so it couldn't be checked. */
+  status: "passed" | "failed" | "unavailable";
+  passed: boolean;
+  issues: string[];
+  warnings: string[];
+  validator: string;
+  lineCount?: number;
+}
+
+/**
+ * Static syntax/build validation of a whole finalized file in its target
+ * language - the "does it actually compile" gate. Server-side only (needs the
+ * language toolchains); no migrated logic is executed. Not an LLM call.
+ */
+export async function validateFile(input: {
+  code: string;
+  targetLang?: string;
+}): Promise<ValidationResult> {
+  const code = input.code.trim();
+  if (!code) throw new Error("Cannot validate: the file is empty.");
+  if (code.length > 200_000) {
+    throw new Error("File too large to validate in a single request.");
+  }
+  const data = await apiPost<Partial<ValidationResult> & { line_count?: number }>(
+    "/validate-file",
+    { code, target_lang: input.targetLang ?? "Python" },
+  );
+  return {
+    status: data.status ?? "failed",
+    passed: !!data.passed,
+    issues: data.issues ?? [],
+    warnings: data.warnings ?? [],
+    validator: data.validator ?? "",
+    lineCount: data.line_count,
+  };
+}
+
 export async function reviewMigration(
   input: ReviewInput,
 ): Promise<AIReviewResult> {

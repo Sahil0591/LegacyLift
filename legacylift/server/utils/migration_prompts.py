@@ -215,6 +215,81 @@ Return only the migrated {target_lang} code."""
     return system, user
 
 
+def build_finalize_prompt(
+    *,
+    filename: str,
+    target_lang: str,
+    assembled_code: str,
+    source_code: Optional[str] = None,
+    business_rules: Optional[list[BusinessRuleCtx]] = None,
+    project_manifest: Optional[str] = None,
+    target_profile: Optional[TargetProfileCtx] = None,
+    institutional_context: Optional[str] = None,
+) -> tuple[str, str]:
+    """Reconcile a file that was assembled by concatenating independently-migrated
+    units into ONE coherent, compilable module — without changing any unit's
+    business logic or numeric behaviour. This is the semantic half of finalize:
+    deterministic import/package hoisting already ran on the assembled input.
+
+    Fed the same authoritative context as the original migration (org context,
+    the file's business rules, and the cross-file manifest) so the reconciled
+    names/signatures stay consistent with the rest of the project."""
+    system = f"""You are a principal engineer finalizing a migrated {target_lang} file. It was produced by migrating each unit of a legacy program SEPARATELY and concatenating the results, so it is functionally close but not yet a coherent module.
+
+Return ONE clean, self-consistent, compilable {target_lang} file that preserves EXACTLY the behaviour of every unit.
+
+Do:
+- Reconcile names that drifted between units: when one unit calls a helper/variable/type that another unit defined under a different name, make them agree (pick one name and update every call site).
+- Resolve cross-unit references so every call resolves to a real definition in the file.
+- Remove duplicate helper/constant/type definitions emitted by more than one unit — keep a single definition.
+- Keep all imports/usings/includes at the top, de-duplicated (they may already be hoisted).
+- Give the file the structure the language requires: a single package/namespace where applicable, members inside the appropriate class/type for {target_lang}, declarations in a sensible order.
+- Keep every business rule listed below intact — the finalized file must still implement all of them.
+- When a PROJECT MANIFEST is present, keep the names and signatures this file exposes consistent with how other files refer to it.
+- Fix only what is needed for the file to compile and be internally consistent.
+
+Do NOT:
+- Change business logic, arithmetic, rounding, caps, or edge-case handling of ANY unit.
+- Add features, "improve" algorithms, modernise, or drop functionality.
+- Invent behaviour that isn't already in the code.
+- Add explanations or comments beyond what is already present.
+
+When an ORGANIZATION CONTEXT block is present, honour its conventions — but never at the cost of behavioural equivalence.
+
+Output ONLY the finalized {target_lang} code. No markdown fences, no prose."""
+
+    org_block = _org_context_block(institutional_context)
+
+    source_block = ""
+    if source_code and source_code.strip():
+        source_block = (
+            "\n=== ORIGINAL LEGACY SOURCE (reference for equivalence only — do NOT re-migrate) ===\n"
+            f"{source_code.strip()}\n"
+        )
+
+    manifest_block = ""
+    if project_manifest and project_manifest.strip():
+        manifest_block = (
+            "\n=== PROJECT MANIFEST (other files, dependencies, extracted rules — keep cross-file names consistent) ===\n"
+            f"{project_manifest.strip()}\n"
+        )
+
+    user = f"""Finalize this migrated {target_lang} file "{filename}" into one coherent module.
+{org_block}
+=== TARGET PROFILE ({target_lang}) ===
+{_profile_block(target_profile, target_lang)}
+{source_block}
+=== BUSINESS RULES THIS FILE ENCODES (must remain intact) ===
+{_rules_block(business_rules)}
+{manifest_block}
+=== ASSEMBLED {target_lang} FILE (units concatenated — reconcile into one module) ===
+{assembled_code}
+
+Return only the finalized {target_lang} code."""
+
+    return system, user
+
+
 def build_review_prompt(
     *,
     name: str,

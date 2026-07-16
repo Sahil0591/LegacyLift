@@ -90,6 +90,31 @@ SUMMARY_JSON = (
     ' "layman": "Works out how much interest a customer owes each day."}'
 )
 
+FINALIZE_BODY = {
+    "filename": "interest.cbl",
+    "assembled_code": (
+        "from decimal import Decimal\n\n"
+        "def calc_interest(bal):\n    return bal * Decimal('0.025')\n\n\n"
+        "def calcInterest(bal):\n    return bal * Decimal('0.025')\n"
+    ),
+    "source_code": "COMPUTE WS-INT = WS-BAL * 0.025.",
+    "target_lang": "Python",
+    "business_rules": [
+        {"title": "Daily interest", "description": "2.5% annual rate", "hardcoded_values": ["0.025"]}
+    ],
+    "project_manifest": "- ledger.cbl\n    depends: interest -> ledger (CALL)",
+    "institutional_context": "Money fields are GBP pence.",
+    "target_profile": {"language": "Python", "version": "3.12"},
+}
+
+FINALIZED_CODE = (
+    "from decimal import Decimal\n\n"
+    "def calc_interest(bal):\n    return bal * Decimal('0.025')"
+)
+
+VALIDATE_BODY = {"code": "def f(x):\n    return x + 1\n", "target_lang": "Python"}
+INVALID_PY_BODY = {"code": "def f(x)\n    return x + 1\n", "target_lang": "Python"}
+
 MIGRATED_CODE = "interest = balance * Decimal('0.025')"
 REVIEW_JSON = (
     '{"equivalent": true, "confidence": "High", "issues_found": 0,'
@@ -143,6 +168,8 @@ def clear_rate_limit():
         ("/llm/migrate", MIGRATE_BODY),
         ("/llm/review", REVIEW_BODY),
         ("/llm/tests", TESTS_BODY),
+        ("/llm/finalize-file", FINALIZE_BODY),
+        ("/validate-file", VALIDATE_BODY),
     ],
 )
 def test_llm_routes_reject_unsupported_targets(endpoint: str, body: dict):
@@ -353,6 +380,100 @@ class TestLlmSummarizeFile:
             client = TestClient(app, raise_server_exceptions=True)
             r = client.post("/llm/summarize-file", json=SUMMARIZE_BODY)
         assert r.status_code == 501
+
+
+# ── /llm/finalize-file ───────────────────────────────────────────────────────
+
+class TestLlmFinalizeFile:
+
+    def test_returns_reconciled_code(self):
+        with patch.object(_main, "_get_llm", return_value=_make_llm(FINALIZED_CODE)):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/finalize-file", json=FINALIZE_BODY)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["code"] == FINALIZED_CODE
+        assert data["model"] == "test-model"
+
+    def test_strips_code_fence(self):
+        fenced = f"```python\n{FINALIZED_CODE}\n```"
+        with patch.object(_main, "_get_llm", return_value=_make_llm(fenced)):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/finalize-file", json=FINALIZE_BODY)
+        assert r.status_code == 200, r.text
+        assert r.json()["code"] == FINALIZED_CODE
+
+    def test_prompt_carries_assembled_and_source(self):
+        """The finalize prompt reconciles the assembled file and references the
+        original source for equivalence."""
+        llm = _make_llm(FINALIZED_CODE)
+        with patch.object(_main, "_get_llm", return_value=llm):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/finalize-file", json=FINALIZE_BODY)
+        assert r.status_code == 200
+        user_prompt = llm.complete.await_args.kwargs["user"]
+        assert "interest.cbl" in user_prompt
+        assert "ASSEMBLED" in user_prompt
+        assert "calcInterest" in user_prompt  # the assembled body is present
+        assert "WS-BAL" in user_prompt  # original source reference included
+
+    def test_prompt_carries_rules_manifest_and_org_context(self):
+        """Reconcile gets the same authoritative context as the original
+        migration: business rules, the cross-file manifest, and org context."""
+        llm = _make_llm(FINALIZED_CODE)
+        with patch.object(_main, "_get_llm", return_value=llm):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/finalize-file", json=FINALIZE_BODY)
+        assert r.status_code == 200
+        user_prompt = llm.complete.await_args.kwargs["user"]
+        assert "Daily interest" in user_prompt  # business rule
+        assert "ledger.cbl" in user_prompt  # project manifest
+        assert "PROJECT MANIFEST" in user_prompt
+        assert "GBP pence" in user_prompt  # organization context
+        assert "ORGANIZATION CONTEXT" in user_prompt
+
+    def test_501_when_not_configured(self):
+        with patch.object(_main, "_get_llm", return_value=_unconfigured_llm()):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/finalize-file", json=FINALIZE_BODY)
+        assert r.status_code == 501
+
+    def test_400_missing_assembled_code(self):
+        with patch.object(_main, "_get_llm", return_value=_make_llm()):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/finalize-file", json={"filename": "x.cbl"})
+        assert r.status_code == 422
+
+
+# ── /validate-file ───────────────────────────────────────────────────────────
+
+class TestValidateFile:
+
+    def test_passes_valid_python(self):
+        client = TestClient(app, raise_server_exceptions=True)
+        r = client.post("/validate-file", json=VALIDATE_BODY)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["status"] == "passed"
+        assert data["passed"] is True
+        assert data["issues"] == []
+
+    def test_fails_invalid_python_with_issue(self):
+        client = TestClient(app, raise_server_exceptions=True)
+        r = client.post("/validate-file", json=INVALID_PY_BODY)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["status"] == "failed"
+        assert data["passed"] is False
+        assert any("SyntaxError" in issue for issue in data["issues"])
+
+    def test_does_not_require_llm_configured(self):
+        """Validation is not an LLM call - it works even with no model configured."""
+        with patch.object(_main, "_get_llm", return_value=_unconfigured_llm()):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/validate-file", json=VALIDATE_BODY)
+        assert r.status_code == 200
+        assert r.json()["status"] == "passed"
 
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────

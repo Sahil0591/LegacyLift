@@ -7,6 +7,7 @@ import JSZip from "jszip";
 import type { MigrationChunk } from "@/types/legacylift";
 import type { FileGroup } from "@/hooks/useFileStatus";
 import { assembleFile } from "@/lib/fileAssembly";
+import { hoistImports } from "@/lib/imports";
 import {
   DEFAULT_TARGET_ID,
   getTargetLanguage,
@@ -37,32 +38,37 @@ export function buildMigratedFile(
   const done = chunks.filter((c) => c.migrated_code && c.migrated_code.trim());
   const c = target.commentPrefix;
   const bar = `${c} ${"=".repeat(60)}`;
-  const preamble =
-    target.language === "Python"
-      ? "\nfrom decimal import Decimal, ROUND_HALF_UP  # noqa: F401\n"
-      : "";
+  const mandated =
+    target.language === "Python" ? ["from decimal import Decimal, ROUND_HALF_UP"] : [];
+
+  const { headerDecls, imports, bodies } = hoistImports(
+    target.language,
+    done.map((chunk) => chunk.migrated_code.trim()),
+    mandated,
+  );
+
   const header = [
     bar,
     `${c} Migrated by LegacyLift - ${projectName} → ${target.label}`,
     `${c} ${done.length} of ${chunks.length} units generated.`,
     `${c} Generated code is a starting point - review every unit before use.`,
     bar,
-    preamble,
-    "",
   ].join("\n");
 
+  const preamble = [...headerDecls, ...imports].join("\n");
+
   const body = done
-    .map((chunk) =>
+    .map((chunk, i) =>
       [
         bar,
         `${c} ${chunk.name}   (risk: ${chunk.risk_level} · status: ${chunk.status})`,
         bar,
-        chunk.migrated_code.trim(),
+        bodies[i],
       ].join("\n"),
     )
     .join("\n\n\n");
 
-  return header + body + "\n";
+  return [header, preamble, body].filter(Boolean).join("\n\n\n") + "\n";
 }
 
 function fallbackDownload(blob: Blob, filename: string): void {
@@ -119,9 +125,15 @@ export async function downloadMigration(
   });
 }
 
-/** Download one finalized file's assembled module in its target language. */
-export async function downloadSingleFile(fileGroup: FileGroup): Promise<void> {
-  const content = assembleFile(fileGroup.filename, fileGroup.chunks, fileGroup.target);
+/** Download one finalized file in its target language. Prefers the AI-reconciled
+ *  module when one exists, falling back to deterministic assembly of the chunks. */
+export async function downloadSingleFile(
+  fileGroup: FileGroup,
+  reconciledCode?: string,
+): Promise<void> {
+  const content =
+    reconciledCode?.trim() ||
+    assembleFile(fileGroup.filename, fileGroup.chunks, fileGroup.target);
   const filename = toTargetFilename(fileGroup.filename, fileGroup.target);
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
   await saveBlob(blob, filename, {
@@ -135,6 +147,7 @@ export async function downloadSingleFile(fileGroup: FileGroup): Promise<void> {
 export async function downloadProjectZip(
   projectName: string,
   fileGroups: FileGroup[],
+  reconciled: Record<string, string> = {},
 ): Promise<void> {
   const zip = new JSZip();
   const finalized = fileGroups.filter((f) => f.status === "finalized");
@@ -158,7 +171,8 @@ export async function downloadProjectZip(
   for (const fg of finalized) {
     zip.file(
       toTargetFilename(fg.filename, fg.target),
-      assembleFile(fg.filename, fg.chunks, fg.target),
+      reconciled[fg.filename]?.trim() ||
+        assembleFile(fg.filename, fg.chunks, fg.target),
     );
   }
 

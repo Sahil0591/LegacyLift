@@ -34,12 +34,14 @@ const FILE_STATUS_META: Record<FileStatus, { label: string; color: string }> = {
 function FileRow({
   group,
   defaultTargetId,
+  reconciledCode,
   onTargetChange,
   onSummarize,
   onFinalize,
 }: {
   group: FileGroup;
   defaultTargetId: string;
+  reconciledCode?: string;
   onTargetChange: (targetId: string) => void;
   onSummarize: () => void;
   onFinalize: () => void;
@@ -102,7 +104,7 @@ function FileRow({
         )}
         {group.status === "finalized" && (
           <button
-            onClick={() => downloadSingleFile(group)}
+            onClick={() => downloadSingleFile(group, reconciledCode)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-ink/15 px-2.5 py-1 text-[11px] font-semibold text-ink/80 transition-colors hover:bg-ink/[0.06]"
           >
             <Download className="h-3 w-3" />
@@ -138,6 +140,7 @@ export function OverviewPanel({
   state,
   fileGroups,
   config,
+  reconciledFiles = {},
   onFinalizeFile,
   onOpenBulkFinalize,
   onGlobalContextChange,
@@ -150,6 +153,7 @@ export function OverviewPanel({
   state: PipelineState;
   fileGroups: FileGroup[];
   config: ProjectConfig;
+  reconciledFiles?: Record<string, string>;
   onFinalizeFile: (filename: string) => void;
   onOpenBulkFinalize?: () => void;
   onGlobalContextChange: (text: string) => void;
@@ -262,6 +266,7 @@ export function OverviewPanel({
                 key={group.filename}
                 group={group}
                 defaultTargetId={config.targets.default}
+                reconciledCode={reconciledFiles[group.filename]}
                 onTargetChange={(id) => onFileTargetChange(group.filename, id)}
                 onSummarize={() => onSummarizeFile(group.filename)}
                 onFinalize={() => onFinalizeFile(group.filename)}

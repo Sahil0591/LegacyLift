@@ -16,10 +16,12 @@ import {
   loadFileStatus,
   loadLessons,
   loadProgress,
+  loadReconciled,
   saveConfig,
   saveFileStatus,
   saveLessons,
   saveProgress,
+  saveReconciled,
   updateProjectProgress,
   type ChunkProgressEntry,
 } from "@/lib/projectStore";
@@ -87,6 +89,11 @@ interface UsePipelineReturn {
   markFileFinalized: (filename: string) => void;
   /** Clear a file's finalized flag - used when a chunk inside it is reopened. */
   unmarkFileFinalized: (filename: string) => void;
+  /** The AI-reconciled module per finalized file (filename -> code). Download
+   *  uses this instead of re-assembling raw chunks when present. */
+  reconciledFiles: Record<string, string>;
+  /** Store (or clear, when code is empty) a file's AI-reconciled module. */
+  setReconciledFile: (filename: string, code: string) => void;
   /** Accumulated feedback (rejections + review findings) fed into future prompts. */
   lessons: Lesson[];
   /** Record a new lesson; persisted for local projects. */
@@ -352,6 +359,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
       : { ...INITIAL_STATE, projectId },
   );
   const [finalizedFiles, setFinalizedFiles] = useState<Record<string, true>>({});
+  const [reconciledFiles, setReconciledFilesState] = useState<Record<string, string>>({});
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const lessonsRef = useRef<Lesson[]>([]);
   const [config, setConfigState] = useState<ProjectConfig>(() => emptyConfig());
@@ -366,12 +374,14 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     if (demo && projectId) {
       setState(createDemoState(projectId));
       setFinalizedFiles({});
+      setReconciledFilesState({});
       setLessons([]);
       setConfigState(getDemoConfig(projectId));
       return;
     }
     if (isLocal && projectId) {
       setFinalizedFiles(loadFileStatus(projectId) ?? {});
+      setReconciledFilesState(loadReconciled(projectId) ?? {});
       setLessons(loadLessons(projectId) ?? []);
       setConfigState(loadConfig(projectId) ?? emptyConfig());
       const analysis = loadAnalysis(projectId);
@@ -388,6 +398,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
       let cancelled = false;
       setState({ ...INITIAL_STATE, projectId });
       setFinalizedFiles({});
+      setReconciledFilesState({});
       setLessons([]);
       setConfigState(emptyConfig());
       (async () => {
@@ -420,6 +431,7 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
       };
     }
     setFinalizedFiles({});
+    setReconciledFilesState({});
     setLessons([]);
     setConfigState(emptyConfig());
     setState({ ...INITIAL_STATE, projectId });
@@ -937,6 +949,28 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
         if (isLocal && projectId) saveFileStatus(projectId, next);
         return next;
       });
+      // A reopened chunk invalidates the reconciled module - drop it so download
+      // falls back to a fresh assembly until the file is finalized again.
+      setReconciledFilesState((prev) => {
+        if (!prev[filename]) return prev;
+        const next = { ...prev };
+        delete next[filename];
+        if (isLocal && projectId) saveReconciled(projectId, next);
+        return next;
+      });
+    },
+    [isLocal, projectId],
+  );
+
+  const setReconciledFile = useCallback(
+    (filename: string, code: string) => {
+      setReconciledFilesState((prev) => {
+        const next = { ...prev };
+        if (code.trim()) next[filename] = code;
+        else delete next[filename];
+        if (isLocal && projectId) saveReconciled(projectId, next);
+        return next;
+      });
     },
     [isLocal, projectId],
   );
@@ -1042,6 +1076,8 @@ export function usePipeline(projectId: string | null): UsePipelineReturn {
     finalizedFiles,
     markFileFinalized,
     unmarkFileFinalized,
+    reconciledFiles,
+    setReconciledFile,
     lessons,
     addLesson,
     config,

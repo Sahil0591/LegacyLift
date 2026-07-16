@@ -27,6 +27,8 @@ Routes:
     POST   /llm/migrate                   — on-demand migration for a single unit
     POST   /llm/review                    — on-demand AI review for a single unit
     POST   /llm/tests                     — on-demand test generation for a single unit
+    POST   /llm/finalize-file             — reconcile an assembled file into one coherent module
+    POST   /validate-file                 — static syntax/build validation of a finalized file
     WS     /ws/{project_id}              — WebSocket stream for a project
 """
 
@@ -58,6 +60,7 @@ from api.websocket_manager import manager as ws_manager
 from core.pipeline import run_pipeline, run_migration_generation, _transition, _add_lesson
 from core.storage import storage
 from core.target_languages import is_supported_target_language
+from core.layer1.language_validators import validate_target_code
 from db.session import get_database_url, get_session, init_db, validate_database_url
 from integrations.github_app import (
     GitHubAppAuthError,
@@ -86,6 +89,7 @@ from utils.llm_client import (
 )
 from utils.migration_prompts import (
     build_file_summary_prompt,
+    build_finalize_prompt,
     build_migration_prompt,
     build_project_review_prompt,
     build_review_prompt,
@@ -1640,6 +1644,40 @@ class ReviewProjectRequest(BaseModel):
     file_summaries: list[_FileSummaryIn] = Field(default_factory=list, max_length=200)
 
 
+class FinalizeFileRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    filename: str = Field(..., min_length=1, max_length=260)
+    assembled_code: str = Field(..., min_length=1, max_length=200_000)
+    source_code: Optional[str] = Field(None, max_length=120_000)
+    target_lang: str = Field("Python", max_length=32)
+    business_rules: list[_BusinessRuleIn] = Field(default_factory=list, max_length=40)
+    project_manifest: Optional[str] = Field(None, max_length=20_000)
+    target_profile: Optional[_TargetProfileIn] = None
+    institutional_context: Optional[str] = Field(None, max_length=12_000)
+
+    @field_validator("target_lang")
+    @classmethod
+    def validate_target_lang(cls, value: str):
+        if not is_supported_target_language(value):
+            raise ValueError(f"Unsupported target language: {value}")
+        return value
+
+
+class ValidateFileRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    code: str = Field(..., min_length=1, max_length=200_000)
+    target_lang: str = Field("Python", max_length=32)
+
+    @field_validator("target_lang")
+    @classmethod
+    def validate_target_lang(cls, value: str):
+        if not is_supported_target_language(value):
+            raise ValueError(f"Unsupported target language: {value}")
+        return value
+
+
 # --- Lazy LLM client singleton (re-uses one AsyncOpenAI connection pool) -----
 
 _llm_client: Optional[LLMClient] = None
@@ -1930,6 +1968,91 @@ async def llm_summarize_file(
         "technical": parsed.get("technical") or "",
         "layman": parsed.get("layman") or "",
         "model": llm.model,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /llm/finalize-file
+# ---------------------------------------------------------------------------
+
+@app.post("/llm/finalize-file")
+async def llm_finalize_file(
+    body: FinalizeFileRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Reconcile a file assembled from independently-migrated units into one
+    coherent, compilable module — unifying drifted names, resolving cross-unit
+    references, and de-duplicating shared definitions without changing any
+    unit's behaviour. Returns {code, model}."""
+    _rate_limit(request, "finalize", user_id)
+    _check_and_charge_quota(user_id)
+    llm = _get_llm()
+    _require_configured(llm)
+
+    system, user = build_finalize_prompt(
+        filename=body.filename,
+        target_lang=body.target_lang,
+        assembled_code=body.assembled_code,
+        source_code=body.source_code,
+        business_rules=[r.model_dump() for r in body.business_rules],
+        project_manifest=body.project_manifest,
+        target_profile=body.target_profile.model_dump() if body.target_profile else None,
+        institutional_context=body.institutional_context,
+    )
+    # A whole reconciled file must fit in the response - far more than a single
+    # unit needs. The client refuses to reconcile files large enough to risk
+    # exceeding this, so we never silently truncate a finalized module.
+    content = await _safe_complete(llm, system=system, user=user, temperature=0.1, max_tokens=16000)
+    content = _ensure_real_output(content)
+    storage.increment_migrations_today(user_id)
+    return {"code": strip_code_fence(content), "model": llm.model}
+
+
+# ---------------------------------------------------------------------------
+# POST /validate-file
+# ---------------------------------------------------------------------------
+
+@app.post("/validate-file")
+async def validate_file(
+    body: ValidateFileRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Static (syntax/build) validation of a whole finalized file in its target
+    language. Python/SQL parse in-process; compiled targets shell out to their
+    toolchain (javac/tsc/rustc/go/dotnet/g++). No migrated logic is executed.
+
+    Returns {status, passed, issues, warnings, validator, line_count} where
+    status is 'passed', 'failed', or 'unavailable' (the toolchain for this
+    target is not installed, so the file could not be checked here). This is not
+    an LLM call, so it does not consume migration quota."""
+    _rate_limit(request, "validate", user_id)
+    report = await asyncio.to_thread(validate_target_code, body.target_lang, body.code)
+
+    issues = list(report.issues)
+    unavailable = (
+        not report.passed
+        and bool(issues)
+        and all(
+            ("validator unavailable" in issue) or ("No static validator is registered" in issue)
+            for issue in issues
+        )
+    )
+    if report.passed:
+        status = "passed"
+    elif unavailable:
+        status = "unavailable"
+    else:
+        status = "failed"
+
+    return {
+        "status": status,
+        "passed": report.passed,
+        "issues": [] if unavailable else issues,
+        "warnings": list(report.warnings),
+        "validator": report.validator,
+        "line_count": report.line_count,
     }
 
 

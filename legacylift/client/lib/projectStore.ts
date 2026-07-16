@@ -19,6 +19,7 @@ import type {
 const ANALYSIS_PREFIX = "legacylift:analysis:";
 const PROGRESS_PREFIX = "legacylift:progress:";
 const FILE_STATUS_PREFIX = "legacylift:filestatus:";
+const RECONCILED_PREFIX = "legacylift:reconciled:";
 const LESSONS_PREFIX = "legacylift:lessons:";
 const CONFIG_PREFIX = "legacylift:config:";
 const INDEX_KEY = "legacylift:project-index";
@@ -125,6 +126,7 @@ export function deleteProject(id: string): void {
     localStorage.removeItem(ANALYSIS_PREFIX + id);
     localStorage.removeItem(PROGRESS_PREFIX + id);
     localStorage.removeItem(FILE_STATUS_PREFIX + id);
+    localStorage.removeItem(RECONCILED_PREFIX + id);
     localStorage.removeItem(LESSONS_PREFIX + id);
     localStorage.removeItem(CONFIG_PREFIX + id);
   } catch {}
@@ -209,6 +211,36 @@ export function loadFileStatus(projectId: string): Record<string, true> | null {
   try {
     const raw = localStorage.getItem(FILE_STATUS_PREFIX + projectId);
     return raw ? (JSON.parse(raw) as Record<string, true>) : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reconciled files (local projects only) - the AI-finalized module per file,
+// stored so download uses the reconciled output instead of re-assembling the
+// raw chunks. Keyed by filename.
+// ---------------------------------------------------------------------------
+
+/** Persist the AI-reconciled module for each finalized file. */
+export function saveReconciled(
+  projectId: string,
+  reconciled: Record<string, string>,
+): void {
+  try {
+    localStorage.setItem(RECONCILED_PREFIX + projectId, JSON.stringify(reconciled));
+  } catch {
+    // best-effort (quota) - download falls back to deterministic assembly.
+  }
+}
+
+/** Load previously reconciled files. Returns null when nothing is stored. */
+export function loadReconciled(
+  projectId: string,
+): Record<string, string> | null {
+  try {
+    const raw = localStorage.getItem(RECONCILED_PREFIX + projectId);
+    return raw ? (JSON.parse(raw) as Record<string, string>) : null;
   } catch {
     return null;
   }

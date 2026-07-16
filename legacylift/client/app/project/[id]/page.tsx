@@ -227,6 +227,8 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     finalizedFiles,
     markFileFinalized,
     unmarkFileFinalized,
+    reconciledFiles,
+    setReconciledFile,
     lessons,
     addLesson,
     config,
@@ -849,7 +851,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         targetLabels={targetLabels}
         approved={approved}
         total={state.chunks.length}
-        onDownload={() => downloadProjectZip(repo, fileGroups)}
+        onDownload={() => downloadProjectZip(repo, fileGroups, reconciledFiles)}
         canDownload={canDownloadZip}
         quotaRemaining={quota?.remaining ?? null}
         quotaMax={quota?.max ?? null}
@@ -865,6 +867,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
               state={state}
               fileGroups={fileGroups}
               config={config}
+              reconciledFiles={reconciledFiles}
               onFinalizeFile={(filename) => {
                 const group = fileGroups.find((f) => f.filename === filename);
                 if (group?.clusterReady) setFinalizeTarget(filename);
@@ -924,7 +927,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                   onRunProjectReview={handleRunProjectReview}
                   onAcknowledgeReview={() => setProjectReviewAcked(true)}
                   canDownloadZip={canDownloadZip}
-                  onDownloadZip={() => downloadProjectZip(repo, fileGroups)}
+                  onDownloadZip={() => downloadProjectZip(repo, fileGroups, reconciledFiles)}
                 />
               ) : reviewChunk ? (
                 <ChunkReview
@@ -977,11 +980,27 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           open
           file={finalizeGroup}
           onClose={() => setFinalizeTarget(null)}
-          onFinalize={() => {
+          onFinalize={(reconciledCode) => {
+            if (reconciledCode) {
+              setReconciledFile(finalizeGroup.filename, reconciledCode);
+            }
             markFileFinalized(finalizeGroup.filename);
             setFinalizeTarget(null);
           }}
           onLessonLearned={addLesson}
+          institutionalContext={
+            buildInstitutionalContext(config, finalizeGroup.filename) || undefined
+          }
+          projectManifest={
+            buildProjectManifest(state, finalizeGroup.filename) || undefined
+          }
+          businessRules={state.businessRules
+            .filter((r) => r.source_file === finalizeGroup.filename)
+            .map((r) => ({
+              title: r.title,
+              description: r.description,
+              hardcoded_values: r.hardcoded_values,
+            }))}
         />
       )}
 

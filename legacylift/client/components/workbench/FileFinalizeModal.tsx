@@ -1,8 +1,10 @@
 "use client";
-// FileFinalizeModal - the per-file "finish line": shows the assembled target
-// file next to the original source, lets the reviewer run one last AI
-// consistency check across every chunk in the file, and gates a "Finalize
-// file" action behind it. Mirrors the visual language of ChunkReview's Checks.
+// FileFinalizeModal - the per-file "finish line": shows the final target file
+// next to the original source for a mandatory last human review. The reviewer
+// can run the AI reconcile pass (merge chunks into one coherent module), run an
+// optional consistency check, and edit the file directly; "Finalize file" is
+// gated behind an explicit "I've reviewed this" acknowledgement that any edit or
+// re-reconcile resets. Mirrors the visual language of ChunkReview's Checks.
 
 import { useState } from "react";
 import {
@@ -13,21 +15,42 @@ import {
   AlertOctagon,
   CornerDownRight,
   CheckCircle2,
+  Wand2,
+  ShieldCheck,
 } from "lucide-react";
 import type { AIReviewResult } from "@/types/legacylift";
 import type { FileGroup } from "@/hooks/useFileStatus";
 import { assembleFile, concatenateSource } from "@/lib/fileAssembly";
-import { reviewMigration } from "@/lib/migration";
+import {
+  finalizeFile,
+  reviewMigration,
+  validateFile,
+  type FinalizeFileInput,
+  type ValidationResult,
+} from "@/lib/migration";
 import { toProfileCtx } from "@/lib/targetLanguages";
 import { makeLesson, type Lesson } from "@/lib/lessons";
+
+// A whole-file reconcile must fit in one model response; above this the client
+// keeps the deterministic assembly (still human-reviewed + validated) rather
+// than risk a truncated file. ~48k chars ≈ 12k output tokens, under the
+// server's 16k finalize cap.
+const RECONCILE_MAX_CHARS = 48_000;
 
 interface FileFinalizeModalProps {
   open: boolean;
   onClose: () => void;
   file: FileGroup;
-  onFinalize: () => void;
+  /** Receives the AI-reconciled module when the reviewer ran reconcile, so it
+   *  becomes what gets stored + downloaded instead of the raw assembly. */
+  onFinalize: (reconciledCode?: string) => void;
   /** Called once per finding when the on-demand check completes. */
   onLessonLearned?: (lesson: Lesson) => void;
+  /** Authoritative context fed into the reconcile pass so the finalized file
+   *  keeps the org's conventions, this file's rules, and cross-file naming. */
+  institutionalContext?: string;
+  projectManifest?: string;
+  businessRules?: FinalizeFileInput["businessRules"];
 }
 
 export function FileFinalizeModal({
@@ -36,31 +59,110 @@ export function FileFinalizeModal({
   file,
   onFinalize,
   onLessonLearned,
+  institutionalContext,
+  projectManifest,
+  businessRules,
 }: FileFinalizeModalProps) {
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [review, setReview] = useState<AIReviewResult | null>(null);
   const [hasChecked, setHasChecked] = useState(false);
-  const [confirmCritical, setConfirmCritical] = useState(false);
+  const [confirmOverride, setConfirmOverride] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
+  const [reconcileError, setReconcileError] = useState<string | null>(null);
+  const [reconciled, setReconciled] = useState<string | null>(null);
+  // The reviewer's working copy of the final file (editable). null = follow the
+  // computed default (reconciled output, else the deterministic assembly).
+  const [draft, setDraft] = useState<string | null>(null);
+  // The human must tick this after reading the final file. Any edit or a fresh
+  // reconcile clears it, so a changed file can never be finalized unreviewed.
+  const [reviewedAck, setReviewedAck] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [validateError, setValidateError] = useState<string | null>(null);
 
   if (!open) return null;
 
   const assembled = assembleFile(file.filename, file.chunks, file.target);
   const source = concatenateSource(file.chunks);
+  // The exact text that gets locked in and downloaded: the reviewer's edits if
+  // any, else the AI-reconciled module, else the deterministic assembly.
+  const finalCode = draft ?? reconciled ?? assembled;
   const allChunksHaveCode = file.chunks.every(
     (c) => c.migrated_code.trim().length > 0,
   );
   const criticalIssues = review?.critical_issues ?? [];
-  const canFinalize = allChunksHaveCode && hasChecked;
+  const validationFailed = validation?.status === "failed";
+  // Above this size a single-pass reconcile risks a truncated response; keep the
+  // deterministic assembly instead (still reviewed + validated).
+  const tooBigToReconcile = assembled.length > RECONCILE_MAX_CHARS;
+  // Finalize is gated purely on the human having reviewed the actual final file.
+  const canFinalize = allChunksHaveCode && reviewedAck;
   const finalizeBlockedReason = !allChunksHaveCode
     ? "Some chunks in this file have no migrated code yet"
-    : !hasChecked
-      ? "Run the final check before finalizing"
+    : !reviewedAck
+      ? "Review the final file, then tick the confirmation to finalize"
       : undefined;
 
+  // Hand up the reviewed text unless it is byte-identical to the plain assembly
+  // (then undefined lets download derive it and we skip persisting a copy).
+  const finalToLock = finalCode.trim() === assembled.trim() ? undefined : finalCode;
+
   const requestFinalize = () => {
-    if (criticalIssues.length > 0) setConfirmCritical(true);
-    else onFinalize();
+    // Surface a confirmation when a check flagged something - either the AI
+    // consistency review (critical issues) or the build/syntax validator.
+    if (criticalIssues.length > 0 || validationFailed) setConfirmOverride(true);
+    else onFinalize(finalToLock);
+  };
+
+  const runValidate = async (codeArg?: string) => {
+    setValidating(true);
+    setValidateError(null);
+    try {
+      const result = await validateFile({
+        code: codeArg ?? finalCode,
+        targetLang: file.target.language,
+      });
+      setValidation(result);
+    } catch (err) {
+      setValidateError(
+        err instanceof Error ? err.message : "Could not run the build check.",
+      );
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const runReconcile = async () => {
+    setReconciling(true);
+    setReconcileError(null);
+    try {
+      const result = await finalizeFile({
+        filename: file.filename,
+        assembledCode: assembled,
+        sourceCode: source,
+        targetLang: file.target.language,
+        targetProfile: toProfileCtx(file.target),
+        institutionalContext,
+        projectManifest,
+        businessRules,
+      });
+      setReconciled(result.code);
+      // Drop the reviewer into the reconciled output; a changed file must be
+      // re-reviewed and re-validated before it can be finalized.
+      setDraft(result.code);
+      setReviewedAck(false);
+      setValidation(null);
+      void runValidate(result.code);
+    } catch (err) {
+      setReconcileError(
+        err instanceof Error
+          ? err.message
+          : "Could not reconcile this file - you can still finalize the assembled version.",
+      );
+    } finally {
+      setReconciling(false);
+    }
   };
 
   const runCheck = async () => {
@@ -116,17 +218,140 @@ export function FileFinalizeModal({
               <div className="border-b border-ink/10 px-4 py-2 text-xs font-semibold text-ink/80">
                 Legacy source (concatenated)
               </div>
-              <pre className="max-h-64 overflow-auto p-3 font-mono text-[12px] leading-[1.7] text-ink/90">
+              <pre className="h-72 overflow-auto p-3 font-mono text-[12px] leading-[1.7] text-ink/90">
                 {source}
               </pre>
             </div>
             <div className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
-              <div className="border-b border-ink/10 px-4 py-2 text-xs font-semibold text-ink/80">
-                Assembled target file
+              <div className="flex items-center gap-2 border-b border-ink/10 px-4 py-2">
+                <span className="text-xs font-semibold text-ink/80">
+                  Final file — review &amp; edit
+                </span>
+                {reconciled && draft === reconciled && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[#10B981]/15 px-2 py-0.5 text-[10px] font-semibold text-[#10B981]">
+                    <CheckCircle2 className="h-2.5 w-2.5" />
+                    AI-reconciled
+                  </span>
+                )}
+                {draft !== null && draft !== reconciled && (
+                  <span className="rounded-full bg-ink/[0.08] px-2 py-0.5 text-[10px] font-semibold text-sub">
+                    edited
+                  </span>
+                )}
+                <button
+                  onClick={runReconcile}
+                  disabled={reconciling || !allChunksHaveCode || tooBigToReconcile}
+                  title={
+                    tooBigToReconcile
+                      ? "This file is too large to reconcile in one pass - review and finalize the assembled version instead"
+                      : "Merge every chunk into one coherent module: unify drifted names, resolve cross-chunk references, and de-duplicate shared code without changing behaviour"
+                  }
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-[#7C3AED]/30 px-2.5 py-1 text-[11px] font-semibold text-[#7C3AED] transition-colors hover:bg-[#7C3AED]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {reconciling ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Wand2 className="h-3 w-3" />
+                  )}
+                  {reconciling
+                    ? "Reconciling…"
+                    : reconciled
+                      ? "Re-reconcile"
+                      : "Assemble & reconcile"}
+                </button>
               </div>
-              <pre className="max-h-64 overflow-auto p-3 font-mono text-[12px] leading-[1.7] text-ink/90">
-                {assembled}
-              </pre>
+              <textarea
+                value={finalCode}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setReviewedAck(false);
+                  setValidation(null);
+                }}
+                spellCheck={false}
+                aria-label="Final file to review before finalizing"
+                className="block h-72 w-full resize-none bg-transparent p-3 font-mono text-[12px] leading-[1.7] text-ink/90 outline-none"
+              />
+              {tooBigToReconcile && (
+                <div className="flex items-start gap-2 border-t border-ink/10 px-4 py-2 text-[11px] text-sub">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                  Too large to AI-reconcile in one pass — imports are still
+                  de-duplicated; review &amp; validate the assembled file below.
+                </div>
+              )}
+              {reconcileError && (
+                <div className="flex items-start gap-2 border-t border-ink/10 px-4 py-2 text-[11px] text-[#F59E0B]">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                  {reconcileError}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-ink/10 bg-surface/40">
+            <div className="flex items-center justify-between border-b border-ink/10 px-4 py-2.5">
+              <span className="text-xs font-semibold uppercase tracking-wide text-sub">
+                Build / syntax check
+              </span>
+              <button
+                onClick={() => runValidate()}
+                disabled={validating || !allChunksHaveCode}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#7C3AED]/30 px-3 py-1.5 text-xs font-semibold text-[#7C3AED] transition-colors hover:bg-[#7C3AED]/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {validating ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                )}
+                {validating ? "Validating…" : "Validate file"}
+              </button>
+            </div>
+            <div className="space-y-1.5 px-4 py-3 text-xs">
+              {validateError && (
+                <div className="flex items-start gap-2 text-[#F59E0B]">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                  {validateError}
+                </div>
+              )}
+              {validation?.status === "passed" && (
+                <div className="flex items-start gap-2 text-[#10B981]">
+                  <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0" />
+                  Compiles / parses cleanly ({validation.validator}).
+                </div>
+              )}
+              {validation?.status === "failed" && (
+                <>
+                  <div className="flex items-center gap-2 font-semibold text-[#DC2626]">
+                    <AlertOctagon className="h-3.5 w-3.5" />
+                    Build / syntax check failed ({validation.validator})
+                  </div>
+                  {validation.issues.map((issue) => (
+                    <div key={issue} className="flex items-start gap-2 text-[#DC2626]">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                      {issue}
+                    </div>
+                  ))}
+                </>
+              )}
+              {validation?.status === "unavailable" && (
+                <div className="flex items-start gap-2 text-sub">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                  Couldn&apos;t validate here — the {file.target.label} toolchain
+                  isn&apos;t installed on the server. Build the file in your own
+                  environment before shipping.
+                </div>
+              )}
+              {validation?.warnings.map((w) => (
+                <div key={w} className="flex items-start gap-2 text-ink/70">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-[#F59E0B]" />
+                  {w}
+                </div>
+              ))}
+              {!validation && !validateError && !validating && (
+                <div className="text-sub">
+                  Runs the {file.target.label} compiler/parser on the whole final
+                  file to catch anything that won&apos;t build. No code is executed.
+                </div>
+              )}
             </div>
           </div>
 
@@ -195,9 +420,16 @@ export function FileFinalizeModal({
         </div>
 
         <div className="flex items-center gap-3 border-t border-ink/10 bg-surface/40 px-6 py-4">
-          <p className="mr-auto text-sm text-sub">
-            Finalizing locks this file in for download.
-          </p>
+          <label className="mr-auto flex items-center gap-2 text-sm text-ink/80">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-[#10B981]"
+              checked={reviewedAck}
+              disabled={!allChunksHaveCode}
+              onChange={(e) => setReviewedAck(e.target.checked)}
+            />
+            I&apos;ve reviewed the final file and want to finalize it
+          </label>
           <button
             onClick={onClose}
             className="rounded-lg px-4 py-2 text-sm font-medium text-sub transition-colors hover:text-ink"
@@ -216,36 +448,60 @@ export function FileFinalizeModal({
         </div>
       </div>
 
-      {confirmCritical && (
+      {confirmOverride && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-6">
           <div className="w-full max-w-md rounded-xl border border-ink/10 bg-base p-6 shadow-2xl">
             <div className="flex items-center gap-2 text-sm font-semibold text-[#DC2626]">
               <AlertOctagon className="h-4 w-4" />
-              {criticalIssues.length} critical issue{criticalIssues.length === 1 ? "" : "s"} found
+              {validationFailed ? "This file failed its checks" : "Unresolved issues"}
             </div>
             <p className="mt-2 text-sm text-ink/80">
-              The final consistency check flagged critical issues in{" "}
-              {file.filename}. Are you sure you want to finalize it anyway?
+              {file.filename} still has open findings. Finalize it anyway?
             </p>
-            <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto text-xs text-ink/70">
-              {criticalIssues.map((c) => (
-                <li key={c} className="flex items-start gap-1.5">
-                  <span className="shrink-0">•</span>
-                  {c}
-                </li>
-              ))}
-            </ul>
+            <div className="mt-3 max-h-48 space-y-2 overflow-y-auto text-xs">
+              {validationFailed && (
+                <div>
+                  <div className="font-semibold text-[#DC2626]">
+                    Build / syntax check failed
+                  </div>
+                  <ul className="mt-1 space-y-1 text-ink/70">
+                    {validation!.issues.map((i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="shrink-0">•</span>
+                        {i}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {criticalIssues.length > 0 && (
+                <div>
+                  <div className="font-semibold text-[#DC2626]">
+                    AI consistency check: {criticalIssues.length} critical issue
+                    {criticalIssues.length === 1 ? "" : "s"}
+                  </div>
+                  <ul className="mt-1 space-y-1 text-ink/70">
+                    {criticalIssues.map((c) => (
+                      <li key={c} className="flex items-start gap-1.5">
+                        <span className="shrink-0">•</span>
+                        {c}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
             <div className="mt-5 flex items-center justify-end gap-2">
               <button
-                onClick={() => setConfirmCritical(false)}
+                onClick={() => setConfirmOverride(false)}
                 className="rounded-lg px-4 py-2 text-sm font-medium text-sub transition-colors hover:text-ink"
               >
                 Cancel
               </button>
               <button
                 onClick={() => {
-                  setConfirmCritical(false);
-                  onFinalize();
+                  setConfirmOverride(false);
+                  onFinalize(finalToLock);
                 }}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-[#DC2626] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#B91C1C]"
               >
