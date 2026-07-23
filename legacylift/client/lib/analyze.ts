@@ -180,19 +180,39 @@ function splitCobol(file: string, content: string): CodeUnit[] {
   return units;
 }
 
+// Strip fixed-format sequence columns and drop comment lines before scanning
+// for calls. Real-world COBOL is full of `*`-indicator comment lines that
+// mention paragraph names ("* PERFORM OLD-RATE-CALC (removed 1997)", change
+// logs, commented-out code) — scanning raw source turned those into phantom
+// dependency edges, which then poisoned migration ordering and the cross-chunk
+// context. Only executable content participates in the call graph.
+function executableCobol(src: string): string {
+  return src
+    .split("\n")
+    .map((raw) => {
+      const { indicator, content } = cobolLine(raw);
+      if (indicator === "*" || indicator === "/") return "";
+      // Free-format inline comment: everything after `*>` is commentary.
+      const inline = content.indexOf("*>");
+      return inline >= 0 ? content.slice(0, inline) : content;
+    })
+    .join("\n");
+}
+
 function extractCalls(src: string): string[] {
+  const code = executableCobol(src);
   const calls: string[] = [];
   const perform = /\bPERFORM\s+([A-Z0-9][A-Z0-9-]+)/gi;
   const call = /\bCALL\s+['"]([^'"]+)['"]/gi;
   const goto = /\bGO\s+TO\s+([A-Z0-9][A-Z0-9-]+)/gi;
   const skip = new Set(["UNTIL", "VARYING", "TIMES", "THRU", "THROUGH"]);
   let m: RegExpExecArray | null;
-  while ((m = perform.exec(src))) {
+  while ((m = perform.exec(code))) {
     const n = m[1].toUpperCase();
     if (!skip.has(n)) calls.push(n);
   }
-  while ((m = call.exec(src))) calls.push(m[1].toUpperCase());
-  while ((m = goto.exec(src))) {
+  while ((m = call.exec(code))) calls.push(m[1].toUpperCase());
+  while ((m = goto.exec(code))) {
     const n = m[1].toUpperCase();
     if (!skip.has(n)) calls.push(n);
   }

@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  CheckCheck,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -32,10 +33,16 @@ interface ChunkQueueProps {
   busyId?: string | null;
   /** The next chunk to migrate in dependency order (callees before callers). */
   suggestedId?: string | null;
-  /** Start the "migrate every remaining unit in dependency order" batch. */
+  /** Start the migration run (every remaining unit, dependency order). */
   onAutoMigrate?: () => void;
-  /** True while that batch is running. */
+  /** True while the run is walking the queue. */
   autoMigrating?: boolean;
+  /** Units whose references broke when a dependency's API changed. */
+  syncIds?: Set<string>;
+  /** How many units passed every check and can be bulk-approved. */
+  approveAllCount?: number;
+  /** Human-triggered bulk approval of every passing unit. */
+  onApproveAllPassing?: () => void;
 }
 
 const UNGROUPED = "(ungrouped)";
@@ -56,10 +63,14 @@ export function ChunkQueue({
   suggestedId = null,
   onAutoMigrate,
   autoMigrating = false,
+  syncIds,
+  approveAllCount = 0,
+  onApproveAllPassing,
 }: ChunkQueueProps) {
   const approved = chunks.filter((c) => c.status === "Approved").length;
   const pct = chunks.length ? Math.round((approved / chunks.length) * 100) : 0;
   const remaining = chunks.filter((c) => c.status !== "Approved").length;
+  const started = chunks.some((c) => c.migrated_code.trim().length > 0);
 
   const [search, setSearch] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -150,7 +161,7 @@ export function ChunkQueue({
           <button
             onClick={onAutoMigrate}
             disabled={autoMigrating}
-            title="Migrate every remaining unit in dependency order (callees before callers), so each caller sees its dependencies' real generated names. Pauses on anything that needs your review."
+            title="Work through every remaining unit in dependency order (callees before callers), so each caller sees its dependencies' real generated names. Flagged units are collected for your review — nothing is approved without you."
             className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#7C3AED]/40 px-2 py-1.5 text-xs font-medium text-[#7C3AED] transition-colors hover:bg-[#7C3AED]/[0.08] disabled:opacity-60"
           >
             {autoMigrating ? (
@@ -161,9 +172,19 @@ export function ChunkQueue({
             ) : (
               <>
                 <Wand2 className="h-3.5 w-3.5" />
-                Migrate in dependency order
+                {started ? "Resume migration run" : "Run full migration"}
               </>
             )}
+          </button>
+        )}
+        {onApproveAllPassing && approveAllCount > 0 && !autoMigrating && (
+          <button
+            onClick={onApproveAllPassing}
+            title="Approve every unit that passed static analysis and AI review with no critical issues and no pending sync. You confirm first — nothing is approved without you."
+            className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 px-2 py-1.5 text-xs font-medium text-emerald-500 transition-colors hover:bg-emerald-500/[0.08]"
+          >
+            <CheckCheck className="h-3.5 w-3.5" />
+            Approve {approveAllCount} passing
           </button>
         )}
       </div>
@@ -311,6 +332,14 @@ export function ChunkQueue({
                               }`}
                             >
                               <span className="truncate">{chunk.name}</span>
+                              {syncIds?.has(chunk.id) && (
+                                <span
+                                  title="A dependency's interface changed — this unit's references need a sync."
+                                  className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-500"
+                                >
+                                  Sync
+                                </span>
+                              )}
                               {chunk.id === suggestedId && chunk.id !== busyId && (
                                 <span className="shrink-0 rounded-full bg-[#7C3AED]/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#7C3AED]">
                                   Next

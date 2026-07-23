@@ -9,6 +9,7 @@ import Link from "next/link";
 import {
   CheckCircle2,
   ArrowRight,
+  ChevronRight,
   Loader2,
   Sparkles,
   AlertTriangle,
@@ -31,8 +32,19 @@ import {
   type FileSummary,
 } from "@/lib/migration";
 import { buildProjectManifest } from "@/lib/manifest";
-import { buildTargetApi, buildDependenciesSource, buildCrossFileApi } from "@/lib/targetApi";
+import {
+  buildTargetApi,
+  buildDependenciesSource,
+  buildCrossFileApi,
+  directDependencies,
+} from "@/lib/targetApi";
 import { nextSuggestedChunkId, computeMigrationOrder } from "@/lib/migrationOrder";
+import {
+  assessImpact,
+  dependentsOf,
+  exportedNames,
+  syncInstruction,
+} from "@/lib/impact";
 import { concatenateSource } from "@/lib/fileAssembly";
 import { resolveTarget, buildInstitutionalContext, summarizeTargets } from "@/lib/projectConfig";
 import { toProfileCtx } from "@/lib/targetLanguages";
@@ -58,6 +70,7 @@ import { ChunkReview } from "@/components/workbench/ChunkReview";
 import { WalkthroughTour } from "@/components/workbench/WalkthroughTour";
 import { OverviewPanel } from "@/components/workbench/OverviewPanel";
 import { FileContextPanel } from "@/components/workbench/FileContextPanel";
+import { UnitInfoPanel } from "@/components/workbench/UnitInfoPanel";
 import { FileFinalizeModal } from "@/components/workbench/FileFinalizeModal";
 import { BulkFinalizeModal } from "@/components/workbench/BulkFinalizeModal";
 import { FileSummaryModal } from "@/components/workbench/FileSummaryModal";
@@ -262,11 +275,36 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [quota, setQuota] = useState<{ remaining: number; max: number } | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
-  // True while "Migrate in dependency order" is walking the queue.
+  // True while the migration run is walking the queue.
   const [batchRunning, setBatchRunning] = useState(false);
+  const batchRunningRef = useRef(false);
+  // Cross-chunk impact tracking: chunkId -> notes about upstream changes that
+  // touch this unit, plus a regeneration instruction when a reference actually
+  // broke (an upstream unit renamed/removed a symbol this one calls).
+  const [impact, setImpact] = useState<
+    Record<string, { notes: string[]; fixInstruction?: string }>
+  >({});
+  const impactRef = useRef(impact);
+  const updateImpact = (
+    fn: (
+      prev: Record<string, { notes: string[]; fixInstruction?: string }>,
+    ) => Record<string, { notes: string[]; fixInstruction?: string }>,
+  ) => {
+    setImpact((prev) => {
+      const next = fn(prev);
+      impactRef.current = next;
+      return next;
+    });
+  };
+  // Right sidebar: unit info panel vs raw source file view.
+  const [sideTab, setSideTab] = useState<"unit" | "source">("unit");
+  // Per-unit AI explanations (plain + technical), cached per chunk id.
+  const [unitExplains, setUnitExplains] = useState<Record<string, FileSummary>>({});
+  const [explainingUnit, setExplainingUnit] = useState<string | null>(null);
+  const [unitExplainError, setUnitExplainError] = useState<string | null>(null);
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
 
-  // Always-fresh mirror of pipeline state so the auto-migrate loop (and the
+  // Always-fresh mirror of pipeline state so the migration run (and the
   // cross-chunk context it builds) sees each chunk approved in the prior
   // iteration, instead of the stale closure captured at render time.
   const stateRef = useRef(state);
@@ -412,6 +450,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     if (offline) {
       markChunkRejected(id);
       recordRejectionLesson();
+      if (chunk) flagDependentsOfRejected(chunk);
       advanceDemoChunk();
       setSelectedId(null);
       return;
@@ -420,6 +459,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       await rejectChunk(projectId, { chunk_id: id, reason });
       markChunkRejected(id);
       recordRejectionLesson();
+      if (chunk) flagDependentsOfRejected(chunk);
     } catch (err) {
       setActionError(
         err instanceof Error ? err.message : "Reject failed - please try again.",
@@ -432,12 +472,31 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   // LLM keeps guessing at). Bypasses generation entirely, and invalidates the
   // stale checks so the human has to explicitly re-validate before merging.
   const handleManualEdit = (chunk: MigrationChunk, code: string) => {
+    const prevCode = chunk.migrated_code;
     patchChunk(chunk.id, {
       migrated_code: code,
       static_analysis: staticAnalyze(code),
       ai_review: null,
       test_results: [],
     });
+    // A hand edit can rename/remove symbols just like a regeneration can —
+    // same propagation: flag any dependent whose references broke.
+    if (code.trim() && code !== prevCode) {
+      updateImpact((prev) => {
+        if (!prev[chunk.id]) return prev;
+        const next = { ...prev };
+        delete next[chunk.id];
+        return next;
+      });
+      const brokenCount = propagateChange(chunk, prevCode, code);
+      if (brokenCount > 0) {
+        pushToast({
+          variant: "info",
+          title: `${chunk.name} changed its interface`,
+          description: `${brokenCount} dependent unit${brokenCount === 1 ? "" : "s"} flagged for sync.`,
+        });
+      }
+    }
   };
 
   // Re-run the AI review + generated tests against whatever code is currently
@@ -591,6 +650,92 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     }
   };
 
+  // ── Cross-chunk impact propagation ─────────────────────────────────────────
+  // The "when I change one file I check everything that depends on it"
+  // behaviour a careful engineer applies by hand. After a unit's generated code
+  // changes (regen, AI fix, manual edit), diff its public API; dependents whose
+  // references broke are flagged for sync (and re-opened if already approved),
+  // dependents that still line up get an informational note. Returns how many
+  // dependents actually broke.
+  const propagateChange = (
+    chunk: MigrationChunk,
+    prevCode: string,
+    newCode: string,
+  ): number => {
+    const live = stateRef.current;
+    const lang = resolveTarget(config, chunk.source_file).language;
+    const oldNames = exportedNames(prevCode, lang);
+    const newNames = exportedNames(newCode, lang);
+    const reports = assessImpact(
+      live.chunks,
+      live.dependencyGraph,
+      chunk,
+      oldNames,
+      newNames,
+    );
+    if (reports.length === 0) return 0;
+
+    let brokenCount = 0;
+    updateImpact((prev) => {
+      const next = { ...prev };
+      for (const r of reports) {
+        const entry = {
+          notes: [...(next[r.dependent.id]?.notes ?? [])],
+          fixInstruction: next[r.dependent.id]?.fixInstruction,
+        };
+        const note =
+          r.broken.length > 0
+            ? `${chunk.name} changed its interface — ${r.broken.join(", ")} no longer exist${r.broken.length === 1 ? "s" : ""}. This unit references ${r.broken.length === 1 ? "it" : "them"} and needs a sync.`
+            : `${chunk.name} was updated — the references here (${r.referenced.join(", ")}) still match its new interface.`;
+        if (entry.notes[entry.notes.length - 1] !== note) entry.notes.push(note);
+        if (entry.notes.length > 5) entry.notes = entry.notes.slice(-5);
+        if (r.broken.length > 0) {
+          brokenCount++;
+          entry.fixInstruction = syncInstruction(chunk.name, r.broken, newNames);
+        }
+        next[r.dependent.id] = entry;
+      }
+      return next;
+    });
+
+    // A broken dependent that was already approved (or its file finalized) is
+    // no longer trustworthy — pull it back into review so the human sees it.
+    for (const r of reports) {
+      if (r.broken.length === 0) continue;
+      if (r.dependent.status === "Approved") {
+        patchChunk(r.dependent.id, { status: "Review" });
+      }
+      if (r.dependent.source_file && finalizedFiles[r.dependent.source_file]) {
+        unmarkFileFinalized(r.dependent.source_file);
+      }
+    }
+    return brokenCount;
+  };
+
+  // A rejected unit's dependents deserve a heads-up too: the fix that follows
+  // may change its interface, so anything built on it should be re-checked.
+  const flagDependentsOfRejected = (chunk: MigrationChunk) => {
+    const live = stateRef.current;
+    const deps = dependentsOf(live.chunks, live.dependencyGraph, chunk.id).filter(
+      (d) => d.migrated_code.trim(),
+    );
+    if (deps.length === 0) return;
+    updateImpact((prev) => {
+      const next = { ...prev };
+      for (const d of deps) {
+        const entry = {
+          notes: [...(next[d.id]?.notes ?? [])],
+          fixInstruction: next[d.id]?.fixInstruction,
+        };
+        const note = `${chunk.name} (which this unit calls) was sent back for changes — re-check this unit once it's fixed.`;
+        if (entry.notes[entry.notes.length - 1] !== note) entry.notes.push(note);
+        if (entry.notes.length > 5) entry.notes = entry.notes.slice(-5);
+        next[d.id] = entry;
+      }
+      return next;
+    });
+  };
+
   // Generate (and then review) this chunk's migration with Venice. When there's
   // specific guidance (a reject reason, or Fix with AI on a finding), this
   // keeps auto-regenerating on its own - using each round's fresh critical
@@ -678,6 +823,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     // mid-loop would be stale since React batches updates across awaits.
     let attempts = regenCounts[chunk.id] ?? 0;
     let currentInstructions = instructions;
+    const prevCode = chunk.migrated_code; // pre-run code, for impact diffing
     let currentCode = chunk.migrated_code;
     let exhausted = false;
 
@@ -845,23 +991,50 @@ export default function ProjectPage({ params }: ProjectPageProps) {
         action: { label: "View chunk", onClick: () => jumpToChunk(chunk.id) },
       });
     } finally {
+      // ── impact propagation ────────────────────────────────────────────────
+      // The chunk's code actually changed: it is now in sync with today's
+      // dependency APIs (clear its own flag), and everything that calls it
+      // must be checked against its new interface.
+      if (currentCode.trim() && currentCode !== prevCode) {
+        updateImpact((prev) => {
+          if (!prev[chunk.id]) return prev;
+          const next = { ...prev };
+          delete next[chunk.id];
+          return next;
+        });
+        const brokenCount = propagateChange(chunk, prevCode, currentCode);
+        if (brokenCount > 0 && !batchRunningRef.current) {
+          pushToast({
+            variant: "info",
+            title: `${chunk.name} changed its interface`,
+            description: `${brokenCount} dependent unit${brokenCount === 1 ? "" : "s"} flagged for sync — run the migration to update ${brokenCount === 1 ? "it" : "them"} automatically.`,
+          });
+        }
+      }
       setBusyId(null);
       setRegenStatus(null);
       refreshQuota();
     }
   };
 
-  // Auto-migrate every remaining unit in dependency order (callees before
-  // callers), so each caller is generated only after its dependencies exist and
-  // can be handed to the model as the ALREADY-MIGRATED TARGET API. Stops on the
-  // first unit that finishes unclean (generation failed or unresolved critical
-  // issues) so a foundational unit gets human attention before dependents build
-  // on it. Only runs on the offline/browser loop.
-  const handleMigrateInOrder = async () => {
-    if (!offline || batchRunning) return;
+  // ── The migration run ──────────────────────────────────────────────────────
+  // One streamlined pass over the WHOLE project in dependency order (callees
+  // before callers), so every caller is generated only after its dependencies
+  // exist and can be handed to the model as the ALREADY-MIGRATED TARGET API.
+  // The run works through everything: units with no code get generated, units
+  // flagged "needs sync" get regenerated against their dependencies' updated
+  // interfaces, units with unresolved critical issues get another attempt while
+  // budget remains. It does NOT stop on a flag — it finishes the whole graph
+  // and hands the human a complete picture: clean units to approve, flagged
+  // units to look at. The human stays the only one who can approve.
+  const handleRunMigration = async () => {
+    if (!offline || batchRunningRef.current) return;
+    batchRunningRef.current = true;
     setBatchRunning(true);
     setActionError(null);
     const yield0 = () => new Promise((r) => setTimeout(r, 0));
+    let clean = 0;
+    let flagged = 0;
     try {
       const order = computeMigrationOrder(
         stateRef.current.chunks,
@@ -869,40 +1042,141 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       );
       for (const id of order) {
         const current = stateRef.current.chunks.find((c) => c.id === id);
-        if (!current || current.status === "Approved") continue;
+        if (!current) continue;
+        const needsSync = !!impactRef.current[id]?.fixInstruction;
+        const hasCode = current.migrated_code.trim().length > 0;
+        const criticals = current.ai_review?.critical_issues.length ?? 0;
 
-        // Generate it if it has no code yet; otherwise keep its existing draft.
-        if (!current.migrated_code.trim()) {
-          if (regenLeft(id) <= 0) continue;
-          setSelectedId(id);
-          await handleRegenerate(current);
-          await yield0(); // let React commit patchChunk into stateRef
+        // Approved and unaffected by upstream changes — settled, skip.
+        if (current.status === "Approved" && !needsSync) continue;
+        // Clean existing draft — nothing to do, human just needs to review it.
+        if (hasCode && !needsSync && criticals === 0) continue;
+        if (regenLeft(id) <= 0) {
+          flagged++;
+          continue;
         }
 
-        const done = stateRef.current.chunks.find((c) => c.id === id);
-        const generated = (done?.migrated_code.trim().length ?? 0) > 0;
-        const criticals = done?.ai_review?.critical_issues.length ?? 0;
-        if (!generated || criticals > 0) {
-          setSelectedId(id);
-          pushToast({
-            variant: "info",
-            title: `Paused on ${current.name}`,
-            description: generated
-              ? "Resolve its flagged issues, then run “Migrate in dependency order” again to continue."
-              : "This unit didn't finish generating — review it, then continue the batch.",
-            action: { label: "View chunk", onClick: () => jumpToChunk(id) },
-          });
-          break;
-        }
+        setSelectedId(id);
+        await handleRegenerate(current, impactRef.current[id]?.fixInstruction);
+        await yield0(); // let React commit patchChunk into stateRef
+
+        const after = stateRef.current.chunks.find((c) => c.id === id);
+        const ok =
+          (after?.migrated_code.trim().length ?? 0) > 0 &&
+          (after?.ai_review?.critical_issues.length ?? 0) === 0;
+        if (ok) clean++;
+        else flagged++;
       }
+
+      pushToast(
+        flagged === 0
+          ? {
+              variant: "success",
+              title: "Migration run complete",
+              description: `${clean} unit${clean === 1 ? "" : "s"} processed clean — review and approve when ready.`,
+            }
+          : {
+              variant: "info",
+              title: "Migration run finished",
+              description: `${clean} clean · ${flagged} need${flagged === 1 ? "s" : ""} your attention — look for the amber markers in the queue.`,
+            },
+      );
     } finally {
+      batchRunningRef.current = false;
       setBatchRunning(false);
     }
+  };
+
+  // Bulk-approve every unit that passed every check (has code, static analysis
+  // passed, AI review ran clean, no pending sync). Human-triggered and
+  // confirmed — this is the "final control" lever, not automation: nothing is
+  // ever approved without this explicit action, and files still require the
+  // finalize review afterwards.
+  const passingIds = state.chunks
+    .filter(
+      (c) =>
+        c.status !== "Approved" &&
+        c.migrated_code.trim().length > 0 &&
+        (c.static_analysis?.passed ?? true) &&
+        c.ai_review != null &&
+        c.ai_review.critical_issues.length === 0 &&
+        !impact[c.id]?.fixInstruction,
+    )
+    .map((c) => c.id);
+
+  const handleApproveAllPassing = () => {
+    if (!offline || passingIds.length === 0) return;
+    const ok = window.confirm(
+      `Approve ${passingIds.length} unit${passingIds.length === 1 ? "" : "s"} that passed every check? Each file still gets your final review at finalize.`,
+    );
+    if (!ok) return;
+    for (const id of passingIds) markChunkApproved(id);
+    pushToast({
+      variant: "success",
+      title: `Approved ${passingIds.length} passing unit${passingIds.length === 1 ? "" : "s"}`,
+      description: "Flagged units still need individual review.",
+    });
   };
 
   const suggestedNextId = offline
     ? nextSuggestedChunkId(state.chunks, state.dependencyGraph)
     : null;
+
+  // Units currently flagged "needs sync" (broken references to a changed
+  // dependency) — shown as amber markers in the queue.
+  const syncIds = new Set(
+    Object.entries(impact)
+      .filter(([, v]) => v.fixInstruction)
+      .map(([k]) => k),
+  );
+
+  // AI explanation of one unit (plain-language + technical), cached per chunk.
+  const handleExplainUnit = async (chunk: MigrationChunk) => {
+    if (unitExplains[chunk.id] || explainingUnit) return;
+    setExplainingUnit(chunk.id);
+    setUnitExplainError(null);
+    try {
+      const rule = findRuleForChunk(chunk);
+      const result = await summarizeFile({
+        filename: `${chunk.name} — ${chunk.source_file}`,
+        sourceCode: chunk.source_code,
+        sourceLang: sourceLabelFor(chunk),
+        businessRules: rule
+          ? [
+              {
+                title: rule.title,
+                description: rule.description,
+                hardcoded_values: rule.hardcoded_values,
+              },
+            ]
+          : [],
+        institutionalContext:
+          buildInstitutionalContext(config, chunk.source_file) || undefined,
+      });
+      setUnitExplains((prev) => ({
+        ...prev,
+        [chunk.id]: { technical: result.technical, layman: result.layman },
+      }));
+    } catch (err) {
+      setUnitExplainError(
+        err instanceof Error ? err.message : "Could not explain this unit.",
+      );
+    } finally {
+      setExplainingUnit(null);
+      refreshQuota();
+    }
+  };
+
+  // Match a business rule to a chunk across both analysis shapes (backend rules
+  // carry chunk_id; the offline analyzer keys them by id/source position).
+  const findRuleForChunk = (chunk: MigrationChunk) =>
+    state.businessRules.find(
+      (r) =>
+        r.chunk_id === chunk.id ||
+        r.id === `rule-${chunk.id}` ||
+        (r.source_file === chunk.source_file &&
+          r.source_lines?.[0] === chunk.start_line),
+    ) ?? null;
 
   const activeFileForContext = reviewChunk?.source_file
     ? state.files.find((f) => f.filename === reviewChunk.source_file)
@@ -977,8 +1251,11 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                 onSelect={setSelectedId}
                 busyId={busyId}
                 suggestedId={suggestedNextId}
-                onAutoMigrate={offline ? handleMigrateInOrder : undefined}
+                onAutoMigrate={offline ? handleRunMigration : undefined}
                 autoMigrating={batchRunning}
+                syncIds={syncIds}
+                approveAllCount={offline ? passingIds.length : 0}
+                onApproveAllPassing={offline ? handleApproveAllPassing : undefined}
               />
             </aside>
             <main data-tour="review-main" className="min-w-0 flex-1">
@@ -1049,14 +1326,82 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                 fileContextCollapsed ? "w-10" : "w-96"
               }`}
             >
-              <FileContextPanel
-                filename={reviewChunk?.source_file ?? ""}
-                content={activeFileForContext?.content ?? ""}
-                activeStartLine={reviewChunk?.start_line ?? 0}
-                activeEndLine={reviewChunk?.end_line ?? 0}
-                collapsed={fileContextCollapsed}
-                onToggleCollapse={() => setFileContextCollapsed((v) => !v)}
-              />
+              {fileContextCollapsed || !reviewChunk ? (
+                <FileContextPanel
+                  filename={reviewChunk?.source_file ?? ""}
+                  content={activeFileForContext?.content ?? ""}
+                  activeStartLine={reviewChunk?.start_line ?? 0}
+                  activeEndLine={reviewChunk?.end_line ?? 0}
+                  collapsed={fileContextCollapsed}
+                  onToggleCollapse={() => setFileContextCollapsed((v) => !v)}
+                />
+              ) : (
+                <div className="flex h-full flex-col">
+                  <div className="flex items-center gap-1 border-b border-ink/10 px-2 py-2">
+                    {(
+                      [
+                        ["unit", "Unit info"],
+                        ["source", "Source file"],
+                      ] as const
+                    ).map(([tab, label]) => (
+                      <button
+                        key={tab}
+                        onClick={() => setSideTab(tab)}
+                        className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                          sideTab === tab
+                            ? "bg-[#7C3AED]/[0.12] text-[#7C3AED]"
+                            : "text-sub hover:text-ink"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setFileContextCollapsed(true)}
+                      title="Collapse"
+                      className="ml-auto rounded-lg p-1.5 text-sub transition-colors hover:bg-ink/[0.06] hover:text-ink"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    {sideTab === "unit" ? (
+                      <UnitInfoPanel
+                        chunk={reviewChunk}
+                        rule={findRuleForChunk(reviewChunk)}
+                        dependencies={directDependencies(
+                          state.chunks,
+                          state.dependencyGraph,
+                          reviewChunk,
+                        )}
+                        dependents={dependentsOf(
+                          state.chunks,
+                          state.dependencyGraph,
+                          reviewChunk.id,
+                        )}
+                        impactNotes={impact[reviewChunk.id]?.notes ?? []}
+                        needsSync={!!impact[reviewChunk.id]?.fixInstruction}
+                        explain={unitExplains[reviewChunk.id] ?? null}
+                        explaining={explainingUnit === reviewChunk.id}
+                        explainError={
+                          explainingUnit === null ? unitExplainError : null
+                        }
+                        onExplain={() => handleExplainUnit(reviewChunk)}
+                        onJump={jumpToChunk}
+                      />
+                    ) : (
+                      <FileContextPanel
+                        filename={reviewChunk.source_file}
+                        content={activeFileForContext?.content ?? ""}
+                        activeStartLine={reviewChunk.start_line}
+                        activeEndLine={reviewChunk.end_line}
+                        collapsed={false}
+                        onToggleCollapse={() => setFileContextCollapsed(true)}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
             </aside>
           </div>
         )}
