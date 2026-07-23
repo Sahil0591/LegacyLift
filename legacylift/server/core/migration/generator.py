@@ -45,6 +45,8 @@ class MigrationInput:
     target_profile: dict | None = None
     file_context: str = ""      # full content of the file this chunk belongs to
     project_manifest: str = ""  # lightweight cross-file manifest (deps + rules)
+    dependencies_source: str = ""  # legacy SOURCE of the units this chunk calls
+    generated_api: str = ""     # already-migrated TARGET API of deps + siblings
     lessons_learned: str = ""   # past rejection reasons / AI review findings for this project
 
 
@@ -150,6 +152,8 @@ async def generate_migration(inp: MigrationInput) -> MigrationResult:
         target_profile=profile,
         file_context=inp.file_context,
         project_manifest=inp.project_manifest,
+        dependencies_source=inp.dependencies_source,
+        generated_api=inp.generated_api,
         lessons_learned=inp.lessons_learned,
     )
 

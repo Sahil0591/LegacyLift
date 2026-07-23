@@ -4,7 +4,7 @@
 // see the before/after, and approve or request changes). State comes from
 // usePipeline; demo projects are fully seeded.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   CheckCircle2,
@@ -31,6 +31,8 @@ import {
   type FileSummary,
 } from "@/lib/migration";
 import { buildProjectManifest } from "@/lib/manifest";
+import { buildTargetApi, buildDependenciesSource, buildCrossFileApi } from "@/lib/targetApi";
+import { nextSuggestedChunkId, computeMigrationOrder } from "@/lib/migrationOrder";
 import { concatenateSource } from "@/lib/fileAssembly";
 import { resolveTarget, buildInstitutionalContext, summarizeTargets } from "@/lib/projectConfig";
 import { toProfileCtx } from "@/lib/targetLanguages";
@@ -260,7 +262,17 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [quota, setQuota] = useState<{ remaining: number; max: number } | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
+  // True while "Migrate in dependency order" is walking the queue.
+  const [batchRunning, setBatchRunning] = useState(false);
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+
+  // Always-fresh mirror of pipeline state so the auto-migrate loop (and the
+  // cross-chunk context it builds) sees each chunk approved in the prior
+  // iteration, instead of the stale closure captured at render time.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Auto-launch the guided walkthrough the first time someone lands on a
   // project - non-technical users get oriented without hunting for help. The
@@ -643,6 +655,23 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     const fileContext = state.files.find(
       (f) => f.filename === chunk.source_file,
     )?.content;
+    // Cross-chunk context: the legacy SOURCE of the units this chunk calls, and
+    // the already-generated TARGET API of its dependencies + same-file siblings,
+    // so the model reuses real generated names instead of inventing them. Read
+    // from stateRef so a running auto-migrate sees prior chunks' fresh output.
+    const live = stateRef.current;
+    const dependenciesSource = buildDependenciesSource(
+      live.chunks,
+      live.dependencyGraph,
+      chunk,
+      live.businessRules,
+    );
+    const generatedApi = buildTargetApi(
+      live.chunks,
+      live.dependencyGraph,
+      chunk,
+      (filename) => resolveTarget(config, filename),
+    );
 
     // Loop-local state - the source of truth for control flow. Component
     // state (regenCounts) is only synced for the UI badge; reading it back
@@ -686,6 +715,8 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           previousAttempt,
           fileContext,
           projectManifest: projectManifest || undefined,
+          dependenciesSource: dependenciesSource || undefined,
+          generatedApi: generatedApi || undefined,
           lessonsLearned: lessonsLearned || undefined,
           institutionalContext: institutionalContext || undefined,
         });
@@ -820,6 +851,59 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     }
   };
 
+  // Auto-migrate every remaining unit in dependency order (callees before
+  // callers), so each caller is generated only after its dependencies exist and
+  // can be handed to the model as the ALREADY-MIGRATED TARGET API. Stops on the
+  // first unit that finishes unclean (generation failed or unresolved critical
+  // issues) so a foundational unit gets human attention before dependents build
+  // on it. Only runs on the offline/browser loop.
+  const handleMigrateInOrder = async () => {
+    if (!offline || batchRunning) return;
+    setBatchRunning(true);
+    setActionError(null);
+    const yield0 = () => new Promise((r) => setTimeout(r, 0));
+    try {
+      const order = computeMigrationOrder(
+        stateRef.current.chunks,
+        stateRef.current.dependencyGraph,
+      );
+      for (const id of order) {
+        const current = stateRef.current.chunks.find((c) => c.id === id);
+        if (!current || current.status === "Approved") continue;
+
+        // Generate it if it has no code yet; otherwise keep its existing draft.
+        if (!current.migrated_code.trim()) {
+          if (regenLeft(id) <= 0) continue;
+          setSelectedId(id);
+          await handleRegenerate(current);
+          await yield0(); // let React commit patchChunk into stateRef
+        }
+
+        const done = stateRef.current.chunks.find((c) => c.id === id);
+        const generated = (done?.migrated_code.trim().length ?? 0) > 0;
+        const criticals = done?.ai_review?.critical_issues.length ?? 0;
+        if (!generated || criticals > 0) {
+          setSelectedId(id);
+          pushToast({
+            variant: "info",
+            title: `Paused on ${current.name}`,
+            description: generated
+              ? "Resolve its flagged issues, then run “Migrate in dependency order” again to continue."
+              : "This unit didn't finish generating — review it, then continue the batch.",
+            action: { label: "View chunk", onClick: () => jumpToChunk(id) },
+          });
+          break;
+        }
+      }
+    } finally {
+      setBatchRunning(false);
+    }
+  };
+
+  const suggestedNextId = offline
+    ? nextSuggestedChunkId(state.chunks, state.dependencyGraph)
+    : null;
+
   const activeFileForContext = reviewChunk?.source_file
     ? state.files.find((f) => f.filename === reviewChunk.source_file)
     : undefined;
@@ -892,6 +976,9 @@ export default function ProjectPage({ params }: ProjectPageProps) {
                 selectedId={reviewChunk?.id ?? null}
                 onSelect={setSelectedId}
                 busyId={busyId}
+                suggestedId={suggestedNextId}
+                onAutoMigrate={offline ? handleMigrateInOrder : undefined}
+                autoMigrating={batchRunning}
               />
             </aside>
             <main data-tour="review-main" className="min-w-0 flex-1">
@@ -993,6 +1080,13 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           }
           projectManifest={
             buildProjectManifest(state, finalizeGroup.filename) || undefined
+          }
+          generatedApi={
+            buildCrossFileApi(
+              state.chunks,
+              (filename) => resolveTarget(config, filename),
+              finalizeGroup.filename,
+            ) || undefined
           }
           businessRules={state.businessRules
             .filter((r) => r.source_file === finalizeGroup.filename)

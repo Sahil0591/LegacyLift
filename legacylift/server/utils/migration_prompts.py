@@ -148,6 +148,8 @@ def build_migration_prompt(
     previous_attempt: Optional[str] = None,
     file_context: Optional[str] = None,
     project_manifest: Optional[str] = None,
+    dependencies_source: Optional[str] = None,
+    generated_api: Optional[str] = None,
     lessons_learned: Optional[str] = None,
     institutional_context: Optional[str] = None,
 ) -> tuple[str, str]:
@@ -159,6 +161,8 @@ Hard requirements:
 - Follow the TARGET PROFILE for typing, dates, style, concurrency, and the test framework. Write idiomatic {target_lang} — do not transliterate {source_lang} constructs that have a natural {target_lang} equivalent.
 - Add a one-line doc comment naming the business rule being implemented, in {target_lang}'s conventional comment/doc style.
 - Keep identifiers traceable to the source (e.g. WS-INTEREST -> interest).
+- NAMING CONVENTION (critical for cross-unit consistency): name the translated unit after its source unit in {target_lang}'s idiomatic case — e.g. COBOL CALC-INTEREST -> calculate_interest (Python) / calcInterest (Java), per the TARGET PROFILE style. Apply this SAME convention whenever you call another unit that is not yet listed in ALREADY-MIGRATED TARGET API, so independently-migrated units line up on the same names.
+- When a unit you depend on IS listed in ALREADY-MIGRATED TARGET API, import and call it by its EXACT listed name and signature. Never emit a second definition of a unit that already appears there — call it, don't re-create it.
 - Do not invent behaviour that isn't in the source.
 - When an ORGANIZATION CONTEXT block is present, treat it as authoritative: honour its systems, conventions, and constraints. It overrides generic assumptions — but never at the cost of business-rule or numeric equivalence.
 
@@ -192,6 +196,23 @@ Output ONLY the {target_lang} code for this unit. No markdown fences, no prose, 
             f"{project_manifest.strip()}\n"
         )
 
+    deps_source_block = ""
+    if dependencies_source and dependencies_source.strip():
+        deps_source_block = (
+            "\n=== DIRECT DEPENDENCIES — LEGACY SOURCE (units this code calls; context "
+            "only — do NOT re-migrate them here) ===\n"
+            f"{dependencies_source.strip()}\n"
+        )
+
+    generated_api_block = ""
+    if generated_api and generated_api.strip():
+        generated_api_block = (
+            "\n=== ALREADY-MIGRATED TARGET API (these units are already generated in "
+            f"{target_lang} — import/CALL them by these EXACT names and signatures; do "
+            "NOT redefine, rename, or duplicate them) ===\n"
+            f"{generated_api.strip()}\n"
+        )
+
     lessons_block = ""
     if lessons_learned and lessons_learned.strip():
         lessons_block = (
@@ -206,7 +227,7 @@ Output ONLY the {target_lang} code for this unit. No markdown fences, no prose, 
 {file_block}
 === BUSINESS RULES THIS CODE ENCODES ===
 {_rules_block(business_rules)}
-{manifest_block}{lessons_block}
+{deps_source_block}{generated_api_block}{manifest_block}{lessons_block}
 === TARGET PROFILE ({target_lang}) ===
 {_profile_block(target_profile, target_lang)}
 {previous_block}{guidance}
@@ -223,6 +244,7 @@ def build_finalize_prompt(
     source_code: Optional[str] = None,
     business_rules: Optional[list[BusinessRuleCtx]] = None,
     project_manifest: Optional[str] = None,
+    generated_api: Optional[str] = None,
     target_profile: Optional[TargetProfileCtx] = None,
     institutional_context: Optional[str] = None,
 ) -> tuple[str, str]:
@@ -246,6 +268,7 @@ Do:
 - Give the file the structure the language requires: a single package/namespace where applicable, members inside the appropriate class/type for {target_lang}, declarations in a sensible order.
 - Keep every business rule listed below intact — the finalized file must still implement all of them.
 - When a PROJECT MANIFEST is present, keep the names and signatures this file exposes consistent with how other files refer to it.
+- When an ALREADY-MIGRATED TARGET API of OTHER files is present, make every cross-file reference resolve to those exact names/signatures — do not rename or re-stub a symbol that another file already defines.
 - Fix only what is needed for the file to compile and be internally consistent.
 
 Do NOT:
@@ -274,6 +297,14 @@ Output ONLY the finalized {target_lang} code. No markdown fences, no prose."""
             f"{project_manifest.strip()}\n"
         )
 
+    generated_api_block = ""
+    if generated_api and generated_api.strip():
+        generated_api_block = (
+            f"\n=== ALREADY-MIGRATED TARGET API OF OTHER FILES ({target_lang} — resolve every "
+            "cross-file reference to these EXACT names/signatures; do not rename or re-stub them) ===\n"
+            f"{generated_api.strip()}\n"
+        )
+
     user = f"""Finalize this migrated {target_lang} file "{filename}" into one coherent module.
 {org_block}
 === TARGET PROFILE ({target_lang}) ===
@@ -281,7 +312,7 @@ Output ONLY the finalized {target_lang} code. No markdown fences, no prose."""
 {source_block}
 === BUSINESS RULES THIS FILE ENCODES (must remain intact) ===
 {_rules_block(business_rules)}
-{manifest_block}
+{manifest_block}{generated_api_block}
 === ASSEMBLED {target_lang} FILE (units concatenated — reconcile into one module) ===
 {assembled_code}
 

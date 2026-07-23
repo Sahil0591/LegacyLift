@@ -12,6 +12,7 @@ import {
   Loader2,
   Search,
   SlidersHorizontal,
+  Wand2,
   X,
 } from "lucide-react";
 import type { MigrationChunk, RiskLevel } from "@/types/legacylift";
@@ -29,6 +30,12 @@ interface ChunkQueueProps {
   onSelect: (id: string) => void;
   /** Chunk currently generating/testing in the background, if any. */
   busyId?: string | null;
+  /** The next chunk to migrate in dependency order (callees before callers). */
+  suggestedId?: string | null;
+  /** Start the "migrate every remaining unit in dependency order" batch. */
+  onAutoMigrate?: () => void;
+  /** True while that batch is running. */
+  autoMigrating?: boolean;
 }
 
 const UNGROUPED = "(ungrouped)";
@@ -41,9 +48,18 @@ function worstRisk(chunks: MigrationChunk[]): RiskLevel {
   );
 }
 
-export function ChunkQueue({ chunks, selectedId, onSelect, busyId = null }: ChunkQueueProps) {
+export function ChunkQueue({
+  chunks,
+  selectedId,
+  onSelect,
+  busyId = null,
+  suggestedId = null,
+  onAutoMigrate,
+  autoMigrating = false,
+}: ChunkQueueProps) {
   const approved = chunks.filter((c) => c.status === "Approved").length;
   const pct = chunks.length ? Math.round((approved / chunks.length) * 100) : 0;
+  const remaining = chunks.filter((c) => c.status !== "Approved").length;
 
   const [search, setSearch] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -130,6 +146,26 @@ export function ChunkQueue({ chunks, selectedId, onSelect, busyId = null }: Chun
             style={{ width: `${pct}%` }}
           />
         </div>
+        {onAutoMigrate && remaining > 0 && (
+          <button
+            onClick={onAutoMigrate}
+            disabled={autoMigrating}
+            title="Migrate every remaining unit in dependency order (callees before callers), so each caller sees its dependencies' real generated names. Pauses on anything that needs your review."
+            className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#7C3AED]/40 px-2 py-1.5 text-xs font-medium text-[#7C3AED] transition-colors hover:bg-[#7C3AED]/[0.08] disabled:opacity-60"
+          >
+            {autoMigrating ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Migrating in order…
+              </>
+            ) : (
+              <>
+                <Wand2 className="h-3.5 w-3.5" />
+                Migrate in dependency order
+              </>
+            )}
+          </button>
+        )}
       </div>
 
       <div className="space-y-2 border-b border-ink/10 p-2.5">
@@ -270,11 +306,16 @@ export function ChunkQueue({ chunks, selectedId, onSelect, busyId = null }: Chun
                           )}
                           <div className="min-w-0 flex-1">
                             <div
-                              className={`truncate font-mono text-[13px] ${
+                              className={`flex items-center gap-1.5 truncate font-mono text-[13px] ${
                                 active ? "text-ink" : "text-ink/80"
                               }`}
                             >
-                              {chunk.name}
+                              <span className="truncate">{chunk.name}</span>
+                              {chunk.id === suggestedId && chunk.id !== busyId && (
+                                <span className="shrink-0 rounded-full bg-[#7C3AED]/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#7C3AED]">
+                                  Next
+                                </span>
+                              )}
                             </div>
                             <div className="text-[11px] text-sub">
                               {STATUS_META[chunk.status].label}

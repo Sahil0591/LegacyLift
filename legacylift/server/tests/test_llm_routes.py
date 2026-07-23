@@ -225,6 +225,29 @@ class TestLlmMigrate:
         assert "ORGANIZATION CONTEXT" in user_prompt
         assert "GLEDGER" in user_prompt
 
+    def test_cross_chunk_context_reaches_prompt(self):
+        """dependencies_source + generated_api are accepted and reach the prompt,
+        so the model sees its callees' legacy source AND generated target API."""
+        body = {
+            **MIGRATE_BODY,
+            "name": "RUN-EOD",
+            "dependencies_source": "--- CALC-INTEREST ---\nCALC-INTEREST. PERFORM APPLY-BONUS-RATE.",
+            "generated_api": (
+                "- CALC-INTEREST  ->  interest_calc.py  [approved]\n"
+                "    def calculate_interest(balance, rate, days)"
+            ),
+        }
+        llm = _make_llm(MIGRATED_CODE)
+        with patch.object(_main, "_get_llm", return_value=llm):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/migrate", json=body)
+        assert r.status_code == 200, r.text
+        user_prompt = llm.complete.await_args.kwargs["user"]
+        assert "DIRECT DEPENDENCIES" in user_prompt
+        assert "APPLY-BONUS-RATE" in user_prompt
+        assert "ALREADY-MIGRATED TARGET API" in user_prompt
+        assert "calculate_interest" in user_prompt
+
     def test_501_when_not_configured(self):
         with patch.object(_main, "_get_llm", return_value=_unconfigured_llm()):
             client = TestClient(app, raise_server_exceptions=True)
@@ -416,6 +439,25 @@ class TestLlmFinalizeFile:
         assert "ASSEMBLED" in user_prompt
         assert "calcInterest" in user_prompt  # the assembled body is present
         assert "WS-BAL" in user_prompt  # original source reference included
+
+    def test_generated_api_reaches_finalize_prompt(self):
+        """The cross-file generated API reaches the reconcile prompt so cross-file
+        references finalize to real neighbour names."""
+        body = {
+            **FINALIZE_BODY,
+            "generated_api": (
+                "- VALIDATE-KYC  ->  account_master.py  [approved]\n"
+                "    def validate_kyc(account_id: str) -> bool"
+            ),
+        }
+        llm = _make_llm(FINALIZED_CODE)
+        with patch.object(_main, "_get_llm", return_value=llm):
+            client = TestClient(app, raise_server_exceptions=True)
+            r = client.post("/llm/finalize-file", json=body)
+        assert r.status_code == 200, r.text
+        user_prompt = llm.complete.await_args.kwargs["user"]
+        assert "ALREADY-MIGRATED TARGET API OF OTHER FILES" in user_prompt
+        assert "validate_kyc" in user_prompt
 
     def test_prompt_carries_rules_manifest_and_org_context(self):
         """Reconcile gets the same authoritative context as the original

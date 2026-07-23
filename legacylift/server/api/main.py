@@ -1622,6 +1622,11 @@ class MigrateUnitRequest(BaseModel):
     previous_attempt: Optional[str] = Field(None, max_length=120_000)
     file_context: Optional[str] = Field(None, max_length=60_000)
     project_manifest: Optional[str] = Field(None, max_length=8_000)
+    # Legacy SOURCE of the units this chunk calls (source-side dependency context).
+    dependencies_source: Optional[str] = Field(None, max_length=16_000)
+    # Already-migrated TARGET API of this chunk's dependencies + same-file siblings
+    # (generated-side context) so the model reuses real generated names/signatures.
+    generated_api: Optional[str] = Field(None, max_length=12_000)
     lessons_learned: Optional[str] = Field(None, max_length=4_000)
     institutional_context: Optional[str] = Field(None, max_length=12_000)
 
@@ -1703,6 +1708,9 @@ class FinalizeFileRequest(BaseModel):
     target_lang: str = Field("Python", max_length=32)
     business_rules: list[_BusinessRuleIn] = Field(default_factory=list, max_length=40)
     project_manifest: Optional[str] = Field(None, max_length=20_000)
+    # Already-migrated TARGET API of OTHER files, so cross-file references
+    # reconcile to real neighbour names/signatures (not just within-file drift).
+    generated_api: Optional[str] = Field(None, max_length=12_000)
     target_profile: Optional[_TargetProfileIn] = None
     institutional_context: Optional[str] = Field(None, max_length=12_000)
 
@@ -1853,6 +1861,8 @@ async def llm_migrate(
         previous_attempt=body.previous_attempt,
         file_context=body.file_context,
         project_manifest=body.project_manifest,
+        dependencies_source=body.dependencies_source,
+        generated_api=body.generated_api,
         lessons_learned=body.lessons_learned,
         institutional_context=body.institutional_context,
     )
@@ -2047,6 +2057,7 @@ async def llm_finalize_file(
         source_code=body.source_code,
         business_rules=[r.model_dump() for r in body.business_rules],
         project_manifest=body.project_manifest,
+        generated_api=body.generated_api,
         target_profile=body.target_profile.model_dump() if body.target_profile else None,
         institutional_context=body.institutional_context,
     )

@@ -15,6 +15,8 @@ const MAX_BUSINESS_RULES = 20;
 const MAX_HARDCODED_VALUES = 50;
 const MAX_FILE_CONTEXT_LENGTH = 60_000;
 const MAX_MANIFEST_LENGTH = 8_000;
+const MAX_DEPENDENCIES_SOURCE_LENGTH = 16_000;
+const MAX_GENERATED_API_LENGTH = 12_000;
 const MAX_LESSONS_LENGTH = 4_000;
 const MAX_INSTITUTIONAL_CONTEXT_LENGTH = 12_000;
 
@@ -37,6 +39,11 @@ export interface GenerateInput {
   fileContext?: string;
   /** Lightweight cross-file manifest (other filenames, deps, business rules). */
   projectManifest?: string;
+  /** Legacy SOURCE of the units this chunk calls (source-side dependency context). */
+  dependenciesSource?: string;
+  /** Already-migrated TARGET API of this chunk's dependencies + same-file siblings
+   *  (generated-side context) so the model reuses real generated names/signatures. */
+  generatedApi?: string;
   /** Accumulated lessons from past rejections/review findings for this file/project. */
   lessonsLearned?: string;
   /** Human-authored, authoritative context (project-wide + this file). */
@@ -126,6 +133,12 @@ export function generateMigration(
       : null,
     project_manifest: input.projectManifest
       ? truncate(input.projectManifest, MAX_MANIFEST_LENGTH)
+      : null,
+    dependencies_source: input.dependenciesSource
+      ? truncate(input.dependenciesSource, MAX_DEPENDENCIES_SOURCE_LENGTH)
+      : null,
+    generated_api: input.generatedApi
+      ? truncate(input.generatedApi, MAX_GENERATED_API_LENGTH)
       : null,
     lessons_learned: input.lessonsLearned
       ? truncate(input.lessonsLearned, MAX_LESSONS_LENGTH)
@@ -217,6 +230,9 @@ export interface FinalizeFileInput {
   businessRules?: GenerateInput["businessRules"];
   /** Lightweight cross-file manifest so reconciled names stay project-consistent. */
   projectManifest?: string;
+  /** Already-migrated TARGET API of OTHER files, so cross-file references
+   *  reconcile to real neighbour names/signatures (not just within-file drift). */
+  generatedApi?: string;
 }
 
 /**
@@ -249,6 +265,9 @@ export async function finalizeFile(
     business_rules: normalizeBusinessRules(input.businessRules),
     project_manifest: input.projectManifest
       ? truncate(input.projectManifest, MAX_MANIFEST_LENGTH)
+      : null,
+    generated_api: input.generatedApi
+      ? truncate(input.generatedApi, MAX_GENERATED_API_LENGTH)
       : null,
     target_profile: normalizeTargetProfile(input.targetProfile),
     institutional_context: input.institutionalContext

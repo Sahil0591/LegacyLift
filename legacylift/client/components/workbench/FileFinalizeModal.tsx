@@ -50,6 +50,9 @@ interface FileFinalizeModalProps {
    *  keeps the org's conventions, this file's rules, and cross-file naming. */
   institutionalContext?: string;
   projectManifest?: string;
+  /** Already-migrated TARGET API of OTHER files, so cross-file references
+   *  reconcile to real neighbour names/signatures (not just within-file drift). */
+  generatedApi?: string;
   businessRules?: FinalizeFileInput["businessRules"];
 }
 
@@ -61,6 +64,7 @@ export function FileFinalizeModal({
   onLessonLearned,
   institutionalContext,
   projectManifest,
+  generatedApi,
   businessRules,
 }: FileFinalizeModalProps) {
   const [checking, setChecking] = useState(false);
@@ -145,6 +149,7 @@ export function FileFinalizeModal({
         targetProfile: toProfileCtx(file.target),
         institutionalContext,
         projectManifest,
+        generatedApi,
         businessRules,
       });
       setReconciled(result.code);

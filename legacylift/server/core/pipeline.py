@@ -310,20 +310,29 @@ async def run_pipeline(project: Project) -> None:
 # ---------------------------------------------------------------------------
 
 def _build_project_manifest(project: Project, current_filename: str) -> str:
+    # NOTE: reads the LIVE serialized Layer 0 shapes — graph nodes carry
+    # `filename` (not `file`), edges carry `edge_type` (not `label`), and rules
+    # carry `chunk_id`/`rule` (no filename/title). Rules are attributed to a file
+    # via their chunk. (An earlier version read keys that don't exist here and so
+    # silently emitted filenames with no edges or rules.)
     graph = project.layer0_graph or {}
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
     rules = project.layer0_rules or []
+    chunks = project.layer0_chunks or []
 
-    node_file_by_id = {n.get("id"): n.get("file", "") for n in nodes}
+    node_file_by_id = {n.get("id"): n.get("filename", "") for n in nodes}
+    node_label_by_id = {n.get("id"): n.get("label", n.get("id")) for n in nodes}
+    chunk_file_by_id = {c.get("id"): c.get("filename", "") for c in chunks}
+    chunk_name_by_id = {c.get("id"): c.get("name", "") for c in chunks}
 
     filenames: set[str] = set()
     for n in nodes:
-        if n.get("file"):
-            filenames.add(n["file"])
-    for r in rules:
-        if r.get("filename") or r.get("source_file"):
-            filenames.add(r.get("filename") or r.get("source_file"))
+        if n.get("filename"):
+            filenames.add(n["filename"])
+    for c in chunks:
+        if c.get("filename"):
+            filenames.add(c["filename"])
 
     other_files = sorted(f for f in filenames if f and f != current_filename)
     if not other_files:
@@ -339,16 +348,20 @@ def _build_project_manifest(project: Project, current_filename: str) -> str:
             or node_file_by_id.get(e.get("target")) == filename
         ]
         for e in file_edges[:10]:
-            label = f" ({e['label']})" if e.get("label") else ""
-            lines.append(f"    depends: {e.get('source')} -> {e.get('target')}{label}")
+            src = node_label_by_id.get(e.get("source"), e.get("source"))
+            tgt = node_label_by_id.get(e.get("target"), e.get("target"))
+            etype = e.get("edge_type") or "call"
+            lines.append(f"    depends: {src} -> {tgt} ({etype})")
 
         file_rules = [
             r for r in rules
-            if (r.get("filename") or r.get("source_file")) == filename
+            if chunk_file_by_id.get(r.get("chunk_id")) == filename
         ]
         for r in file_rules[:10]:
-            title = r.get("title") or (r.get("rule", "") or "")[:80]
-            lines.append(f"    rule: {title}")
+            text = " ".join((r.get("rule") or "").split())
+            chunk_name = chunk_name_by_id.get(r.get("chunk_id"), "")
+            label = f"{chunk_name}: {text}" if chunk_name else text
+            lines.append(f"    rule: {label[:100]}")
 
     return "\n".join(lines)
 
@@ -454,23 +467,34 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         )
 
         # ── gather related chunks from dependency graph ─────────────────────
+        # related_ids: bidirectional neighbours (drives the confidence heuristic).
+        # callee_ids: only the units THIS chunk calls — their legacy source is the
+        # DIRECT DEPENDENCIES context block (the source-side half of "both").
         related_ids: set[str] = set()
+        callee_ids: set[str] = set()
         for edge in project.layer0_graph.get("edges", []):
+            if edge.get("edge_type") in ("data_read", "data_write"):
+                continue
             if edge.get("source") == chunk_id:
                 related_ids.add(edge["target"])
+                callee_ids.add(edge["target"])
             elif edge.get("target") == chunk_id:
                 related_ids.add(edge["source"])
 
         related_chunks: list[dict] = []
+        dependency_units: list[dict] = []
         rule_by_chunk: dict[str, dict] = {r["chunk_id"]: r for r in project.layer0_rules}
         for rc in project.layer0_chunks:
             if rc["id"] in related_ids:
                 rc_rule = rule_by_chunk.get(rc["id"])
-                related_chunks.append({
+                unit = {
                     "name": rc.get("name", ""),
                     "source": rc.get("source", ""),
                     "rule": rc_rule["rule"] if rc_rule else "",
-                })
+                }
+                related_chunks.append(unit)
+                if rc["id"] in callee_ids:
+                    dependency_units.append(unit)
 
         await ws_manager.emit(
             project.id,
@@ -481,6 +505,7 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
 
         # ── generate migration ──────────────────────────────────────────────
         from core.migration.generator import MigrationInput, generate_migration  # noqa: PLC0415
+        from core.migration.target_api import build_target_api, render_dependency_source  # noqa: PLC0415
 
         chunk_filename = chunk_dict.get("filename", "")
         target_language, target_profile = _resolve_chunk_target(project, chunk_filename)
@@ -489,6 +514,18 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
         lessons_learned = _format_lessons_block(
             _select_relevant_lessons(project, chunk_filename)
         )
+
+        # Cross-chunk context: legacy source of the units this chunk calls, plus
+        # the already-generated target API of its dependencies + same-file
+        # siblings, so it reuses real generated names instead of inventing them.
+        def _safe_target_lang(filename: str) -> str:
+            try:
+                return _resolve_chunk_target(project, filename)[0]
+            except Exception:  # a bad per-file target elsewhere must not break this run
+                return target_language
+
+        dependencies_source = render_dependency_source(dependency_units)
+        generated_api = build_target_api(project, chunk_id, _safe_target_lang)
 
         migration_input = MigrationInput(
             chunk_id=chunk_id,
@@ -505,6 +542,8 @@ async def run_migration_generation(project: Project, chunk_id: str) -> None:
             target_profile=target_profile,
             file_context=file_context,
             project_manifest=project_manifest,
+            dependencies_source=dependencies_source,
+            generated_api=generated_api,
             lessons_learned=lessons_learned,
         )
 
