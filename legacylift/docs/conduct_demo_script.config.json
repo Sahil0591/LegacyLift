@@ -1,0 +1,7 @@
+{
+  "deploy_url": "https://legacy-lift-six.vercel.app/",
+  "deploy_label": "Production (Vercel)",
+  "sample_repo_url": "github.com/aws-samples/aws-mainframe-modernization-carddemo",
+  "seeded_demo_project_path": "/project/demo-loan-engine",
+  "backend_local_url": "http://localhost:8000"
+}

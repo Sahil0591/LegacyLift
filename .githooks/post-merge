@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refresh Conduct demo script after pull/merge.
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$ROOT" || exit 0
+python legacylift/scripts/sync_conduct_demo_script.py 2>/dev/null || python3 legacylift/scripts/sync_conduct_demo_script.py 2>/dev/null || true

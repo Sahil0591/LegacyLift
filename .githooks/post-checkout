@@ -1,0 +1,11 @@
+#!/bin/sh
+# Refresh Conduct demo script when switching branches (skips file-only checkouts).
+PREV=$1
+NEXT=$2
+FLAG=$3
+if [ "$FLAG" = "1" ]; then
+  exit 0
+fi
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$ROOT" || exit 0
+python legacylift/scripts/sync_conduct_demo_script.py 2>/dev/null || python3 legacylift/scripts/sync_conduct_demo_script.py 2>/dev/null || true
